@@ -1,0 +1,30 @@
+services:
+  postgres:
+    image: postgres@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
+    restart: unless-stopped
+    stop_grace_period: 150s
+    networks: [backend]
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres-password
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./package/postgres-init.sh:/docker-entrypoint-initdb.d/databases.sh:ro
+    secrets: [postgres-password]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 30s
+  server:
+    depends_on:
+      postgres:
+        condition: service_healthy
+volumes:
+  postgres-data:
+    name: ${COMPOSE_PROJECT_NAME:?Set a unique installation name}-postgres-data
+secrets:
+  postgres-password:
+    file: ./secrets/postgres-password

@@ -1,0 +1,11 @@
+{
+  "name": "shutterspool-roles",
+  "protocol": "openid-connect",
+  "protocolMapper": "oidc-usermodel-realm-role-mapper",
+  "config": {
+    "claim.name": "role",
+    "multivalued": "true",
+    "access.token.claim": "true",
+    "id.token.claim": "true"
+  }
+}

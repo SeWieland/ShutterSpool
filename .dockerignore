@@ -1,0 +1,15 @@
+**/bin
+**/obj
+**/node_modules
+**/.nuxt
+**/.output
+.git
+.codex
+.agents
+.aws
+.data
+artifacts
+**/TestResults
+**/*.log
+**/.env*
+src/ShutterSpool.Server/wwwroot

@@ -1,0 +1,74 @@
+name: Candidate artifacts
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Explicit SemVer prerelease candidate version
+        required: true
+        type: string
+      revision:
+        description: Exact 40-character commit SHA to build
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: candidate-${{ github.event.pull_request.head.sha || inputs.revision || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      BUILD_REVISION: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.revision }}
+      BUILD_VERSION: ${{ github.event_name == 'pull_request' && format('0.0.0-pr.{0}.{1}', github.run_number, github.run_attempt) || inputs.version }}
+    steps:
+      - name: Check out selected source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.BUILD_REVISION }}
+          persist-credentials: false
+          lfs: true
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: src/ShutterSpool.Web/package.json
+          cache: npm
+          cache-dependency-path: src/ShutterSpool.Web/package-lock.json
+      - name: Install Aspire CLI
+        shell: bash
+        run: |
+          dotnet tool install --tool-path "$RUNNER_TEMP/aspire" Aspire.Cli --version 13.6.0
+          echo "$RUNNER_TEMP/aspire" >> "$GITHUB_PATH"
+      - name: Set up local Buildx builder
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - name: Verify release builder
+        run: python tests/verify-release-build.py
+      - name: Test supplied camera certificate validation
+        run: python tests/verify-edge-startup.py
+      - name: Prepare local candidate artifacts
+        shell: bash
+        run: >-
+          python tools/build-release.py
+          --version "$BUILD_VERSION"
+          --revision "$BUILD_REVISION"
+          --output "$RUNNER_TEMP/shutterspool-candidate"
+      - name: Retain candidate artifacts for review
+        if: github.event.repository.private == true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: shutterspool-candidate-${{ env.BUILD_VERSION }}-${{ env.BUILD_REVISION }}
+          path: ${{ runner.temp }}/shutterspool-candidate
+          if-no-files-found: error
+          retention-days: 14
+          include-hidden-files: true

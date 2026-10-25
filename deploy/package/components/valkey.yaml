@@ -1,0 +1,9 @@
+services:
+  valkey:
+    image: valkey/valkey@sha256:c123e3715db63d06d4ad6964884037aa0d5d4d703939b9929954112889708e1d
+    command: [valkey-server, --save, '', --appendonly, 'no']
+    restart: unless-stopped
+    networks: [backend]
+  server:
+    environment:
+      ConnectionStrings__valkey: valkey:6379,abortConnect=false

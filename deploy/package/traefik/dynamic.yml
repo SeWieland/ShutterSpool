@@ -1,0 +1,25 @@
+http:
+  routers:
+    photographs:
+      rule: Host(`photographs.example.invalid`) && !PathPrefix(`/internal/`)
+      entryPoints: [websecure]
+      service: shutterspool
+      tls: {}
+    identity:
+      rule: Host(`identity.example.invalid`) && (PathPrefix(`/realms/shutterspool/`) || PathPrefix(`/resources/`) || PathPrefix(`/.well-known/`))
+      entryPoints: [websecure]
+      service: keycloak
+      tls: {}
+  services:
+    shutterspool:
+      loadBalancer:
+        servers:
+          - url: http://server:8080
+    keycloak:
+      loadBalancer:
+        servers:
+          - url: http://keycloak:8080
+tls:
+  certificates:
+    - certFile: /run/certificates/https-fullchain.pem
+      keyFile: /run/certificates/https-key.pem

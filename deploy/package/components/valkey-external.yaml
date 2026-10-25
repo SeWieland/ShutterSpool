@@ -1,0 +1,8 @@
+services:
+  server:
+    environment:
+      ConnectionStrings__valkeyFile: /run/secrets/valkey-connection
+    secrets: [valkey-connection]
+secrets:
+  valkey-connection:
+    file: ./secrets/valkey-connection

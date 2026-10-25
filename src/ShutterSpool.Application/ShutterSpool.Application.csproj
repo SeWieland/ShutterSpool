@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="ShutterSpool.Infrastructure" />
+    <InternalsVisibleTo Include="ShutterSpool.IntegrationTests" />
+    <ProjectReference Include="..\ShutterSpool.Domain\ShutterSpool.Domain.csproj" />
+  </ItemGroup>
+</Project>

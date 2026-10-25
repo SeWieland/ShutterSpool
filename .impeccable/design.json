@@ -1,0 +1,293 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-25T11:23:21Z",
+  "title": "Design System: ShutterSpool",
+  "extensions": {
+    "colorMeta": {
+      "primary": {
+        "role": "primary",
+        "displayName": "Action blue",
+        "tonalRamp": [
+          "oklch(15.00% 0.19893 266.80)",
+          "oklch(26.43% 0.19893 266.80)",
+          "oklch(37.86% 0.19893 266.80)",
+          "oklch(49.29% 0.19893 266.80)",
+          "oklch(60.71% 0.19893 266.80)",
+          "oklch(72.14% 0.19893 266.80)",
+          "oklch(83.57% 0.19893 266.80)",
+          "oklch(95.00% 0.19893 266.80)"
+        ]
+      },
+      "focus": {
+        "role": "primary",
+        "displayName": "Focus and link blue",
+        "tonalRamp": [
+          "oklch(15.00% 0.16581 267.76)",
+          "oklch(26.43% 0.16581 267.76)",
+          "oklch(37.86% 0.16581 267.76)",
+          "oklch(49.29% 0.16581 267.76)",
+          "oklch(60.71% 0.16581 267.76)",
+          "oklch(72.14% 0.16581 267.76)",
+          "oklch(83.57% 0.16581 267.76)",
+          "oklch(95.00% 0.16581 267.76)"
+        ]
+      },
+      "navy": {
+        "role": "primary",
+        "displayName": "Brand navy",
+        "tonalRamp": [
+          "oklch(15.00% 0.12601 264.52)",
+          "oklch(26.43% 0.12601 264.52)",
+          "oklch(37.86% 0.12601 264.52)",
+          "oklch(49.29% 0.12601 264.52)",
+          "oklch(60.71% 0.12601 264.52)",
+          "oklch(72.14% 0.12601 264.52)",
+          "oklch(83.57% 0.12601 264.52)",
+          "oklch(95.00% 0.12601 264.52)"
+        ]
+      },
+      "page": {
+        "role": "neutral",
+        "displayName": "Page charcoal",
+        "tonalRamp": [
+          "oklch(15.00% 0.00518 248.11)",
+          "oklch(26.43% 0.00518 248.11)",
+          "oklch(37.86% 0.00518 248.11)",
+          "oklch(49.29% 0.00518 248.11)",
+          "oklch(60.71% 0.00518 248.11)",
+          "oklch(72.14% 0.00518 248.11)",
+          "oklch(83.57% 0.00518 248.11)",
+          "oklch(95.00% 0.00518 248.11)"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Panel charcoal",
+        "tonalRamp": [
+          "oklch(15.00% 0.00893 255.60)",
+          "oklch(26.43% 0.00893 255.60)",
+          "oklch(37.86% 0.00893 255.60)",
+          "oklch(49.29% 0.00893 255.60)",
+          "oklch(60.71% 0.00893 255.60)",
+          "oklch(72.14% 0.00893 255.60)",
+          "oklch(83.57% 0.00893 255.60)",
+          "oklch(95.00% 0.00893 255.60)"
+        ]
+      },
+      "preview": {
+        "role": "neutral",
+        "displayName": "Preview charcoal",
+        "tonalRamp": [
+          "oklch(15.00% 0.00518 248.11)",
+          "oklch(26.43% 0.00518 248.11)",
+          "oklch(37.86% 0.00518 248.11)",
+          "oklch(49.29% 0.00518 248.11)",
+          "oklch(60.71% 0.00518 248.11)",
+          "oklch(72.14% 0.00518 248.11)",
+          "oklch(83.57% 0.00518 248.11)",
+          "oklch(95.00% 0.00518 248.11)"
+        ]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Border gray",
+        "tonalRamp": [
+          "oklch(15.00% 0.01586 255.61)",
+          "oklch(26.43% 0.01586 255.61)",
+          "oklch(37.86% 0.01586 255.61)",
+          "oklch(49.29% 0.01586 255.61)",
+          "oklch(60.71% 0.01586 255.61)",
+          "oklch(72.14% 0.01586 255.61)",
+          "oklch(83.57% 0.01586 255.61)",
+          "oklch(95.00% 0.01586 255.61)"
+        ]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Primary text",
+        "tonalRamp": [
+          "oklch(15.00% 0.00625 255.48)",
+          "oklch(26.43% 0.00625 255.48)",
+          "oklch(37.86% 0.00625 255.48)",
+          "oklch(49.29% 0.00625 255.48)",
+          "oklch(60.71% 0.00625 255.48)",
+          "oklch(72.14% 0.00625 255.48)",
+          "oklch(83.57% 0.00625 255.48)",
+          "oklch(95.00% 0.00625 255.48)"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Secondary text",
+        "tonalRamp": [
+          "oklch(15.00% 0.02028 252.91)",
+          "oklch(26.43% 0.02028 252.91)",
+          "oklch(37.86% 0.02028 252.91)",
+          "oklch(49.29% 0.02028 252.91)",
+          "oklch(60.71% 0.02028 252.91)",
+          "oklch(72.14% 0.02028 252.91)",
+          "oklch(83.57% 0.02028 252.91)",
+          "oklch(95.00% 0.02028 252.91)"
+        ]
+      },
+      "favorite": {
+        "role": "tertiary",
+        "displayName": "Favorite coral",
+        "tonalRamp": [
+          "oklch(15.00% 0.09224 24.27)",
+          "oklch(26.43% 0.09224 24.27)",
+          "oklch(37.86% 0.09224 24.27)",
+          "oklch(49.29% 0.09224 24.27)",
+          "oklch(60.71% 0.09224 24.27)",
+          "oklch(72.14% 0.09224 24.27)",
+          "oklch(83.57% 0.09224 24.27)",
+          "oklch(95.00% 0.09224 24.27)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "heading": {
+        "displayName": "Heading",
+        "purpose": "Capture names and workspace headings."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Labels, supporting copy and readable operational detail."
+      }
+    },
+    "shadows": [
+      {
+        "name": "appearance-overlay",
+        "value": "0 12px 24px #0005",
+        "purpose": "Separate the Filters/Appearance overlay from photographs without reflow."
+      },
+      {
+        "name": "active-comparison-pane",
+        "value": "inset 0 0 0 1px var(--accent)",
+        "purpose": "Identify the active photograph without changing the frame geometry."
+      }
+    ],
+    "motion": [
+      {
+        "name": "control-transition",
+        "value": "180ms cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Workspace control feedback; respect reduced motion."
+      },
+      {
+        "name": "preview-arrival",
+        "value": "180ms ease-out",
+        "purpose": "Preview arrival without changing reserved geometry; respect reduced motion."
+      },
+      {
+        "name": "workspace-aperture",
+        "value": "6000ms cubic-bezier(.45, 0, .2, 1)",
+        "purpose": "Only the containing rim layer rotates 1.5 degrees per tab; keep it fixed with reduced motion and hide the background in fullscreen."
+      },
+      {
+        "name": "app-sign-in-aperture",
+        "value": "900s linear infinite",
+        "purpose": "Clockwise sign-in rim rotation; pause when hidden and disable for reduced motion."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "0ms",
+        "purpose": "Static presentation when reduced motion applies."
+      },
+      {
+        "name": "gallery-slideshow",
+        "value": "0ms",
+        "purpose": "Simple photograph cuts and unanimated Gallery fullscreen controls; explicitly requested timed advancement remains available with reduced motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "compact-desktop",
+        "value": "1000px"
+      },
+      {
+        "name": "stack-detail-and-phone-navigation",
+        "value": "760px"
+      },
+      {
+        "name": "compact-forms",
+        "value": "480px"
+      },
+      {
+        "name": "single-column-phone-grid",
+        "value": "350px"
+      },
+      {
+        "name": "compact-slideshow",
+        "value": "390px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary button",
+      "kind": "button",
+      "description": "Explicit primary actions, with dark text on the brand blue.",
+      "html": "<button class=\"ds-primary\" type=\"button\">Save settings</button>",
+      "css": ".ds-primary{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-width:44px;min-height:44px;padding:8px 12px;border:1px solid var(--border,#3c424a);border-radius:6px;background:var(--surface,#1b1e22);color:var(--text,#f0f3f7);font-family:Manrope,ui-sans-serif,system-ui,sans-serif;font-size:14px;cursor:pointer;transition:background-color var(--motion,180ms cubic-bezier(.16,1,.3,1)),border-color var(--motion,180ms cubic-bezier(.16,1,.3,1));}.ds-primary{background:var(--brand-blue,#527dff);color:#09132c;font-weight:650;border-color:var(--brand-blue,#527dff);}.ds-primary:hover,.ds-primary:active:hover{background:#7d9dff;}.ds-primary:active{background:#303641;}.ds-primary:focus-visible{outline:2px solid #93adff;outline-offset:3px;}.ds-primary:disabled{opacity:.48;cursor:not-allowed;}@media(prefers-reduced-motion:reduce){.ds-primary{transition:none;}}"
+    },
+    {
+      "name": "Secondary button",
+      "kind": "button",
+      "description": "Routine workspace actions on neutral surfaces.",
+      "html": "<button class=\"ds-secondary\" type=\"button\">Refresh capacity</button>",
+      "css": ".ds-secondary{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-width:44px;min-height:44px;padding:8px 12px;border:1px solid var(--border,#3c424a);border-radius:6px;background:var(--surface,#1b1e22);color:var(--text,#f0f3f7);font-family:Manrope,ui-sans-serif,system-ui,sans-serif;font-size:14px;cursor:pointer;transition:background-color var(--motion,180ms cubic-bezier(.16,1,.3,1)),border-color var(--motion,180ms cubic-bezier(.16,1,.3,1));}.ds-secondary:hover{background:var(--raised,#252930);}.ds-secondary:active{background:#303641;}.ds-secondary:focus-visible{outline:2px solid #93adff;outline-offset:3px;}.ds-secondary:disabled{opacity:.48;cursor:not-allowed;}@media(prefers-reduced-motion:reduce){.ds-secondary{transition:none;}}"
+    },
+    {
+      "name": "Text field",
+      "kind": "input",
+      "description": "Persistent labels and a dark input surface for configuration fields.",
+      "html": "<label class=\"ds-field\">Name<input class=\"ds-input\" type=\"text\" value=\"Camera\" /></label>",
+      "css": ".ds-field{display:flex;flex-direction:column;gap:8px;color:var(--muted,#b4beca);font-family:Manrope,ui-sans-serif,system-ui,sans-serif;font-size:13px;}.ds-input{min-height:44px;min-width:0;max-width:100%;padding:8px 12px;border:1px solid var(--border,#3c424a);border-radius:6px;background:var(--page,#111315);color:var(--text,#f0f3f7);font-family:Manrope,ui-sans-serif,system-ui,sans-serif;font-size:14px;}.ds-input:focus-visible{outline:2px solid #93adff;outline-offset:3px;}.ds-input:disabled{cursor:not-allowed;}"
+    },
+    {
+      "name": "Workspace navigation",
+      "kind": "nav",
+      "description": "Desktop workspace destinations use square underlines and an explicit current-page state.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"Workspace\"><button type=\"button\">Sources</button><button type=\"button\" aria-current=\"page\">Curation</button><button type=\"button\">Gallery</button><button type=\"button\">Delivery</button></nav>",
+      "css": ".ds-nav{display:flex;flex-wrap:wrap;gap:12px;min-height:80px;background:#101316;font-family:Manrope,ui-sans-serif,system-ui,sans-serif;}.ds-nav button{min-width:44px;min-height:44px;padding:0 18px;border:0;border-radius:0;border-bottom:3px solid transparent;background:transparent;color:var(--text,#f0f3f7);font:inherit;cursor:pointer;}.ds-nav button[aria-current=page]{color:var(--accent,#6d92ff);border-bottom-color:var(--accent,#6d92ff);}.ds-nav button:focus-visible{outline:3px solid var(--accent,#6d92ff);outline-offset:3px;}"
+    },
+    {
+      "name": "Removable tag",
+      "kind": "chip",
+      "description": "Text tags wrap naturally; the remove control keeps the full tag in its accessible name.",
+      "html": "<button class=\"ds-tag\" type=\"button\" aria-label=\"Remove tag Travel\">Travel<svg class=\"ds-tag-icon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" aria-hidden=\"true\"><path d=\"m18 6-12 12M6 6l12 12\"/></svg></button>",
+      "css": ".ds-tag{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-width:44px;min-height:44px;padding:8px 12px;border:1px solid var(--border,#3c424a);border-radius:6px;background:var(--surface,#1b1e22);color:var(--text,#f0f3f7);font-family:Manrope,ui-sans-serif,system-ui,sans-serif;font-size:14px;cursor:pointer;transition:background-color var(--motion,180ms cubic-bezier(.16,1,.3,1)),border-color var(--motion,180ms cubic-bezier(.16,1,.3,1));}.ds-tag:hover{background:var(--raised,#252930);}.ds-tag:active{background:#303641;}.ds-tag:focus-visible{outline:2px solid #93adff;outline-offset:3px;}.ds-tag:disabled{opacity:.48;cursor:not-allowed;}@media(prefers-reduced-motion:reduce){.ds-tag{transition:none;}}.ds-tag{overflow-wrap:anywhere;text-align:left;}.ds-tag-icon{width:14px;height:14px;flex-shrink:0;}"
+    },
+    {
+      "name": "Curation panel",
+      "kind": "card",
+      "refersTo": "curation-panel",
+      "description": "The documented charcoal curation container uses a fine border and quiet tonal separation.",
+      "html": "<section class=\"ds-curation\"><h2 class=\"ds-curation-title\">Curation</h2><p class=\"ds-curation-copy\">Choose the photographs you want to send.</p></section>",
+      "css": ".ds-curation{padding:24px;border:1px solid var(--border,#3c424a);border-radius:10px;background:var(--surface,#1b1e22);color:var(--text,#f0f3f7);font-family:Manrope,ui-sans-serif,system-ui,sans-serif;}.ds-curation-title{margin:0;font-size:21px;line-height:1.35;font-weight:600;}.ds-curation-copy{margin:12px 0 0;line-height:1.5;color:var(--muted,#b4beca);max-width:72ch;}"
+    },
+    {
+      "name": "Gallery slideshow transport",
+      "kind": "custom",
+      "description": "Compact neutral playback dock above the independent Favorite action; explicit Play/Pause and 44px interval targets on black.",
+      "html": "<div class=\"ds-slideshow\" role=\"group\" aria-label=\"Slideshow controls\"><button class=\"ds-play\" type=\"button\" aria-label=\"Play slideshow\" aria-pressed=\"false\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m6 3 14 9-14 9V3Z\"/></svg>Play</button><div class=\"ds-intervals\" role=\"group\" aria-label=\"Time per photograph\"><button type=\"button\" aria-label=\"3 seconds per photograph\" aria-pressed=\"false\">3<span>s</span></button><button type=\"button\" aria-label=\"5 seconds per photograph\" aria-pressed=\"true\">5<span>s</span></button><button type=\"button\" aria-label=\"10 seconds per photograph\" aria-pressed=\"false\">10<span>s</span></button></div></div>",
+      "css": ".ds-slideshow{display:inline-flex;align-items:center;gap:8px;padding:4px;border:1px solid #ffffff24;border-radius:12px;background:#151719ed;color:#f5f6f7;font-family:Manrope,ui-sans-serif,system-ui,sans-serif}.ds-slideshow button{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;padding:8px;border:0;border-radius:8px;background:transparent;color:#b9bec6;font:inherit;font-size:14px;cursor:pointer;gap:2px;font-variant-numeric:tabular-nums}.ds-slideshow .ds-play{min-width:92px;padding:8px 12px;color:inherit;font-weight:650;gap:8px}.ds-play svg{width:18px;height:18px}.ds-play:hover{background:#ffffff12}.ds-intervals{display:flex;padding-left:8px;border-left:1px solid #ffffff24}.ds-intervals button span{font-size:11px}.ds-intervals button[aria-pressed=true]{color:#fff;background:#ffffff16;box-shadow:inset 0 -2px 0 #a5baff}.ds-intervals button:hover{background:#ffffff20;color:#fff}.ds-slideshow button:focus-visible{outline:2px solid #93adff;outline-offset:3px}.ds-slideshow button:disabled{opacity:.48;cursor:not-allowed}"
+    }
+  ],
+  "narrative": {
+    "overview": "Use a neutral dark photo workspace in Impeccable's Operate mode.\nSources, Curation, Gallery and Delivery form the implemented workspace. Curation autosaves shared Capture\nmetadata; Gallery supports viewing and explicit loaded-photo selection; Delivery exposes rules and per-Asset evidence.\nKeep accepted ingest, preview availability, release and confirmed delivery separately readable.\nThe supplied full-color shutter artwork anchors the header and sign-in; reusable controls use Nuxt UI with native inputs where sufficient.\nThe initial slice is dark only, including on an operating system that prefers light.\n",
+    "keyCharacteristics": [],
+    "rules": [
+      "Gallery and Curation fullscreen controls hide after three idle seconds without animation. Pointer movement, touch or keyboard interaction reveals them; keyboard focus and actionable recovery feedback keep them visible. The first touch wakes hidden controls without activating an action."
+    ],
+    "dos": [
+      "Preserve focus, scroll and drafts during reconciliation.",
+      "Browse authorized derivatives and clear private data/object URLs on authentication loss.",
+      "Keep preview failures independent from curation and release."
+    ],
+    "donts": [
+      "Do not imply that an empty delivery list confirms delivery or permits deletion.",
+      "Do not change to light mode or introduce a second visual/component system in this slice."
+    ]
+  }
+}

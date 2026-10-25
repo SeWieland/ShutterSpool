@@ -1,0 +1,434 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1100 -1100 2200 2200"><style>
+.aperture-leaf { transform-origin: 906.31px 422.62px; }
+.aperture-neighbor-clip { transform-origin: 0 0; }
+.aperture-contact { fill: none; stroke: #30343b; stroke-width: 1; opacity: .4; vector-effect: non-scaling-stroke; }
+.aperture-rim { fill: none; stroke: #527dff; opacity: .14; stroke-width: 1.15; vector-effect: non-scaling-stroke; }
+.aperture-housing { fill: none; stroke: #101010; stroke-width: 160; }
+.aperture-lit-bevel { stroke-width: 1.5; }
+.aperture-machining { fill: none; stroke: #303030; stroke-width: 1; opacity: .25; }
+.aperture-grip { fill: none; stroke: #303030; stroke-width: 1; opacity: .3; }
+.aperture-engraving { fill: #7a838f; font-family: inherit; font-size: 11px; font-weight: 500; letter-spacing: 2px; opacity: .28; }
+.aperture-fasteners { fill: #0b0b0b; stroke: #535353; stroke-width: 1; opacity: .35; }
+.aperture-fasteners path { stroke: #858585; }
+.aperture-bezel-edge { fill: none; stroke: #527dff; stroke-width: 1; opacity: .18; }
+.aperture-wireframe { fill: none; stroke: #527dff; stroke-width: 1; vector-effect: non-scaling-stroke; opacity: .13; }
+.aperture-encoder { stroke-dasharray: 48 8 2 8; opacity: .65; }
+.aperture-calibration { fill: none; stroke: #527dff; stroke-width: 1; opacity: .23; }
+.aperture-index-light { fill: none; stroke: #527dff; stroke-width: 1.2; stroke-linecap: round; }
+.aperture-index-light path { vector-effect: non-scaling-stroke; }
+
+svg { overflow:visible; }</style><g>
+    <defs>
+        <clipPath id="aperture-visible-face">
+            <path class="aperture-neighbor-clip" style="transform:translate(906.31px, 422.62px) rotate(-9.4deg) translate(-906.31px, -422.62px) rotate(60deg) translate(906.31px, 422.62px) rotate(9.4deg) translate(-906.31px, -422.62px);" d="M -3000 -3000 H 3000 V 3000 H -3000 Z M 260 -103.923 L -40 415.692 C 90 500 160 710 20.94 1199.82 A 1200 1200 0 0 0 1087.57 507.14 L 906.31 422.62 C 650 180 400 -50 260 -103.923 Z" clip-rule="evenodd" />
+        </clipPath>
+        <clipPath id="aperture-outside-face">
+            <path d="M -3000 -3000 H 3000 V 3000 H -3000 Z M 260 -103.923 L -40 415.692 C 90 500 160 710 20.94 1199.82 A 1200 1200 0 0 0 1087.57 507.14 L 906.31 422.62 C 650 180 400 -50 260 -103.923 Z" clip-rule="evenodd" />
+        </clipPath>
+        <clipPath id="aperture-barrel">
+            <circle r="1000" />
+        </clipPath>
+    </defs>
+    <g clip-path="url(#aperture-barrel)">
+        <g class="aperture-blades">
+            <g transform="rotate(0)">
+                <g class="aperture-leaf" style="transform:rotate(9.4deg);" clip-path="url(#aperture-visible-face)">
+                    <path class="aperture-blade" style="fill:#0c0c0c" d="M 260 -103.923 L -40 415.692 C 90 500 160 710 20.94 1199.82 A 1200 1200 0 0 0 1087.57 507.14 L 906.31 422.62 C 650 180 400 -50 260 -103.923 Z" />
+                    <path class="aperture-rim" d="M -40 415.692 L 260 -103.923 C 400 -50 650 180 906.31 422.62" />
+                </g>
+            </g>
+            <g transform="rotate(60)">
+                <g class="aperture-leaf" style="transform:rotate(9.4deg);" clip-path="url(#aperture-visible-face)">
+                    <path class="aperture-blade" style="fill:#0a0a0a" d="M 260 -103.923 L -40 415.692 C 90 500 160 710 20.94 1199.82 A 1200 1200 0 0 0 1087.57 507.14 L 906.31 422.62 C 650 180 400 -50 260 -103.923 Z" />
+                    <path class="aperture-rim" d="M -40 415.692 L 260 -103.923 C 400 -50 650 180 906.31 422.62" />
+                </g>
+            </g>
+            <g transform="rotate(120)">
+                <g class="aperture-leaf" style="transform:rotate(9.4deg);" clip-path="url(#aperture-visible-face)">
+                    <path class="aperture-blade" style="fill:#0b0b0b" d="M 260 -103.923 L -40 415.692 C 90 500 160 710 20.94 1199.82 A 1200 1200 0 0 0 1087.57 507.14 L 906.31 422.62 C 650 180 400 -50 260 -103.923 Z" />
+                    <path class="aperture-rim" d="M -40 415.692 L 260 -103.923 C 400 -50 650 180 906.31 422.62" />
+                </g>
+            </g>
+            <g transform="rotate(180)">
+                <g class="aperture-leaf" style="transform:rotate(9.4deg);" clip-path="url(#aperture-visible-face)">
+                    <path class="aperture-blade" style="fill:#0e0e0e" d="M 260 -103.923 L -40 415.692 C 90 500 160 710 20.94 1199.82 A 1200 1200 0 0 0 1087.57 507.14 L 906.31 422.62 C 650 180 400 -50 260 -103.923 Z" />
+                    <path class="aperture-rim" d="M -40 415.692 L 260 -103.923 C 400 -50 650 180 906.31 422.62" />
+                </g>
+            </g>
+            <g transform="rotate(240)">
+                <g class="aperture-leaf" style="transform:rotate(9.4deg);" clip-path="url(#aperture-visible-face)">
+                    <path class="aperture-blade" style="fill:#0a0a0a" d="M 260 -103.923 L -40 415.692 C 90 500 160 710 20.94 1199.82 A 1200 1200 0 0 0 1087.57 507.14 L 906.31 422.62 C 650 180 400 -50 260 -103.923 Z" />
+                    <path class="aperture-rim" d="M -40 415.692 L 260 -103.923 C 400 -50 650 180 906.31 422.62" />
+                </g>
+            </g>
+            <g transform="rotate(300)">
+                <g class="aperture-leaf" style="transform:rotate(9.4deg);" clip-path="url(#aperture-visible-face)">
+                    <path class="aperture-blade" style="fill:#0d0d0d" d="M 260 -103.923 L -40 415.692 C 90 500 160 710 20.94 1199.82 A 1200 1200 0 0 0 1087.57 507.14 L 906.31 422.62 C 650 180 400 -50 260 -103.923 Z" />
+                    <path class="aperture-rim" d="M -40 415.692 L 260 -103.923 C 400 -50 650 180 906.31 422.62" />
+                </g>
+            </g>
+        </g>
+        <g transform="rotate(0)">
+            <g class="aperture-leaf" style="transform:rotate(9.4deg);">
+                <g clip-path="url(#aperture-visible-face)">
+                    <g clip-path="url(#aperture-outside-face)">
+                        <path class="aperture-contact" transform="translate(1 2)" d="M -40 415.692 L 260 -103.923 C 400 -50 650 180 906.31 422.62" />
+                    </g>
+                </g>
+            </g>
+        </g>
+        <g transform="rotate(60)">
+            <g class="aperture-leaf" style="transform:rotate(9.4deg);">
+                <g clip-path="url(#aperture-visible-face)">
+                    <g clip-path="url(#aperture-outside-face)">
+                        <path class="aperture-contact" transform="translate(1 2)" d="M -40 415.692 L 260 -103.923 C 400 -50 650 180 906.31 422.62" />
+                    </g>
+                </g>
+            </g>
+        </g>
+        <g transform="rotate(120)">
+            <g class="aperture-leaf" style="transform:rotate(9.4deg);">
+                <g clip-path="url(#aperture-visible-face)">
+                    <g clip-path="url(#aperture-outside-face)">
+                        <path class="aperture-contact" transform="translate(1 2)" d="M -40 415.692 L 260 -103.923 C 400 -50 650 180 906.31 422.62" />
+                    </g>
+                </g>
+            </g>
+        </g>
+        <g transform="rotate(180)">
+            <g class="aperture-leaf" style="transform:rotate(9.4deg);">
+                <g clip-path="url(#aperture-visible-face)">
+                    <g clip-path="url(#aperture-outside-face)">
+                        <path class="aperture-contact" transform="translate(1 2)" d="M -40 415.692 L 260 -103.923 C 400 -50 650 180 906.31 422.62" />
+                    </g>
+                </g>
+            </g>
+        </g>
+        <g transform="rotate(240)">
+            <g class="aperture-leaf" style="transform:rotate(9.4deg);">
+                <g clip-path="url(#aperture-visible-face)">
+                    <g clip-path="url(#aperture-outside-face)">
+                        <path class="aperture-contact" transform="translate(1 2)" d="M -40 415.692 L 260 -103.923 C 400 -50 650 180 906.31 422.62" />
+                    </g>
+                </g>
+            </g>
+        </g>
+        <g transform="rotate(300)">
+            <g class="aperture-leaf" style="transform:rotate(9.4deg);">
+                <g clip-path="url(#aperture-visible-face)">
+                    <g clip-path="url(#aperture-outside-face)">
+                        <path class="aperture-contact" transform="translate(1 2)" d="M -40 415.692 L 260 -103.923 C 400 -50 650 180 906.31 422.62" />
+                    </g>
+                </g>
+            </g>
+        </g>
+    </g>
+    <circle class="aperture-housing" r="980" />
+    <g class="aperture-bezel-edge">
+        <circle class="aperture-lit-bevel" r="900" />
+        <circle r="1060" />
+    </g>
+</g>
+<g transform="rotate(4.5)">
+    <defs>
+        <path id="aperture-rim-name-arc" d="M -982 0 A 982 982 0 0 1 982 0" />
+    </defs>
+    <g class="aperture-rim-details">
+    <g class="aperture-index-light">
+        <path transform="rotate(-118)" d="M -3 -1020 H 3 M 0 -1023 V -1017" />
+<path transform="rotate(-78)" d="M -3 -1020 H 3 M 0 -1023 V -1017" />
+<path transform="rotate(-38)" d="M -3 -1020 H 3 M 0 -1023 V -1017" />
+    </g>
+        <g class="aperture-machining">
+            <circle r="917" />
+            <circle r="923" />
+            <circle r="930" />
+            <circle r="1000" />
+            <circle r="1005" />
+            <circle r="1052" />
+        </g>
+        <g class="aperture-grip">
+    <path transform="rotate(2)" d="M 0 -1030 V -1048" />
+<path transform="rotate(4)" d="M 0 -1030 V -1048" />
+<path transform="rotate(6)" d="M 0 -1030 V -1048" />
+<path transform="rotate(8)" d="M 0 -1030 V -1048" />
+<path transform="rotate(10)" d="M 0 -1030 V -1048" />
+<path transform="rotate(12)" d="M 0 -1030 V -1048" />
+<path transform="rotate(14)" d="M 0 -1030 V -1048" />
+<path transform="rotate(16)" d="M 0 -1030 V -1048" />
+<path transform="rotate(18)" d="M 0 -1030 V -1048" />
+<path transform="rotate(20)" d="M 0 -1030 V -1048" />
+<path transform="rotate(22)" d="M 0 -1030 V -1048" />
+<path transform="rotate(24)" d="M 0 -1030 V -1048" />
+<path transform="rotate(26)" d="M 0 -1030 V -1048" />
+<path transform="rotate(28)" d="M 0 -1030 V -1048" />
+<path transform="rotate(30)" d="M 0 -1030 V -1048" />
+<path transform="rotate(32)" d="M 0 -1030 V -1048" />
+<path transform="rotate(34)" d="M 0 -1030 V -1048" />
+<path transform="rotate(36)" d="M 0 -1030 V -1048" />
+<path transform="rotate(38)" d="M 0 -1030 V -1048" />
+<path transform="rotate(40)" d="M 0 -1030 V -1048" />
+<path transform="rotate(42)" d="M 0 -1030 V -1048" />
+<path transform="rotate(44)" d="M 0 -1030 V -1048" />
+<path transform="rotate(46)" d="M 0 -1030 V -1048" />
+<path transform="rotate(48)" d="M 0 -1030 V -1048" />
+<path transform="rotate(50)" d="M 0 -1030 V -1048" />
+<path transform="rotate(52)" d="M 0 -1030 V -1048" />
+<path transform="rotate(54)" d="M 0 -1030 V -1048" />
+<path transform="rotate(56)" d="M 0 -1030 V -1048" />
+<path transform="rotate(58)" d="M 0 -1030 V -1048" />
+<path transform="rotate(60)" d="M 0 -1030 V -1048" />
+<path transform="rotate(62)" d="M 0 -1030 V -1048" />
+<path transform="rotate(64)" d="M 0 -1030 V -1048" />
+<path transform="rotate(66)" d="M 0 -1030 V -1048" />
+<path transform="rotate(68)" d="M 0 -1030 V -1048" />
+<path transform="rotate(70)" d="M 0 -1030 V -1048" />
+<path transform="rotate(72)" d="M 0 -1030 V -1048" />
+<path transform="rotate(74)" d="M 0 -1030 V -1048" />
+<path transform="rotate(76)" d="M 0 -1030 V -1048" />
+<path transform="rotate(78)" d="M 0 -1030 V -1048" />
+<path transform="rotate(80)" d="M 0 -1030 V -1048" />
+<path transform="rotate(82)" d="M 0 -1030 V -1048" />
+<path transform="rotate(84)" d="M 0 -1030 V -1048" />
+<path transform="rotate(86)" d="M 0 -1030 V -1048" />
+<path transform="rotate(88)" d="M 0 -1030 V -1048" />
+<path transform="rotate(90)" d="M 0 -1030 V -1048" />
+<path transform="rotate(92)" d="M 0 -1030 V -1048" />
+<path transform="rotate(94)" d="M 0 -1030 V -1048" />
+<path transform="rotate(96)" d="M 0 -1030 V -1048" />
+<path transform="rotate(98)" d="M 0 -1030 V -1048" />
+<path transform="rotate(100)" d="M 0 -1030 V -1048" />
+<path transform="rotate(102)" d="M 0 -1030 V -1048" />
+<path transform="rotate(104)" d="M 0 -1030 V -1048" />
+<path transform="rotate(106)" d="M 0 -1030 V -1048" />
+<path transform="rotate(108)" d="M 0 -1030 V -1048" />
+<path transform="rotate(110)" d="M 0 -1030 V -1048" />
+<path transform="rotate(112)" d="M 0 -1030 V -1048" />
+<path transform="rotate(114)" d="M 0 -1030 V -1048" />
+<path transform="rotate(116)" d="M 0 -1030 V -1048" />
+<path transform="rotate(118)" d="M 0 -1030 V -1048" />
+<path transform="rotate(120)" d="M 0 -1030 V -1048" />
+<path transform="rotate(122)" d="M 0 -1030 V -1048" />
+<path transform="rotate(124)" d="M 0 -1030 V -1048" />
+<path transform="rotate(126)" d="M 0 -1030 V -1048" />
+<path transform="rotate(128)" d="M 0 -1030 V -1048" />
+<path transform="rotate(130)" d="M 0 -1030 V -1048" />
+<path transform="rotate(132)" d="M 0 -1030 V -1048" />
+<path transform="rotate(134)" d="M 0 -1030 V -1048" />
+<path transform="rotate(136)" d="M 0 -1030 V -1048" />
+<path transform="rotate(138)" d="M 0 -1030 V -1048" />
+<path transform="rotate(140)" d="M 0 -1030 V -1048" />
+<path transform="rotate(142)" d="M 0 -1030 V -1048" />
+<path transform="rotate(144)" d="M 0 -1030 V -1048" />
+<path transform="rotate(146)" d="M 0 -1030 V -1048" />
+<path transform="rotate(148)" d="M 0 -1030 V -1048" />
+<path transform="rotate(150)" d="M 0 -1030 V -1048" />
+<path transform="rotate(152)" d="M 0 -1030 V -1048" />
+<path transform="rotate(154)" d="M 0 -1030 V -1048" />
+<path transform="rotate(156)" d="M 0 -1030 V -1048" />
+<path transform="rotate(158)" d="M 0 -1030 V -1048" />
+<path transform="rotate(160)" d="M 0 -1030 V -1048" />
+<path transform="rotate(162)" d="M 0 -1030 V -1048" />
+<path transform="rotate(164)" d="M 0 -1030 V -1048" />
+<path transform="rotate(166)" d="M 0 -1030 V -1048" />
+<path transform="rotate(168)" d="M 0 -1030 V -1048" />
+<path transform="rotate(170)" d="M 0 -1030 V -1048" />
+<path transform="rotate(172)" d="M 0 -1030 V -1048" />
+<path transform="rotate(174)" d="M 0 -1030 V -1048" />
+<path transform="rotate(176)" d="M 0 -1030 V -1048" />
+<path transform="rotate(178)" d="M 0 -1030 V -1048" />
+<path transform="rotate(180)" d="M 0 -1030 V -1048" />
+<path transform="rotate(182)" d="M 0 -1030 V -1048" />
+<path transform="rotate(184)" d="M 0 -1030 V -1048" />
+<path transform="rotate(186)" d="M 0 -1030 V -1048" />
+<path transform="rotate(188)" d="M 0 -1030 V -1048" />
+<path transform="rotate(190)" d="M 0 -1030 V -1048" />
+<path transform="rotate(192)" d="M 0 -1030 V -1048" />
+<path transform="rotate(194)" d="M 0 -1030 V -1048" />
+<path transform="rotate(196)" d="M 0 -1030 V -1048" />
+<path transform="rotate(198)" d="M 0 -1030 V -1048" />
+<path transform="rotate(200)" d="M 0 -1030 V -1048" />
+<path transform="rotate(202)" d="M 0 -1030 V -1048" />
+<path transform="rotate(204)" d="M 0 -1030 V -1048" />
+<path transform="rotate(206)" d="M 0 -1030 V -1048" />
+<path transform="rotate(208)" d="M 0 -1030 V -1048" />
+<path transform="rotate(210)" d="M 0 -1030 V -1048" />
+<path transform="rotate(212)" d="M 0 -1030 V -1048" />
+<path transform="rotate(214)" d="M 0 -1030 V -1048" />
+<path transform="rotate(216)" d="M 0 -1030 V -1048" />
+<path transform="rotate(218)" d="M 0 -1030 V -1048" />
+<path transform="rotate(220)" d="M 0 -1030 V -1048" />
+<path transform="rotate(222)" d="M 0 -1030 V -1048" />
+<path transform="rotate(224)" d="M 0 -1030 V -1048" />
+<path transform="rotate(226)" d="M 0 -1030 V -1048" />
+<path transform="rotate(228)" d="M 0 -1030 V -1048" />
+<path transform="rotate(230)" d="M 0 -1030 V -1048" />
+<path transform="rotate(232)" d="M 0 -1030 V -1048" />
+<path transform="rotate(234)" d="M 0 -1030 V -1048" />
+<path transform="rotate(236)" d="M 0 -1030 V -1048" />
+<path transform="rotate(238)" d="M 0 -1030 V -1048" />
+<path transform="rotate(240)" d="M 0 -1030 V -1048" />
+<path transform="rotate(242)" d="M 0 -1030 V -1048" />
+<path transform="rotate(244)" d="M 0 -1030 V -1048" />
+<path transform="rotate(246)" d="M 0 -1030 V -1048" />
+<path transform="rotate(248)" d="M 0 -1030 V -1048" />
+<path transform="rotate(250)" d="M 0 -1030 V -1048" />
+<path transform="rotate(252)" d="M 0 -1030 V -1048" />
+<path transform="rotate(254)" d="M 0 -1030 V -1048" />
+<path transform="rotate(256)" d="M 0 -1030 V -1048" />
+<path transform="rotate(258)" d="M 0 -1030 V -1048" />
+<path transform="rotate(260)" d="M 0 -1030 V -1048" />
+<path transform="rotate(262)" d="M 0 -1030 V -1048" />
+<path transform="rotate(264)" d="M 0 -1030 V -1048" />
+<path transform="rotate(266)" d="M 0 -1030 V -1048" />
+<path transform="rotate(268)" d="M 0 -1030 V -1048" />
+<path transform="rotate(270)" d="M 0 -1030 V -1048" />
+<path transform="rotate(272)" d="M 0 -1030 V -1048" />
+<path transform="rotate(274)" d="M 0 -1030 V -1048" />
+<path transform="rotate(276)" d="M 0 -1030 V -1048" />
+<path transform="rotate(278)" d="M 0 -1030 V -1048" />
+<path transform="rotate(280)" d="M 0 -1030 V -1048" />
+<path transform="rotate(282)" d="M 0 -1030 V -1048" />
+<path transform="rotate(284)" d="M 0 -1030 V -1048" />
+<path transform="rotate(286)" d="M 0 -1030 V -1048" />
+<path transform="rotate(288)" d="M 0 -1030 V -1048" />
+<path transform="rotate(290)" d="M 0 -1030 V -1048" />
+<path transform="rotate(292)" d="M 0 -1030 V -1048" />
+<path transform="rotate(294)" d="M 0 -1030 V -1048" />
+<path transform="rotate(296)" d="M 0 -1030 V -1048" />
+<path transform="rotate(298)" d="M 0 -1030 V -1048" />
+<path transform="rotate(300)" d="M 0 -1030 V -1048" />
+<path transform="rotate(302)" d="M 0 -1030 V -1048" />
+<path transform="rotate(304)" d="M 0 -1030 V -1048" />
+<path transform="rotate(306)" d="M 0 -1030 V -1048" />
+<path transform="rotate(308)" d="M 0 -1030 V -1048" />
+<path transform="rotate(310)" d="M 0 -1030 V -1048" />
+<path transform="rotate(312)" d="M 0 -1030 V -1048" />
+<path transform="rotate(314)" d="M 0 -1030 V -1048" />
+<path transform="rotate(316)" d="M 0 -1030 V -1048" />
+<path transform="rotate(318)" d="M 0 -1030 V -1048" />
+<path transform="rotate(320)" d="M 0 -1030 V -1048" />
+<path transform="rotate(322)" d="M 0 -1030 V -1048" />
+<path transform="rotate(324)" d="M 0 -1030 V -1048" />
+<path transform="rotate(326)" d="M 0 -1030 V -1048" />
+<path transform="rotate(328)" d="M 0 -1030 V -1048" />
+<path transform="rotate(330)" d="M 0 -1030 V -1048" />
+<path transform="rotate(332)" d="M 0 -1030 V -1048" />
+<path transform="rotate(334)" d="M 0 -1030 V -1048" />
+<path transform="rotate(336)" d="M 0 -1030 V -1048" />
+<path transform="rotate(338)" d="M 0 -1030 V -1048" />
+<path transform="rotate(340)" d="M 0 -1030 V -1048" />
+<path transform="rotate(342)" d="M 0 -1030 V -1048" />
+<path transform="rotate(344)" d="M 0 -1030 V -1048" />
+<path transform="rotate(346)" d="M 0 -1030 V -1048" />
+<path transform="rotate(348)" d="M 0 -1030 V -1048" />
+<path transform="rotate(350)" d="M 0 -1030 V -1048" />
+<path transform="rotate(352)" d="M 0 -1030 V -1048" />
+<path transform="rotate(354)" d="M 0 -1030 V -1048" />
+<path transform="rotate(356)" d="M 0 -1030 V -1048" />
+<path transform="rotate(358)" d="M 0 -1030 V -1048" />
+<path transform="rotate(360)" d="M 0 -1030 V -1048" />
+</g>
+        <g class="aperture-engraving">
+            <text>
+                <textPath href="#aperture-rim-name-arc" startOffset="18%">SHUTTERSPOOL · APERTURE</textPath>
+            </text>
+            <text transform="rotate(-115)" x="0" y="-951" text-anchor="middle">4</text>
+            <text transform="rotate(-101)" x="0" y="-951" text-anchor="middle">4.5</text>
+            <text transform="rotate(-87)" x="0" y="-951" text-anchor="middle">5</text>
+            <text transform="rotate(-73)" x="0" y="-951" text-anchor="middle">5.6</text>
+            <text transform="rotate(-59)" x="0" y="-951" text-anchor="middle">8</text>
+            <text transform="rotate(-45)" x="0" y="-951" text-anchor="middle">11</text>
+            <text transform="rotate(-31)" x="0" y="-951" text-anchor="middle">16</text>
+        </g>
+        <g class="aperture-fasteners">
+            <g transform="rotate(68)">
+                <circle cx="0" cy="-1000" r="6" />
+                <path d="M -3 -1003 L 3 -997" />
+            </g>
+            <g transform="rotate(128)">
+                <circle cx="0" cy="-1000" r="6" />
+                <path d="M -3 -1003 L 3 -997" />
+            </g>
+            <g transform="rotate(188)">
+                <circle cx="0" cy="-1000" r="6" />
+                <path d="M -3 -1003 L 3 -997" />
+            </g>
+            <g transform="rotate(248)">
+                <circle cx="0" cy="-1000" r="6" />
+                <path d="M -3 -1003 L 3 -997" />
+            </g>
+            <g transform="rotate(308)">
+                <circle cx="0" cy="-1000" r="6" />
+                <path d="M -3 -1003 L 3 -997" />
+            </g>
+            <g transform="rotate(368)">
+                <circle cx="0" cy="-1000" r="6" />
+                <path d="M -3 -1003 L 3 -997" />
+            </g>
+        </g>
+        <g class="aperture-wireframe">
+            <circle r="1040" />
+            <circle r="1010" />
+            <circle class="aperture-encoder" r="945" />
+            <circle r="910" />
+            <path d="M -1070 0 H -1020 M 0 -1070 V -1020 M 1070 0 H 1020 M 0 1070 V 1020" />
+        </g>
+        <g class="aperture-calibration">
+            <circle transform="rotate(60)" cx="0" cy="-975" r="3" />
+            <circle transform="rotate(120)" cx="0" cy="-975" r="3" />
+            <circle transform="rotate(180)" cx="0" cy="-975" r="3" />
+            <circle transform="rotate(240)" cx="0" cy="-975" r="3" />
+            <circle transform="rotate(300)" cx="0" cy="-975" r="3" />
+            <circle transform="rotate(360)" cx="0" cy="-975" r="3" />
+            <path transform="rotate(10)" d="M 0 -1020 V -1027" />
+<path transform="rotate(20)" d="M 0 -1020 V -1027" />
+<path transform="rotate(30)" d="M 0 -1020 V -1027" />
+<path transform="rotate(40)" d="M 0 -1020 V -1027" />
+<path transform="rotate(50)" d="M 0 -1020 V -1027" />
+<path transform="rotate(60)" d="M 0 -1020 V -1027" />
+<path transform="rotate(70)" d="M 0 -1020 V -1027" />
+<path transform="rotate(80)" d="M 0 -1020 V -1027" />
+<path transform="rotate(90)" d="M 0 -1020 V -1027" />
+<path transform="rotate(100)" d="M 0 -1020 V -1027" />
+<path transform="rotate(110)" d="M 0 -1020 V -1027" />
+<path transform="rotate(120)" d="M 0 -1020 V -1027" />
+<path transform="rotate(130)" d="M 0 -1020 V -1027" />
+<path transform="rotate(140)" d="M 0 -1020 V -1027" />
+<path transform="rotate(150)" d="M 0 -1020 V -1027" />
+<path transform="rotate(160)" d="M 0 -1020 V -1027" />
+<path transform="rotate(170)" d="M 0 -1020 V -1027" />
+<path transform="rotate(180)" d="M 0 -1020 V -1027" />
+<path transform="rotate(190)" d="M 0 -1020 V -1027" />
+<path transform="rotate(200)" d="M 0 -1020 V -1027" />
+<path transform="rotate(210)" d="M 0 -1020 V -1027" />
+<path transform="rotate(220)" d="M 0 -1020 V -1027" />
+<path transform="rotate(230)" d="M 0 -1020 V -1027" />
+<path transform="rotate(240)" d="M 0 -1020 V -1027" />
+<path transform="rotate(250)" d="M 0 -1020 V -1027" />
+<path transform="rotate(260)" d="M 0 -1020 V -1027" />
+<path transform="rotate(270)" d="M 0 -1020 V -1027" />
+<path transform="rotate(280)" d="M 0 -1020 V -1027" />
+<path transform="rotate(290)" d="M 0 -1020 V -1027" />
+<path transform="rotate(300)" d="M 0 -1020 V -1027" />
+<path transform="rotate(310)" d="M 0 -1020 V -1027" />
+<path transform="rotate(320)" d="M 0 -1020 V -1027" />
+<path transform="rotate(330)" d="M 0 -1020 V -1027" />
+<path transform="rotate(340)" d="M 0 -1020 V -1027" />
+<path transform="rotate(350)" d="M 0 -1020 V -1027" />
+<path transform="rotate(360)" d="M 0 -1020 V -1027" />
+            <path transform="rotate(30)" d="M 0 -1017 V -1035" />
+<path transform="rotate(60)" d="M 0 -1017 V -1035" />
+<path transform="rotate(90)" d="M 0 -1017 V -1035" />
+<path transform="rotate(120)" d="M 0 -1017 V -1035" />
+<path transform="rotate(150)" d="M 0 -1017 V -1035" />
+<path transform="rotate(180)" d="M 0 -1017 V -1035" />
+<path transform="rotate(210)" d="M 0 -1017 V -1035" />
+<path transform="rotate(240)" d="M 0 -1017 V -1035" />
+<path transform="rotate(270)" d="M 0 -1017 V -1035" />
+<path transform="rotate(300)" d="M 0 -1017 V -1035" />
+<path transform="rotate(330)" d="M 0 -1017 V -1035" />
+<path transform="rotate(360)" d="M 0 -1017 V -1035" />
+        </g>
+    </g>
+</g></svg>

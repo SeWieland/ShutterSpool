@@ -1,0 +1,38 @@
+{
+  "descriptionHash": "0C9ED66FDB722975B6872AD7D87964480DBF01B47D5FE27183EC532A3896FEADB68E5BFD584235EF48CCA66028B99C15AC9DC1B083E03D7E365620087D6B48F8",
+  "descriptionLocation": "../../../ShutterSpool.Server/openapi/ShutterSpool_Server.json",
+  "lockFileVersion": "1.0.0",
+  "kiotaVersion": "1.35.0",
+  "clientClassName": "ShutterSpoolClient",
+  "typeAccessModifier": "Public",
+  "clientNamespaceName": "ShutterSpool.Api",
+  "language": "TypeScript",
+  "usesBackingStore": false,
+  "excludeBackwardCompatible": false,
+  "includeAdditionalData": true,
+  "disableSSLValidation": false,
+  "serializers": [
+    "Microsoft.Kiota.Serialization.Json.JsonSerializationWriterFactory",
+    "Microsoft.Kiota.Serialization.Text.TextSerializationWriterFactory",
+    "Microsoft.Kiota.Serialization.Form.FormSerializationWriterFactory",
+    "Microsoft.Kiota.Serialization.Multipart.MultipartSerializationWriterFactory"
+  ],
+  "deserializers": [
+    "Microsoft.Kiota.Serialization.Json.JsonParseNodeFactory",
+    "Microsoft.Kiota.Serialization.Text.TextParseNodeFactory",
+    "Microsoft.Kiota.Serialization.Form.FormParseNodeFactory"
+  ],
+  "structuredMimeTypes": [
+    "application/json",
+    "text/plain",
+    "application/x-www-form-urlencoded",
+    "multipart/form-data",
+    "image/webp",
+    "image/svg\u002Bxml",
+    "text/event-stream"
+  ],
+  "includePatterns": [],
+  "excludePatterns": [],
+  "disabledValidationRules": [],
+  "allowedExternalOrigins": []
+}

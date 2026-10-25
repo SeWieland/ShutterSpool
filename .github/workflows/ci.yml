@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: controlled-ci-password
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
+      SHUTTERSPOOL_REQUIRE_POSTGRES_TESTS: "true"
+      SHUTTERSPOOL_INGEST_TEST_CONNECTION: "Host=localhost;Port=5432;Username=postgres;Database=postgres;Password=controlled-ci-password"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages*.lock.json'
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: src/ShutterSpool.Web/package.json
+          cache: npm
+          cache-dependency-path: src/ShutterSpool.Web/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: src/ShutterSpool.Web
+      - name: Check frontend types
+        run: npm run typecheck
+        working-directory: src/ShutterSpool.Web
+      - name: Test frontend
+        run: npm test
+        working-directory: src/ShutterSpool.Web
+      - name: Build frontend
+        run: npm run build
+        working-directory: src/ShutterSpool.Web
+      - name: Test camera FTP client security
+        run: python tests/verify-camera-ftp-client.py
+      - name: Test supplied camera certificate validation
+        run: python tests/verify-edge-startup.py
+      - name: Restore core tests
+        run: dotnet restore tests/ShutterSpool.Core.Tests/ShutterSpool.Core.Tests.csproj --locked-mode
+      - name: Restore integration tests
+        run: dotnet restore tests/ShutterSpool.IntegrationTests/ShutterSpool.IntegrationTests.csproj --locked-mode
+      - name: Restore architecture tests
+        run: dotnet restore tests/ShutterSpool.ArchitectureTests/ShutterSpool.ArchitectureTests.csproj --locked-mode
+      - name: Restore AppHost
+        run: dotnet restore src/ShutterSpool.AppHost/ShutterSpool.AppHost.csproj --locked-mode
+      - name: Build solution
+        run: dotnet build --no-restore
+      - name: Test solution
+        id: tests
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/ci"
+          dotnet test --no-build 2>&1 | tee "$RUNNER_TEMP/ci/dotnet-tests.log"
+      - name: Restore .NET tools
+        run: dotnet tool restore
+      - name: Check for missing database migrations
+        run: dotnet ef migrations has-pending-model-changes --project src/ShutterSpool.Infrastructure --startup-project src/ShutterSpool.Infrastructure --context ShutterSpoolDbContext --no-build
+      - name: Generate API client
+        run: npm run generate-client
+        working-directory: src/ShutterSpool.Web
+      - name: Verify generated API files are current
+        run: |
+          if [ -n "$(git status --porcelain -- src/ShutterSpool.Server/openapi src/ShutterSpool.Web/app/api)" ]; then
+            git status --short -- src/ShutterSpool.Server/openapi src/ShutterSpool.Web/app/api
+            git diff -- src/ShutterSpool.Server/openapi src/ShutterSpool.Web/app/api
+            exit 1
+          fi
+      - name: Upload failed test output
+        if: failure() && steps.tests.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dotnet-test-output
+          path: ${{ runner.temp }}/ci/dotnet-tests.log
+          retention-days: 7

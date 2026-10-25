@@ -1,0 +1,29 @@
+{
+  "name": "shutterspool-web",
+  "private": true,
+  "engines": {
+    "node": "26.8.1"
+  },
+  "scripts": {
+    "build": "nuxt generate && node scripts/copy-static.mjs",
+    "dev": "nuxt dev",
+    "typecheck": "nuxt typecheck",
+    "test": "node --test scripts/fullscreen-chrome.test.mjs scripts/gallery-slideshow.test.mjs scripts/storage-presentation.test.mjs scripts/workspace-preferences.test.mjs scripts/collections.test.mjs scripts/preview-queue.test.mjs scripts/authorized-preview.test.mjs scripts/session.test.mjs scripts/curation-session.test.mjs scripts/workspace-interactions.test.mjs scripts/workspace.test.mjs scripts/destination-workspace.test.mjs scripts/aperture-background.test.mjs scripts/reconcile.test.mjs scripts/source-activity.test.mjs scripts/retention.test.mjs",
+    "generate-client": "dotnet tool run kiota generate --language TypeScript --openapi ../ShutterSpool.Server/openapi/ShutterSpool_Server.json --output app/api --clean-output --class-name ShutterSpoolClient --namespace-name ShutterSpool.Api --structured-mime-types application/json --structured-mime-types text/plain --structured-mime-types application/x-www-form-urlencoded --structured-mime-types multipart/form-data --structured-mime-types image/webp --structured-mime-types image/svg+xml --structured-mime-types text/event-stream && node scripts/trim-generated.mjs"
+  },
+  "devDependencies": {
+    "nuxt": "4.5.2",
+    "typescript": "5.9.3",
+    "vue-tsc": "3.1.7"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  },
+  "dependencies": {
+    "@microsoft/kiota-bundle": "1.0.0-preview.106",
+    "@microsoft/signalr": "10.0.11",
+    "@nuxt/ui": "4.11.3",
+    "oidc-client-ts": "3.5.0",
+    "tailwindcss": "4.3.1"
+  }
+}

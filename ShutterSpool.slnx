@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ShutterSpool.AppHost/ShutterSpool.AppHost.csproj" />
+    <Project Path="src/ShutterSpool.Server/ShutterSpool.Server.csproj" />
+    <Project Path="src/ShutterSpool.ServiceDefaults/ShutterSpool.ServiceDefaults.csproj" />
+    <Project Path="src/ShutterSpool.Domain/ShutterSpool.Domain.csproj" />
+    <Project Path="src/ShutterSpool.Application/ShutterSpool.Application.csproj" />
+    <Project Path="src/ShutterSpool.Infrastructure/ShutterSpool.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ShutterSpool.Core.Tests/ShutterSpool.Core.Tests.csproj" />
+    <Project Path="tests/ShutterSpool.IntegrationTests/ShutterSpool.IntegrationTests.csproj" />
+    <Project Path="tests/ShutterSpool.ArchitectureTests/ShutterSpool.ArchitectureTests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework><OutputType>Exe</OutputType><IsPackable>false</IsPackable></PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3.mtp-v2" Version="4.0.1" />
+    <Using Include="Xunit" />
+    <ProjectReference Include="../../src/ShutterSpool.Domain/ShutterSpool.Domain.csproj" />
+    <ProjectReference Include="../../src/ShutterSpool.Application/ShutterSpool.Application.csproj" />
+  </ItemGroup>
+</Project>

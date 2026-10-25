@@ -1,0 +1,8 @@
+services:
+  server:
+    expose: [8080]
+networks:
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK:?Set the existing proxy's shared Docker network name}
+    ipam: !reset null

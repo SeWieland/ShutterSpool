@@ -1,0 +1,27 @@
+{
+  "buildPath": "comp",
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "border-accent-on-rounded",
+        "value": "*",
+        "files": [
+          "src/ShutterSpool.Web/app/assets/workspace.css"
+        ],
+        "createdAt": "2026-10-11T06:45:39.774Z",
+        "reason": "The navigation underline uses border-radius:0 and border:0 with a 3px bottom border; it is a square navigation control, not a rounded card."
+      },
+      {
+        "rule": "layout-transition",
+        "value": "*",
+        "files": [
+          "src/ShutterSpool.Web/app/assets/workspace.css"
+        ],
+        "createdAt": "2026-10-24T19:53:19.076Z",
+        "reason": "The detector matches width inside SVG stroke-width; only donut circle stroke thickness changes within a fixed-size SVG, without changing layout dimensions."
+      }
+    ]
+  }
+}

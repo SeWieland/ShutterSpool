@@ -1,0 +1,39 @@
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak@sha256:0aae0de7fca85525f727d3354df17896092de8bb26ae4c12d89c77e5df8cbce4
+    env_file: [./config/identity.env]
+    environment:
+      KC_PROXY_TRUSTED_ADDRESSES: ${IDENTITY_PROXY_SUBNET:?Set the trusted identity-proxy subnet}
+    entrypoint: [/bin/sh, /opt/identity-entrypoint.sh]
+    command: [serve]
+    restart: unless-stopped
+    stop_grace_period: 150s
+    networks: [backend, identity-proxy]
+    volumes:
+      - ./package/realms:/opt/shutterspool:ro
+      - ./package/theme:/opt/keycloak/themes/shutterspool:ro
+      - ./package/identity-entrypoint.sh:/opt/identity-entrypoint.sh:ro
+    secrets: [postgres-password, keycloak-admin-password]
+  keycloak-reconciler:
+    image: quay.io/keycloak/keycloak@sha256:0aae0de7fca85525f727d3354df17896092de8bb26ae4c12d89c77e5df8cbce4
+    env_file: [./config/identity.env]
+    entrypoint: [/bin/sh, /opt/identity-entrypoint.sh]
+    command: [reconcile]
+    restart: 'no'
+    networks: [backend]
+    volumes:
+      - ./package/realms:/opt/shutterspool:ro
+      - ./package/theme:/opt/keycloak/themes/shutterspool:ro
+      - ./package/identity-entrypoint.sh:/opt/identity-entrypoint.sh:ro
+    secrets: [postgres-password, keycloak-admin-password, administrator-password]
+  server:
+    depends_on:
+      keycloak-reconciler:
+        condition: service_completed_successfully
+secrets:
+  postgres-password:
+    file: ./secrets/postgres-password
+  keycloak-admin-password:
+    file: ./secrets/keycloak-admin-password
+  administrator-password:
+    file: ./secrets/administrator-password

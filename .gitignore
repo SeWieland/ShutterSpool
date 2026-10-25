@@ -1,0 +1,37 @@
+**/bin/
+**/obj/
+**/node_modules/
+**/.nuxt/
+**/.output/
+**/dist/
+src/ShutterSpool.Server/wwwroot/
+.data/
+**/coverage/
+**/TestResults/
+**/__pycache__/
+*.pyc
+.vs/
+
+# Local secrets and runtime media; never commit original photographs
+.env
+.env.*
+!.env.example
+**/appsettings.Local.json
+**/secrets.json
+*.pfx
+*.p12
+*.key
+/data/
+/spool/
+/incoming/
+/quarantine/
+/preview-cache/
+/artifacts/
+/.playwright-cli/
+*.user
+*.suo
+*.log
+
+# Developer OS state
+.DS_Store
+Thumbs.db
