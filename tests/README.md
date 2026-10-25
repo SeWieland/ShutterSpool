@@ -3,6 +3,13 @@
 Choose a check by the claim you need to prove: a pure policy decision, a real persistence/recovery boundary, or an architectural dependency.
 Fast substitutes are useful for workflows, but they cannot establish a filesystem or PostgreSQL durability guarantee.
 
+## CI frequency
+
+Pushes to `main` and pull requests targeting `main` run the .NET suites with PostgreSQL, frontend type/test/build checks, migration and generated-client consistency checks, camera-client security, edge certificate validation and lightweight release-builder tests.
+The release-builder tests use temporary fixtures and do not build or upload candidate bundles.
+Full image/Compose candidate builds are manual through the [Candidate artifacts workflow](../.github/workflows/candidate.yml), with an explicit prerelease version and exact commit SHA.
+Backup/restore rehearsals and the opt-in runtime/provider checks below are separate qualification work; run the affected checks when changing those boundaries and before claiming release readiness.
+
 ## .NET suites
 
 All three test projects use xUnit.net v3 and Microsoft Testing Platform (`xunit.v3.mtp-v2`). Run `dotnet test` from the repository root; do not add VSTest or xUnit v2 packages.

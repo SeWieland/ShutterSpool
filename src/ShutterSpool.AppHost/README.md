@@ -28,7 +28,8 @@ python3 tools/build-release.py --version 0.1.0-alpha.1 --revision <exact-commit-
 The builder rejects source/version mismatch and unhydrated LFS pointers, retains a Linux amd64 OCI image with SPDX SBOM/SLSA provenance, and hashes package contents.
 It includes artifact-local operator instructions; operators need neither Aspire nor the source tree.
 Use `--allow-dirty` only for an explicitly labelled development build; it cannot establish a commit-qualified release.
-The candidate workflow runs with read-only repository permissions and uploads retained bundles only for private repositories.
+The candidate workflow runs manually through GitHub Actions with an explicit prerelease version and exact commit SHA; pull requests and pushes do not create candidate bundles.
+It runs with read-only repository permissions and uploads retained bundles only for private repositories.
 It never tags, pushes images or publishes a release.
 See [package checks](../../tests/README.md#public-python-and-shell-checks) for synthetic verification and its limits.
 Follow the [release policy](../../docs/release-policy.md) for exact-artifact approval, one reviewed notes source and separately authorized publication.
