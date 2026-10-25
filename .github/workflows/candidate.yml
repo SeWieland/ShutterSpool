@@ -1,8 +1,6 @@
 name: Candidate artifacts
 
 on:
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
       version:
@@ -18,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: candidate-${{ github.event.pull_request.head.sha || inputs.revision || github.sha }}
+  group: candidate-${{ inputs.revision }}
   cancel-in-progress: true
 
 jobs:
@@ -26,8 +24,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      BUILD_REVISION: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.revision }}
-      BUILD_VERSION: ${{ github.event_name == 'pull_request' && format('0.0.0-pr.{0}.{1}', github.run_number, github.run_attempt) || inputs.version }}
+      BUILD_REVISION: ${{ inputs.revision }}
+      BUILD_VERSION: ${{ inputs.version }}
     steps:
       - name: Check out selected source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
