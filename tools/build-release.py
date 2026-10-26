@@ -19,6 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 APPHOST = ROOT / "src/ShutterSpool.AppHost/ShutterSpool.AppHost.csproj"
 DOCKERFILE = ROOT / "deploy/Server.Dockerfile"
+IMAGE_REPOSITORY = "ghcr.io/sewieland/shutterspool"
 SEMVER_PRERELEASE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$")
 ASPIRE_CLI_VERSION = "13.6.0"
 DATABASE_COMPATIBILITY = {
@@ -58,8 +59,8 @@ def run(command: list[str], *, cwd: Path = ROOT, env: dict[str, str] | None = No
 def validate_version(version: str) -> None:
     match = SEMVER_PRERELEASE.fullmatch(version)
     if not match or any(identifier.isdigit() and len(identifier) > 1 and identifier.startswith("0")
-                        for identifier in match.group(4).split(".")):
-        raise BuildError("Candidate version must be an explicit SemVer prerelease, such as 0.1.0-alpha.1.")
+                        for identifier in match.group(4).split(".")) or "+" in version:
+        raise BuildError("Candidate version must be an explicit SemVer prerelease with an OCI-compatible tag, such as 0.1.0-alpha.1.")
 
 
 def required_sdk_version(global_json: Path = ROOT / "global.json") -> tuple[int, int, int]:
@@ -370,7 +371,7 @@ def prepare(args: argparse.Namespace) -> Path:
         shutil.copy2(ROOT / "deploy/.env.example", stage / ".env.example")
         verify_source_unchanged(revision, source_at_start, args.allow_dirty)
         metadata_file = Path(temp) / "build-metadata.json"
-        image = f"ghcr.io/shutterspool/shutterspool:{args.version}"
+        image = f"{IMAGE_REPOSITORY}:{args.version}"
         run([args.docker, "buildx", "build", "--platform", "linux/amd64", "--provenance=true", "--sbom=true",
              "--output", f"type=oci,dest={stage / 'server-image.oci.tar'}", "--metadata-file", str(metadata_file),
              "--build-arg", f"SDK_VERSION={sdk_image_version}", "--build-arg", f"VERSION={args.version}",

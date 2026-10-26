@@ -148,6 +148,7 @@ jobs:
       - name: Verify current authorized objects and hashes
         id: verify
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GHCR_PACKAGE: ghcr.io/sewieland/shutterspool-candidates
           IMAGE_TAG: ${{ steps.probe.outputs.image_tag }}
           IMAGE_DIGEST: ${{ steps.probe.outputs.image_digest }}
@@ -158,6 +159,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test "$(gh api /user/packages/container/shutterspool-candidates --jq .visibility)" = private
           # Resolve the old tag first, then fetch by the proven digest below.
           bundle_digest="$(oras resolve "$GHCR_PACKAGE:$BUNDLE_TAG")"
           [[ "$bundle_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
