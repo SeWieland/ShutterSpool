@@ -37,11 +37,15 @@ Update instructions where behavior or commands change, and check Markdown links 
 
 Keep one coherent change per branch and use semantic commit messages, such as `fix: preserve delivery target after retry`.
 Describe the concrete behavior, checks performed and material limits in the pull request.
+Changes to `main` require a pull request, passing `verify` and `Dependency review` checks against the current base branch, and resolved review conversations.
+Force-pushing or deleting `main` is blocked. There is no required approval count while the project has one maintainer; this does not replace the review expectations below.
+Workflows from external contributors require maintainer approval before running. Keep actions pinned to full commit SHAs and request only the token permissions each job needs.
 Substantive changes need review of behavior, code quality and documentation; visible changes also need desktop/phone and keyboard inspection.
 Use synthetic photographs and controlled endpoints in review evidence.
 Do not publish packages, deploy, modify production data or contact external recipients as part of an ordinary contribution.
 
 The [release conventions](docs/release-policy.md) describe shared versions, artifact identity, compatibility and published notes.
+Report vulnerabilities using the [security policy](SECURITY.md), rather than a public issue.
 
 ## Contribution rights
 

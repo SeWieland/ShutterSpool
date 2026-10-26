@@ -5,6 +5,10 @@ Fast substitutes are useful for workflows, but they cannot establish a filesyste
 
 ## CI frequency
 
+Pull requests targeting `main` also run `Dependency review`, which rejects newly introduced dependencies with known high or critical vulnerabilities, including development dependencies.
+Dependabot checks GitHub Actions, npm and NuGet weekly and proposes security updates; updates still require the normal checks and maintainer review.
+GitHub-managed CodeQL scans Actions, C#, JavaScript/TypeScript and Python on supported pushes and pull requests and on its scheduled runs. Static analysis complements the checks below; it does not qualify camera or recovery behavior.
+
 Pushes to `main` and pull requests targeting `main` run the .NET suites with PostgreSQL, frontend type/test/build checks, migration and generated-client consistency checks, camera-client security, edge certificate validation and lightweight release-builder tests.
 The release-builder tests use temporary fixtures and do not build or upload candidate bundles.
 Full image/Compose candidate builds are manual through the [Candidate artifacts workflow](../.github/workflows/candidate.yml), with an explicit prerelease version and exact commit SHA.
