@@ -74,6 +74,18 @@ class RegistryIsolationTests(unittest.TestCase):
         self.assertEqual("unavailable", registry_isolation.login_control_result(1, "denied: requested access to the resource is denied"))
         self.assertEqual("error", registry_isolation.login_control_result(1, "connection timed out"))
 
+    def test_denial_command_distinguishes_success_from_failure_without_echoing_payload(self):
+        for status, expected in ((0, "read succeeded"), (1, "exit code 1")):
+            with self.subTest(status=status):
+                run = subprocess.run(
+                    [sys.executable, str(MODULE_PATH), "verify-denial", "--", sys.executable, "-c",
+                     f"import sys; print('private-payload'); sys.exit({status})"],
+                    text=True, capture_output=True, check=False,
+                )
+                self.assertEqual(1, run.returncode)
+                self.assertIn(expected, run.stderr)
+                self.assertNotIn("private-payload", run.stdout + run.stderr)
+
     def test_token_login_command_reports_unavailable_without_echoing_registry_output(self):
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "github-output"
