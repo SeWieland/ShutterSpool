@@ -26,3 +26,8 @@ The web favicon uses the blue outline on the supplied deep navy, and the SPA cop
 The obsolete cyan raster outline and contact sheet have been removed; the native SVGs are the current outline sources.
 
 These are source assets. This repository has no native mobile or desktop application project; the platform variants are artwork resources, not app availability claims.
+
+## Origin and license
+
+The shutter master artwork and its icon variants were created for ShutterSpool, including AI-generated artwork, without third-party artwork.
+They are provided under the project's [MIT License](../../LICENSE). Their use does not imply endorsement by the project.
