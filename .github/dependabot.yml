@@ -8,3 +8,27 @@ updates:
     groups:
       github-actions:
         patterns: ['*']
+  - package-ecosystem: npm
+    directory: /src/ShutterSpool.Web
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      npm-compatible:
+        patterns: ['*']
+        update-types: [minor, patch]
+      npm-security:
+        applies-to: security-updates
+        patterns: ['*']
+  - package-ecosystem: nuget
+    directories: ['/', '/src/*', '/tests/*']
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      nuget-compatible:
+        patterns: ['*']
+        update-types: [minor, patch]
+      nuget-security:
+        applies-to: security-updates
+        patterns: ['*']
