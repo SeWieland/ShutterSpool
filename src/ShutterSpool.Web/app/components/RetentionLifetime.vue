@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { retentionTiming, type RetentionEvidence } from '../lib/retention';
-const props = defineProps<{ evidence?: RetentionEvidence | null; now: number; details?: boolean; stale?: boolean }>();
-const timing = computed(() => retentionTiming(props.evidence, props.now, props.details ?? false, props.stale));
+import { injectWorkspaceClock } from '../composables/useWorkspaceClock';
+const props = defineProps<{ evidence?: RetentionEvidence | null; details?: boolean; stale?: boolean }>();
+const now = injectWorkspaceClock();
+const timing = computed(() => retentionTiming(props.evidence, now.value, props.details ?? false, props.stale));
 </script>
 
 <template>

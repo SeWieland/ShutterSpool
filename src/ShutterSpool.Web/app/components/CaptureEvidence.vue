@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { api, handleFailure } from '../lib/api';
+import { api, cancellable, handleFailure } from '../lib/api';
 import { accessGeneration, onAccessLost } from '../lib/session';
 import { deliveryPresentation, formatFileSize } from '../lib/workspace-interactions';
 import type { CaptureDetailResponse, RoutingDecisionResponse, RoutingDeliveryResponse, RoutingDecisionPageResponse, RoutingDeliveryPageResponse, RoutingActionPageResponse } from '../api/models';
@@ -7,6 +7,7 @@ const props = defineProps<{
     capture: CaptureDetailResponse;
     generation: number;
     online?: boolean;
+    active?: boolean;
     readOnly?: boolean;
     focusState?: string;
     deliveryOnly?: boolean;
@@ -16,36 +17,48 @@ const evidence = ref<HTMLElement>();
 const decisions = ref<RoutingDecisionPageResponse>();
 const deliveries = ref<RoutingDeliveryPageResponse>();
 const actions = ref<RoutingActionPageResponse>();
+const deliveryReadSequence = ref(0);
 const error = ref('');
 let sequence = 0;
 let owner = props.capture.id;
+let controller: AbortController | undefined;
+let consumedFocus = '';
+let disposed = false;
 function clearEvidence() {
     sequence++;
+    controller?.abort(); controller = undefined;
     decisions.value = undefined;
     deliveries.value = undefined;
     actions.value = undefined;
     error.value = '';
 }
 async function read(kind?: 'decisions' | 'deliveries' | 'actions') {
-    if (!props.capture.id)
+    if (!props.capture.id || !props.active)
         return;
+    controller?.abort();
+    controller = new AbortController();
     const captureId = props.capture.id;
     const request = ++sequence;
     const access = accessGeneration();
+    const signal = controller.signal;
     const isCurrent = () => request === sequence && captureId === props.capture.id && access === accessGeneration();
     const endpoint = api.management.captures.byId(String(captureId));
     try {
         if (!kind) {
-            const pages = await Promise.all([endpoint.routing.get({ queryParameters: { limit: 30 } }), endpoint.deliveries.get({ queryParameters: { limit: 30 } }), props.deliveryOnly ? undefined : endpoint.actions.get({ queryParameters: { limit: 30 } })]);
-            if (isCurrent())
+            const options = { options: [cancellable(signal)] };
+            const pages = await Promise.all([endpoint.routing.get({ queryParameters: { limit: 30 }, ...options }), endpoint.deliveries.get({ queryParameters: { limit: 30 }, ...options }), props.deliveryOnly ? undefined : endpoint.actions.get({ queryParameters: { limit: 30 }, ...options })]);
+            if (isCurrent()) {
                 [decisions.value, deliveries.value, actions.value] = pages;
+                if (pages[1]) deliveryReadSequence.value++;
+            }
         }
         else {
             const cursor = kind === 'decisions' ? decisions.value?.nextCursor : kind === 'deliveries' ? deliveries.value?.nextCursor : actions.value?.nextCursor;
-            const config = { queryParameters: { limit: 30, cursor: cursor ?? undefined } };
+            const config = { queryParameters: { limit: 30, cursor: cursor ?? undefined }, options: [cancellable(signal)] };
             const page = kind === 'decisions' ? await endpoint.routing.get(config) : kind === 'deliveries' ? await endpoint.deliveries.get(config) : await endpoint.actions.get(config);
             if (!isCurrent())
                 return;
+            if (kind === 'deliveries' && page) deliveryReadSequence.value++;
             if (kind === 'decisions')
                 decisions.value = page as RoutingDecisionPageResponse;
             else if (kind === 'deliveries')
@@ -57,9 +70,10 @@ async function read(kind?: 'decisions' | 'deliveries' | 'actions') {
             error.value = '';
     }
     catch (failure) {
-        handleFailure(failure);
-        if (isCurrent())
+        if (!signal.aborted && isCurrent()) {
+            handleFailure(failure);
             error.value = 'Unable to read delivery evidence. Refresh to retry.';
+        }
     }
 }
 const stopOnAccessLost = onAccessLost(clearEvidence);
@@ -92,29 +106,39 @@ const destinationGroups = computed(() => {
     return [...groups.values()].sort((a, b) => Number(b.decisions.length > 0 || b.work.some(work => deliveryPresentation(work.state).tone === 'attention')) - Number(a.decisions.length > 0 || a.work.some(work => deliveryPresentation(work.state).tone === 'attention')));
 });
 function variant(assetId?: string | null) { return props.capture.assets?.find(asset => asset.id === assetId)?.variant ?? 'Photo'; }
-watch(() => [deliveries.value, props.focusState], async () => {
-    if (!props.focusState || !deliveries.value) return;
+watch(() => [deliveries.value, props.focusState, props.active], async () => {
+    if (!props.active || !props.focusState || !deliveries.value || consumedFocus === props.focusState) return;
+    const captureId = props.capture.id;
+    const focusToken = props.focusState;
+    const request = sequence;
+    const access = accessGeneration();
+    const observedDeliveries = deliveries.value;
     await nextTick();
+    if (disposed || !props.active || request !== sequence || captureId !== props.capture.id || focusToken !== props.focusState || access !== accessGeneration()) return;
+    consumedFocus = focusToken;
+    if (deliveries.value !== observedDeliveries) return;
     const entries = [...(evidence.value?.querySelectorAll<HTMLElement>('[data-work-state]') ?? [])];
-    const work = entries.find(entry => props.focusState === 'Attention'
+    const work = entries.find(entry => focusToken === 'Attention'
         ? ['RetryWait', 'Failed', 'Ambiguous', 'Disabled'].includes(entry.dataset.workState ?? '')
-        : entry.dataset.workState === props.focusState) ?? entries[0];
+        : entry.dataset.workState === focusToken) ?? entries[0];
     const section = work?.closest<HTMLDetailsElement>('.routing-evidence');
     if (section) section.open = true;
     const asset = work?.closest<HTMLDetailsElement>('.delivery-asset');
     if (asset) asset.open = true;
-    work?.focus();
-    work?.scrollIntoView({ block: 'nearest' });
+    if (work) { work.focus(); work.scrollIntoView({ block: 'nearest' }); }
 });
 watch(() => props.capture.id, captureId => {
     if (captureId !== owner) {
         owner = captureId;
+        consumedFocus = '';
         clearEvidence();
     }
-    void read();
+    if (props.active) void read();
 }, { immediate: true });
-watch(() => props.generation, () => void read());
-onUnmounted(() => { sequence++; stopOnAccessLost(); });
+watch(() => props.active, active => { if (active) void read(); else { sequence++; controller?.abort(); controller = undefined; } });
+watch(() => props.generation, () => { if (props.active) void read(); });
+watch(() => props.focusState, (value, old) => { if (value !== old) consumedFocus = ''; });
+onUnmounted(() => { disposed = true; sequence++; controller?.abort(); stopOnAccessLost(); });
 </script>
 
 <template>
@@ -140,8 +164,8 @@ onUnmounted(() => { sequence++; stopOnAccessLost(); });
                     <ReevaluateAction v-if="canReevaluateDecision(decision)" :asset-id="decision.assetId" :destination-id="decision.destinationId" :online="online" @refresh="refreshWork" />
                     <details class="section-disclosure"><summary><UIcon name="i-lucide-chevron-right" class="disclosure-chevron" aria-hidden="true" />Details</summary><p>{{ decision.explanation }}</p><p class="muted">Recorded Collection: {{ decision.collectionPath ?? 'Legacy decision - Collection not recorded' }}</p><p v-if="decision.ruleName" class="muted">Rule: {{ decision.ruleName }}</p><p v-if="decision.targetPath" class="delivery-path">{{ decision.targetPath }}</p></details>
                 </article>
-                <DeliveryWork v-for="work in target.work" :key="String(work.id)" :work="work" :variant="variant(work.assetId)" :online="online" :read-only="readOnly || !capture.curation?.releasedAt" delivery-only tabindex="-1" :data-work-state="work.state" @refresh="refreshWork" />
-                <details v-if="target.history.length" class="section-disclosure delivery-history"><summary><UIcon name="i-lucide-chevron-right" class="disclosure-chevron" aria-hidden="true" />Earlier work · {{ target.history.length }}</summary><DeliveryWork v-for="work in target.history" :key="String(work.id)" :work="work" :variant="variant(work.assetId)" :online="online" read-only delivery-only /></details>
+                <DeliveryWork v-for="work in target.work" :key="String(work.id)" :work="work" :variant="variant(work.assetId)" :online="online" :read-only="readOnly || !capture.curation?.releasedAt" :recovery-sequence="deliveryReadSequence" delivery-only tabindex="-1" :data-work-state="work.state" @refresh="refreshWork" />
+                <details v-if="target.history.length" class="section-disclosure delivery-history"><summary><UIcon name="i-lucide-chevron-right" class="disclosure-chevron" aria-hidden="true" />Earlier work · {{ target.history.length }}</summary><DeliveryWork v-for="work in target.history" :key="String(work.id)" :work="work" :variant="variant(work.assetId)" :online="online" read-only :recovery-sequence="deliveryReadSequence" delivery-only /></details>
             </section>
             <p v-if="deliveries && !destinationGroups.length" class="muted">No delivery is recorded on this page.</p>
         </template>
@@ -200,6 +224,7 @@ onUnmounted(() => { sequence++; stopOnAccessLost(); });
             :work="work"
             :online="online"
             :read-only="readOnly || !capture.curation?.releasedAt"
+            :recovery-sequence="deliveryReadSequence"
             tabindex="-1"
             :data-work-state="work.state"
             @refresh="refreshWork"

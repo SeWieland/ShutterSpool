@@ -8,7 +8,12 @@ import {
     restoring,
 } from "./lib/session";
 const route = useRoute();
+const workspace = ref<{ requestDeparture: () => boolean } | null>(null);
 const signInVisible = ref(true);
+function leaveSession() {
+    if (workspace.value?.requestDeparture() === false) return;
+    void signOut();
+}
 function updateSignInVisibility() { signInVisible.value = !document.hidden; }
 onMounted(() => {
     updateSignInVisibility();
@@ -36,15 +41,22 @@ onUnmounted(() => document.removeEventListener('visibilitychange', updateSignInV
                     title="Sign out"
                     color="neutral"
                     variant="ghost"
-                    @click="signOut"
+                    @click="leaveSession"
                     ><UIcon class="signout-icon" name="i-lucide-log-out" /><span class="signout-label">Sign out</span></UButton
                 ></div>
             </header>
             <NuxtPage v-if="route.path.startsWith('/auth/')" />
-            <OperationalWorkspace
-                v-else-if="session"
-                :capture-id="route.params.id ? String(route.params.id) : undefined"
-            />
+            <Suspense v-else-if="session">
+                <LazyOperationalWorkspace
+                    ref="workspace"
+                    :capture-id="route.params.id ? String(route.params.id) : undefined"
+                />
+                <template #fallback>
+                    <main class="empty" aria-busy="true" role="status">
+                        <h1>Opening your workspace…</h1>
+                    </main>
+                </template>
+            </Suspense>
             <main v-else-if="restoring" class="empty" aria-busy="true" role="status">
                 <h1>Restoring your session…</h1>
                 <p>Checking your sign-in. Your photographs will open when you are ready.</p>

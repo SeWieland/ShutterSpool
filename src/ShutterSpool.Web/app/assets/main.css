@@ -5,8 +5,9 @@
 }
 :root {
     color-scheme: dark;
-    --page: #17191c;
-    --surface: #22252a;
+    --page: #111315;
+    --surface: #1b1e22;
+    --raised: #252930;
     --border: #3c424a;
     --muted: #b4beca;
     --accent: #6d92ff;
@@ -16,14 +17,28 @@
     --notice-text: #d9e7ff;
     --preview: #111315;
     --text: #f0f3f7;
+    --green: #74dab0;
+    --red: #ffa5a5;
+    --yellow: #f0c969;
+    --favorite: #f3a6a0;
     --radius: 10px;
     --motion: 180ms cubic-bezier(0.16, 1, 0.3, 1);
     --ui-primary: var(--brand-blue);
-    --ui-text-inverted: #111315;
-    --ui-bg: #17191c;
-    --ui-bg-elevated: #22252a;
-    --ui-text: #f0f3f7;
-    --ui-text-muted: #b4beca;
+    --ui-text-inverted: var(--page);
+    --ui-bg: var(--page);
+    --ui-bg-muted: var(--surface);
+    --ui-bg-elevated: var(--raised);
+    --ui-bg-accented: var(--raised);
+    --ui-bg-inverted: var(--text);
+    --ui-text: var(--text);
+    --ui-text-highlighted: var(--text);
+    --ui-text-muted: var(--muted);
+    --ui-text-toned: var(--muted);
+    --ui-text-dimmed: var(--muted);
+    --ui-border: var(--border);
+    --ui-border-muted: var(--border);
+    --ui-border-accented: var(--accent);
+    --ui-border-inverted: var(--page);
 }
 * {
     box-sizing: border-box;
@@ -67,13 +82,10 @@ select {
     outline-offset: 3px;
 }
 .app-header {
-    min-height: 88px;
     border-bottom: 1px solid var(--border);
-    padding: 16px max(24px, calc((100vw - 1440px) / 2));
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 16px;
 }
 .brand {
     display: flex;
@@ -87,20 +99,6 @@ select {
     max-width: 1440px;
     margin: auto;
     padding: 32px 24px 64px;
-}
-.page-heading {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 24px;
-    margin-bottom: 20px;
-}
-.page-heading > div {
-    min-width: 0;
-    flex: 1;
-}
-.page-heading > button {
-    flex-shrink: 0;
 }
 h1 {
     font-size: 2rem;
@@ -122,7 +120,6 @@ h4 {
 p {
     line-height: 1.5;
 }
-.page-heading p,
 .connection,
 small,
 .variants {
@@ -136,22 +133,6 @@ small,
     color: var(--accent);
     display: inline-block;
     margin-bottom: 12px;
-}
-.capture-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
-    gap: 8px;
-}
-.capture-tile {
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    overflow: hidden;
-    text-decoration: none;
-    background: var(--surface);
-    transition: border-color var(--motion), background-color var(--motion);
-}
-.capture-tile:hover {
-    border-color: var(--accent);
 }
 .tile-copy {
     padding: 8px 10px 10px;
@@ -434,14 +415,8 @@ dd {
     .workspace {
         padding: 24px 16px 48px;
     }
-    .app-header {
-        padding: 16px;
-    }
     .curation-panel {
         padding: 20px;
-    }
-    .capture-grid {
-        grid-template-columns: repeat(auto-fill, minmax(min(100%, 140px), 1fr));
     }
 }
 @media (max-width: 420px) {
@@ -460,13 +435,13 @@ dd {
 
 ::selection { color: var(--page); background: var(--accent); }
 input, textarea { caret-color: var(--accent); }
-a:where(:not(.brand, .capture-tile)) {
+a:where(:not(.brand)) {
     color: var(--accent);
     text-decoration: underline;
     text-decoration-thickness: 1px;
     text-underline-offset: 4px;
 }
-a:where(:not(.brand, .capture-tile)):hover { text-decoration-thickness: 2px; }
+a:where(:not(.brand)):hover { text-decoration-thickness: 2px; }
 .brand img { flex-shrink: 0; }
 .inbox-toolbar {
     display: flex;
@@ -495,7 +470,6 @@ a:where(:not(.brand, .capture-tile)):hover { text-decoration-thickness: 2px; }
 @keyframes preview-arrival { from { opacity: .65; } to { opacity: 1; } }
 @media (max-width: 420px) {
     .signin { padding: 24px; }
-    .brand { font-size: 18px; gap: 8px; }
-    .brand img { width: 48px; height: 48px; }
+    .brand { gap: 8px; }
     .inbox-toolbar { align-items: flex-start; flex-direction: column; gap: 8px; }
 }

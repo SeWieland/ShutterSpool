@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { formatFileSize } from '../lib/workspace-interactions';
 import { retentionTiming, retentionLabel, type RetentionEvidence } from '../lib/retention';
-const props = defineProps<{ evidence?: RetentionEvidence | null; now: number; stale?: boolean; expanded?: boolean }>();
-const timing = computed(() => retentionTiming(props.evidence, props.now, true, props.stale));
+import { injectWorkspaceClock } from '../composables/useWorkspaceClock';
+const props = defineProps<{ evidence?: RetentionEvidence | null; stale?: boolean; expanded?: boolean }>();
+const now = injectWorkspaceClock();
+const timing = computed(() => retentionTiming(props.evidence, now.value, true, props.stale));
 </script>
 
 <template>

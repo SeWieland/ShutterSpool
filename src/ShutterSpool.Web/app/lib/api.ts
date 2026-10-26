@@ -58,7 +58,7 @@ export async function readSourceAuthenticationObservations(sourceIds: string[], 
     if (!sourceIds.length || sourceIds.length > 100)
         throw new RangeError("Source authentication reads are limited to 100 identities.");
     signal.throwIfAborted();
-    const result = await api.management.sources.authenticationObservations.get({ queryParameters: { sourceIds } });
+    const result = await api.management.sources.authenticationObservations.get({ queryParameters: { sourceIds }, options: [cancellable(signal)] });
     signal.throwIfAborted();
     if (!result) throw new Error('Source authentication history is unavailable.');
     const items: SourceAuthenticationObservation[] = (result.items ?? []).map(item => {
@@ -74,7 +74,7 @@ export async function readSourceActivity(sourceIds: string[], signal: AbortSigna
     if (!sourceIds.length || sourceIds.length > 100) throw new RangeError('Activity reads are limited to 100 Sources.');
     if (transferIds && (!transferIds.length || transferIds.length > 100)) throw new RangeError('Activity reads are limited to 100 transfers.');
     signal.throwIfAborted();
-    const result = await api.management.activity.transfers.get({ queryParameters: { sourceIds: transferIds ? undefined : sourceIds, transferIds, limit: 100 } });
+    const result = await api.management.activity.transfers.get({ queryParameters: { sourceIds: transferIds ? undefined : sourceIds, transferIds, limit: 100 }, options: [cancellable(signal)] });
     signal.throwIfAborted();
     if (!result?.epoch) throw new Error('Source activity is unavailable.');
     const items: SourceActivity[] = (result.items ?? []).map(item => {

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-25T11:23:21Z",
+  "generatedAt": "2026-10-26T01:52:34.498Z",
   "title": "Design System: ShutterSpool",
   "extensions": {
     "colorMeta": {
@@ -249,7 +249,7 @@
       "kind": "nav",
       "description": "Desktop workspace destinations use square underlines and an explicit current-page state.",
       "html": "<nav class=\"ds-nav\" aria-label=\"Workspace\"><button type=\"button\">Sources</button><button type=\"button\" aria-current=\"page\">Curation</button><button type=\"button\">Gallery</button><button type=\"button\">Delivery</button></nav>",
-      "css": ".ds-nav{display:flex;flex-wrap:wrap;gap:12px;min-height:80px;background:#101316;font-family:Manrope,ui-sans-serif,system-ui,sans-serif;}.ds-nav button{min-width:44px;min-height:44px;padding:0 18px;border:0;border-radius:0;border-bottom:3px solid transparent;background:transparent;color:var(--text,#f0f3f7);font:inherit;cursor:pointer;}.ds-nav button[aria-current=page]{color:var(--accent,#6d92ff);border-bottom-color:var(--accent,#6d92ff);}.ds-nav button:focus-visible{outline:3px solid var(--accent,#6d92ff);outline-offset:3px;}"
+      "css": ".ds-nav{display:flex;flex-wrap:wrap;gap:12px;min-height:80px;background:#101316;font-family:Manrope,ui-sans-serif,system-ui,sans-serif;}.ds-nav button{min-width:44px;min-height:44px;padding:0 18px;border:0;border-radius:0;border-bottom:3px solid transparent;background:transparent;color:var(--text,#f0f3f7);font:inherit;cursor:pointer;}.ds-nav button[aria-current=page]{color:var(--accent,#6d92ff);border-bottom-color:var(--accent,#6d92ff);}.ds-nav button:focus-visible{outline:3px solid var(--accent,#6d92ff);outline-offset:3px;}@media(max-width:760px){.ds-nav{min-height:68px;}}"
     },
     {
       "name": "Removable tag",
@@ -278,7 +278,10 @@
     "overview": "Use a neutral dark photo workspace in Impeccable's Operate mode.\nSources, Curation, Gallery and Delivery form the implemented workspace. Curation autosaves shared Capture\nmetadata; Gallery supports viewing and explicit loaded-photo selection; Delivery exposes rules and per-Asset evidence.\nKeep accepted ingest, preview availability, release and confirmed delivery separately readable.\nThe supplied full-color shutter artwork anchors the header and sign-in; reusable controls use Nuxt UI with native inputs where sufficient.\nThe initial slice is dark only, including on an operating system that prefers light.\n",
     "keyCharacteristics": [],
     "rules": [
-      "Gallery and Curation fullscreen controls hide after three idle seconds without animation. Pointer movement, touch or keyboard interaction reveals them; keyboard focus and actionable recovery feedback keep them visible. The first touch wakes hidden controls without activating an action."
+      "Gallery and Curation fullscreen controls hide after three idle seconds without animation. Pointer movement, touch or keyboard interaction reveals them; keyboard focus and actionable recovery feedback keep them visible. The first touch wakes hidden controls without activating an action.",
+      "Semantic CSS tokens have one owner in main.css; workspace and Nuxt UI surfaces, text and borders consume the same palette.",
+      "The workspace header is 80px on desktop and 68px at widths of 760px or less.",
+      "Rating filters show visible numbers beside the 1–5 star icons while retaining exact selection and inclusive drag/Shift ranges."
     ],
     "dos": [
       "Preserve focus, scroll and drafts during reconciliation.",

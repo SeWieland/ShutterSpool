@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { durationHours, originalRemovalScope, retentionTiming } from '../lib/retention';
-import { api, handleFailure } from '../lib/api';
+import { api, cancellable, handleFailure } from '../lib/api';
 import { accessGeneration, onAccessLost } from '../lib/session';
 const props = defineProps<{ online: boolean; generation: number; gridMaximumDimension?: number }>();
 const emit = defineEmits<{ refresh: []; erased: [id: string]; storageSettings: [] }>();
@@ -18,23 +18,27 @@ const restoreHours = ref<number>();
 let clock: ReturnType<typeof setInterval> | undefined;
 let sequence = 0;
 let disposed = false;
+let loadController: AbortController | undefined;
+function cancelLoad() { loadController?.abort(); loadController = undefined; }
 async function load(next = false) {
-    const request = ++sequence, access = accessGeneration();
+    cancelLoad();
+    const request = ++sequence, access = accessGeneration(), controller = new AbortController();
+    loadController = controller;
     busy.value = true;
     try {
-        const [pageRead, policyRead] = await Promise.allSettled([api.management.trash.get({ queryParameters: { pageSize: 30, cursor: next ? cursor.value ?? undefined : undefined } }), api.management.retention.settings.get()]);
+        const options = { options: [cancellable(controller.signal)] };
+        const [pageRead, policyRead] = await Promise.allSettled([api.management.trash.get({ queryParameters: { pageSize: 30, cursor: next ? cursor.value ?? undefined : undefined }, ...options }), api.management.retention.settings.get(options)]);
         if (pageRead.status === 'rejected') throw pageRead.reason;
         const page = pageRead.value;
+        if (disposed || controller.signal.aborted || access !== accessGeneration() || request !== sequence) return;
         if (policyRead.status === 'fulfilled') restoreHours.value = durationHours(policyRead.value?.settings?.restoreProtection);
         else { handleFailure(policyRead.reason); restoreHours.value = undefined; }
-        if (disposed || access !== accessGeneration() || request !== sequence) return;
         if (!page) throw new Error('Trash unavailable');
         items.value = next ? [...items.value, ...(page.items ?? [])] : page.items ?? [];
         cursor.value = page.nextCursor; loaded.value = true; stale.value = false;
     } catch (failure) {
-        handleFailure(failure);
-        if (access === accessGeneration() && request === sequence) { stale.value = true; feedback.value = 'Trash could not be loaded. The last checked photographs are still shown. Refresh to try again.'; }
-    } finally { if (request === sequence) busy.value = false; }
+        if (!controller.signal.aborted && !disposed && access === accessGeneration() && request === sequence) { handleFailure(failure); stale.value = true; feedback.value = 'Trash could not be loaded. The last checked photographs are still shown. Refresh to try again.'; }
+    } finally { if (loadController === controller) loadController = undefined; if (!disposed && access === accessGeneration() && request === sequence) busy.value = false; }
 }
 async function act(item: TrashItem, permanent: boolean) {
     if (busy.value || !props.online || stale.value || !item.captureId || item.captureRevision == null) return;
@@ -49,9 +53,8 @@ async function act(item: TrashItem, permanent: boolean) {
         const result = permanent ? await target.purge.post({ expectedRevision: item.captureRevision, confirm: true }) : await target.restore.post({ expectedRevision: item.captureRevision });
         if (access === accessGeneration() && !disposed) { feedback.value = permanent ? 'Deletion requested. Check each original below to see whether removal has finished.' : `Photograph restored${result?.current?.protectedUntil ? ` · protected until ${result.current.protectedUntil.toLocaleString()}` : ''}. Delivery stays paused. Resume it separately when you are ready.`; await load(); emit('refresh'); }
     } catch (failure) {
-        const status = handleFailure(failure);
-        if (access === accessGeneration() && !disposed) { feedback.value = status === 409 ? 'This photograph changed or has protection in place. Review the refreshed details before trying again.' : 'We could not check whether the change saved. Review the refreshed details before trying again.'; await load(); }
-    } finally { busy.value = false; }
+        if (access === accessGeneration() && !disposed) { const status = handleFailure(failure); feedback.value = status === 409 ? 'This photograph changed or has protection in place. Review the refreshed details before trying again.' : 'We could not check whether the change saved. Review the refreshed details before trying again.'; await load(); }
+    } finally { if (!disposed && access === accessGeneration()) busy.value = false; }
 }
 async function emptyLoaded() {
     if (busy.value || stale.value || !props.online) return;
@@ -68,20 +71,22 @@ async function emptyLoaded() {
                 if (!item.captureId || item.captureRevision == null) throw new Error('Revision unavailable');
                 await api.management.trash.byId(String(item.captureId)).purge.post({ expectedRevision: item.captureRevision, confirm: true });
             } catch (failure) {
+                if (disposed || access !== accessGeneration()) return;
                 const status = handleFailure(failure);
                 outcomes.push(`${item.displayName ?? 'Photograph'}: ${status === 409 ? 'changed or protected' : 'change not confirmed'}`);
+                break;
             }
         }
         if (access === accessGeneration() && !disposed) {
             feedback.value = outcomes.join(' · ') || `Deletion requested for ${scope.length} loaded photographs. Check each original to see whether removal has finished.`;
             await load(); emit('refresh');
         }
-    } finally { busy.value = false; }
+    } finally { if (!disposed && access === accessGeneration()) busy.value = false; }
 }
 onMounted(() => { void load(); clock = setInterval(() => { if (!document.hidden) now.value = Date.now(); }, 1000); });
-watch(() => props.generation, () => { if (!busy.value) void load(); });
-onUnmounted(() => { disposed = true; sequence++; clearInterval(clock); });
-onAccessLost(() => { sequence++; items.value = []; cursor.value = null; feedback.value = ''; });
+watch(() => props.generation, () => { if (loadController || !busy.value) void load(); });
+const stopOnAccessLost = onAccessLost(() => { sequence++; cancelLoad(); busy.value = false; items.value = []; cursor.value = null; feedback.value = ''; });
+onUnmounted(() => { disposed = true; sequence++; cancelLoad(); clearInterval(clock); stopOnAccessLost(); });
 </script>
 
 <template>

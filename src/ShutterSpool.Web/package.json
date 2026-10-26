@@ -5,10 +5,11 @@
     "node": "26.8.1"
   },
   "scripts": {
-    "build": "nuxt generate && node scripts/copy-static.mjs",
+    "build": "nuxt generate && node scripts/check-bundle.mjs && node scripts/copy-static.mjs",
+    "check:bundle": "node scripts/check-bundle.mjs",
     "dev": "nuxt dev",
     "typecheck": "nuxt typecheck",
-    "test": "node --test scripts/fullscreen-chrome.test.mjs scripts/gallery-slideshow.test.mjs scripts/storage-presentation.test.mjs scripts/workspace-preferences.test.mjs scripts/collections.test.mjs scripts/preview-queue.test.mjs scripts/authorized-preview.test.mjs scripts/session.test.mjs scripts/curation-session.test.mjs scripts/workspace-interactions.test.mjs scripts/workspace.test.mjs scripts/destination-workspace.test.mjs scripts/aperture-background.test.mjs scripts/reconcile.test.mjs scripts/source-activity.test.mjs scripts/retention.test.mjs",
+    "test": "node --test scripts/fullscreen-chrome.test.mjs scripts/gallery-slideshow.test.mjs scripts/storage-presentation.test.mjs scripts/workspace-preferences.test.mjs scripts/collections.test.mjs scripts/preview-queue.test.mjs scripts/authorized-preview.test.mjs scripts/session.test.mjs scripts/curation-session.test.mjs scripts/workspace-interactions.test.mjs scripts/workspace.test.mjs scripts/destination-workspace.test.mjs scripts/aperture-background.test.mjs scripts/reconcile.test.mjs scripts/source-activity.test.mjs scripts/retention.test.mjs scripts/editor-reliability.test.mjs scripts/gallery-grid.test.mjs scripts/workspace-preferences-composable.test.mjs scripts/viewer-session.test.mjs",
     "generate-client": "dotnet tool run kiota generate --language TypeScript --openapi ../ShutterSpool.Server/openapi/ShutterSpool_Server.json --output app/api --clean-output --class-name ShutterSpoolClient --namespace-name ShutterSpool.Api --structured-mime-types application/json --structured-mime-types text/plain --structured-mime-types application/x-www-form-urlencoded --structured-mime-types multipart/form-data --structured-mime-types image/webp --structured-mime-types image/svg+xml --structured-mime-types text/event-stream && node scripts/trim-generated.mjs"
   },
   "devDependencies": {

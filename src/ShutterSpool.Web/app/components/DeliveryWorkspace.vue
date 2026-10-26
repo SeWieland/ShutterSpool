@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { createUntypedString, createUntypedNumber, createUntypedNull } from '@microsoft/kiota-abstractions';
-import { api, handleFailure } from '../lib/api';
+import { api, cancellable, handleFailure } from '../lib/api';
 import { accessGeneration, session } from '../lib/session';
+import { createReadPool } from '../lib/read-pool';
 import type { DestinationResponse, DestinationRoutingResponse, RoutingDeliveryPageResponse, RoutingRuleDto } from '../api/models';
 const props = defineProps<{
     gridMaximumDimension?: number;
@@ -31,7 +32,7 @@ const incomplete = ref<string[]>(readIncomplete());
 const setupIncomplete = computed(() => incomplete.value.includes(selected.value));
 function markSetup(id: string, pending: boolean) {
     incomplete.value = pending ? [...new Set([...incomplete.value, id])] : incomplete.value.filter(value => value !== id);
-    if (typeof localStorage !== 'undefined') localStorage.setItem(setupStorageKey, JSON.stringify(incomplete.value));
+    try { localStorage.setItem(setupStorageKey, JSON.stringify(incomplete.value)); } catch { /* Keep setup state usable for this visit when browser storage is unavailable. */ }
 }
 const removalDialog = ref<HTMLDialogElement>();
 const removal = ref<{ id: string; name: string; revision: number | null | undefined }>();
@@ -44,6 +45,9 @@ async function removeDestination() {
     const target = removal.value;
     if (!target || busy.value || configConflict.value || !props.online) return;
     const access = accessGeneration();
+    const generation = editorGeneration;
+    const operationCurrent = () => access === accessGeneration() && generation === editorGeneration;
+    const current = () => access === accessGeneration() && generation === editorGeneration && selected.value === target.id;
     busy.value = true;
     password.value = '';
     try {
@@ -60,15 +64,15 @@ async function removeDestination() {
             dirtySettings.value = dirtyRules.value = false;
         }
         await list();
-        if (access !== accessGeneration()) return;
+        if (!operationCurrent() || selected.value) return;
         feedback.value = result?.outcome === 'archived' ? `${target.name} archived. Existing delivery history is preserved.` : result?.outcome === 'deleted' ? `${target.name} deleted.` : 'Removal outcome unavailable. Refresh destinations to confirm their state.';
     } catch (failure) {
+        if (!current()) return;
         const status = handleFailure(failure);
-        if (access !== accessGeneration()) return;
         removalDialog.value?.close();
         configConflict.value = status !== 400;
         feedback.value = status === 409 ? 'Destination settings changed. Reload saved settings before removing it.' : 'Removal outcome uncertain. Refresh destinations before retrying.';
-    } finally { busy.value = false; }
+    } finally { if (operationCurrent()) busy.value = false; }
 }
 const discardDialog = ref<HTMLDialogElement>();
 let discardAction: (() => void) | undefined;
@@ -94,6 +98,8 @@ type Rule = Omit<RoutingRuleDto, 'conditions'> & {
 const routing = ref<DestinationRoutingResponse>();
 const rules = ref<Rule[]>([]);
 const work = ref<RoutingDeliveryPageResponse>();
+const workRecoverySequence = ref(0);
+const metadataReads = createReadPool(4);
 const state = ref('');
 const summaries = ref<Record<string, RoutingDeliveryPageResponse>>({});
 const summaryUnavailable = ref<Record<string, boolean>>({});
@@ -141,9 +147,18 @@ const busy = ref(false);
 const feedback = ref('');
 const configConflict = ref(false);
 const dirtyRules = ref(false);
+const dirty = computed(() => dirtySettings.value || dirtyRules.value);
+const emit = defineEmits<{ 'dirty-change': [dirty: boolean] }>();
+watch(dirty, value => emit('dirty-change', value), { immediate: true });
 const ruleConflict = ref(false);
 let sequence = 0;
 let editorGeneration = 0;
+let listSequence = 0;
+let workSequence = 0;
+let disposed = false;
+let listController: AbortController | undefined;
+let editorController: AbortController | undefined;
+let workController: AbortController | undefined;
 const facts = ['collectionName', 'collectionPath', 'source', 'selection', 'variant', 'extension', 'mime', 'suppliedName', 'cameraMake', 'cameraModel', 'cameraSerial', 'rating', 'size', 'tags', 'label', 'captureTime'];
 const tokens = [...facts, 'year', 'month', 'day', 'monthName', 'weekdayName'];
 const ratingOptions = [-1,0,1,2,3,4,5].map(value => ({ value: String(value), label: value === -1 ? 'Rejected' : value === 0 ? 'Not rated' : `${value} stars` }));
@@ -176,46 +191,45 @@ function list(next = false): Promise<void> {
                 listPending = undefined;
                 await readList(page);
             }
-        } finally { listing = undefined; await nextTick(); if (!listing) suppressStreamMotion.value = false; }
+        } finally { listing = undefined; if (!disposed) { await nextTick(); if (!disposed && !listing) suppressStreamMotion.value = false; } }
     })();
 }
 async function readList(next: boolean) {
+    const request = ++listSequence;
     const access = accessGeneration();
+    listController?.abort();
+    const controller = listController = new AbortController();
     try {
-        const page = await api.management.destinations.get({ queryParameters: { limit: 30, cursor: next ? destinationCursor.value ?? undefined : undefined } });
-        if (access !== accessGeneration())
+        const page = await metadataReads.run(controller.signal, () => api.management.destinations.get({ queryParameters: { limit: 30, cursor: next ? destinationCursor.value ?? undefined : undefined }, options: [cancellable(controller.signal)] }));
+        if (disposed || controller.signal.aborted || request !== listSequence || access !== accessGeneration())
             return;
         destinations.value = page?.items ?? [];
         const visibleIds = new Set(destinations.value.map(item => String(item.id)));
         summaries.value = Object.fromEntries(Object.entries(summaries.value).filter(([id]) => visibleIds.has(id)));
         summaryUnavailable.value = Object.fromEntries(Object.entries(summaryUnavailable.value).filter(([id]) => visibleIds.has(id)));
         destinationCursor.value = page?.nextCursor ?? null;
-        for (const destination of destinations.value.slice(0, 6)) {
+        const summaryRows = destinations.value.slice(0, 6);
+        await Promise.all(summaryRows.map(async destination => {
             const id = String(destination.id);
-            let bounded;
             try {
-                bounded = await api.management.destinations.byId(id).work.get({ queryParameters: { limit: 30 } });
-                if (access !== accessGeneration()) return;
+                const bounded = await metadataReads.run(controller.signal, () => api.management.destinations.byId(id).work.get({ queryParameters: { limit: 30 }, options: [cancellable(controller.signal)] }));
+                if (disposed || controller.signal.aborted || request !== listSequence || access !== accessGeneration()) return;
                 summaryUnavailable.value[id] = !bounded;
+                if (bounded) summaries.value[id] = bounded;
+                void nextTick(() => measureStream(id));
             } catch (error) {
+                if (disposed || controller.signal.aborted || request !== listSequence || access !== accessGeneration()) return;
                 handleFailure(error);
-                if (access !== accessGeneration()) return;
                 summaryUnavailable.value[id] = true;
-                continue;
             }
-            if (access !== accessGeneration())
-                return;
-            if (bounded)
-                summaries.value[String(destination.id)] = bounded;
-            void nextTick(() => measureStream(String(destination.id)));
-        }
+        }));
+        if (disposed || controller.signal.aborted || request !== listSequence || access !== accessGeneration()) return;
     }
     catch (error) {
+        if (disposed || controller.signal.aborted || request !== listSequence || access !== accessGeneration()) return;
         handleFailure(error);
-        if (access === accessGeneration()) {
-            for (const id of Object.keys(summaries.value)) summaryUnavailable.value[id] = true;
-            feedback.value = 'Unable to read destinations. Refresh to retry.';
-        }
+        for (const id of Object.keys(summaries.value)) summaryUnavailable.value[id] = true;
+        feedback.value = 'Unable to read destinations. Refresh to retry.';
     }
 }
 async function open(id: string) {
@@ -225,6 +239,8 @@ async function open(id: string) {
     }
     editorGeneration++;
     sequence++;
+    busy.value = false;
+    editorController?.abort();
     authoritativeOwner.value = '';
     selectedConfiguration.value = undefined;
     routing.value = undefined;
@@ -248,19 +264,36 @@ async function open(id: string) {
 function assignRules(value: DestinationRoutingResponse) {
     rules.value = (value.rules ?? []).map(rule => ({ ...rule, conditions: (rule.conditions ?? []).map(condition => ({ fact: condition.fact ?? 'variant', operator: condition.operator ?? 'equals', value: String(condition.value?.getValue() ?? '') })) }));
 }
-async function read() {
+async function read(replaceDraft: 'settings' | 'rules' | 'all' | 'none' = 'none') {
     if (!selected.value)
         return;
     const request = ++sequence;
     const id = selected.value;
     const access = accessGeneration();
+    editorController?.abort();
+    const controller = editorController = new AbortController();
     try {
         const endpoint = api.management.destinations.byId(id);
-        const [config, route] = await Promise.all([endpoint.get(), endpoint.routing.get()]);
-        if (request !== sequence || access !== accessGeneration() || id !== selected.value)
+        const options = { options: [cancellable(controller.signal)] };
+        const [config, route] = await Promise.all([
+            metadataReads.run(controller.signal, () => endpoint.get(options)),
+            metadataReads.run(controller.signal, () => endpoint.routing.get(options)),
+        ]);
+        if (disposed || controller.signal.aborted || request !== sequence || access !== accessGeneration() || id !== selected.value)
             return;
         if (String(config?.id) !== id || String(route?.destinationId) !== id)
             throw new Error('Destination identity was not confirmed');
+        const replaceSettings = replaceDraft === 'settings' || replaceDraft === 'all';
+        const replaceRules = replaceDraft === 'rules' || replaceDraft === 'all';
+        if (replaceSettings) {
+            dirtySettings.value = false;
+            configConflict.value = false;
+            password.value = '';
+        }
+        if (replaceRules) {
+            dirtyRules.value = false;
+            ruleConflict.value = false;
+        }
         if (config) {
             selectedConfiguration.value = config;
             const index = destinations.value.findIndex(d => d.id === config.id);
@@ -270,22 +303,22 @@ async function read() {
                 destinations.value.push(config);
             if (dirtySettings.value && settingsRevision.value !== config.configurationRevision)
                 configConflict.value = true;
-            if (!dirtyName.value)
+            if (replaceSettings || !dirtyName.value)
                 name.value = config.name ?? '';
-            if (!dirtyProvider.value) {
+            if (replaceSettings || !dirtyProvider.value) {
                 kind.value = config.kind ?? 'local';
                 root.value = config.localRootPath ?? '';
                 url.value = config.webDavCollectionUrl ?? '';
                 username.value = config.webDavUsername ?? '';
             }
-            if (!dirtySettings.value) {
+            if (replaceSettings || !dirtySettings.value) {
                 settingsRevision.value = config.configurationRevision;
             }
         }
         if (route) {
             if (dirtyRules.value && route.configurationRevision !== routing.value?.configurationRevision)
                 ruleConflict.value = true;
-            else if (!dirtyRules.value)
+            else if (replaceRules || !dirtyRules.value)
                 assignRules(route);
             routing.value = route;
         }
@@ -295,27 +328,66 @@ async function read() {
         return true;
     }
     catch (error) {
+        if (disposed || controller.signal.aborted || request !== sequence || access !== accessGeneration() || id !== selected.value) return false;
         handleFailure(error);
-        if (access === accessGeneration())
-            feedback.value = 'Unable to refresh destination. Displayed state may be stale.';
+        feedback.value = 'Unable to refresh destination. Displayed state may be stale.';
         return false;
+    }
+}
+async function reloadSettings() {
+    if (busy.value || !props.online || !selected.value || authoritativeOwner.value !== selected.value) return false;
+    const id = selected.value;
+    const generation = editorGeneration;
+    busy.value = true;
+    try {
+        return await read('settings') === true && id === selected.value && generation === editorGeneration;
+    } finally {
+        if (id === selected.value && generation === editorGeneration) busy.value = false;
+    }
+}
+async function reloadRules() {
+    if (busy.value || !props.online || !selected.value || authoritativeOwner.value !== selected.value) return false;
+    const id = selected.value;
+    const generation = editorGeneration;
+    busy.value = true;
+    try {
+        return await read('rules') === true && id === selected.value && generation === editorGeneration;
+    } finally {
+        if (id === selected.value && generation === editorGeneration) busy.value = false;
+    }
+}
+async function replaceRulesWithDraft() {
+    if (busy.value || !props.online || !ruleConflict.value || !dirtyRules.value || !selected.value || authoritativeOwner.value !== selected.value) return false;
+    const id = selected.value;
+    const generation = editorGeneration;
+    busy.value = true;
+    try {
+        const refreshed = await read('none');
+        if (refreshed !== true || id !== selected.value || generation !== editorGeneration || authoritativeOwner.value !== id) return false;
+        ruleConflict.value = false;
+        return true;
+    } finally {
+        if (id === selected.value && generation === editorGeneration) busy.value = false;
     }
 }
 async function readWork(next = false) {
     if (!selected.value || authoritativeOwner.value !== selected.value)
         return;
     const access = accessGeneration();
+    const request = ++workSequence;
     const id = selected.value;
     const filter = state.value;
+    workController?.abort();
+    const controller = workController = new AbortController();
     try {
-        const page = await api.management.destinations.byId(id).work.get({ queryParameters: { state: filter || undefined, limit: 30, cursor: next ? work.value?.nextCursor ?? undefined : undefined } });
-        if (access === accessGeneration() && id === selected.value && filter === state.value)
-            work.value = page;
+        const page = await metadataReads.run(controller.signal, () => api.management.destinations.byId(id).work.get({ queryParameters: { state: filter || undefined, limit: 30, cursor: next ? work.value?.nextCursor ?? undefined : undefined }, options: [cancellable(controller.signal)] }));
+        if (!disposed && !controller.signal.aborted && request === workSequence && access === accessGeneration() && id === selected.value && filter === state.value)
+            { work.value = page; workRecoverySequence.value++; }
     }
     catch (error) {
+        if (disposed || controller.signal.aborted || request !== workSequence || id !== selected.value || filter !== state.value || access !== accessGeneration()) return;
         handleFailure(error);
-        if (access === accessGeneration())
-            feedback.value = 'Unable to read this destination work page. Refresh to retry.';
+        feedback.value = 'Unable to read this destination work page. Refresh to retry.';
     }
 }
 watch(state, () => readWork());
@@ -330,8 +402,15 @@ watch(() => props.generation, () => {
         void read();
 });
 onUnmounted(() => {
+    disposed = true;
     streamObservers.forEach(observer => observer.disconnect());
     sequence++;
+    editorGeneration++;
+    listSequence++;
+    workSequence++;
+    listController?.abort();
+    editorController?.abort();
+    workController?.abort();
     password.value = '';
     listPending = undefined;
     destinations.value = [];
@@ -389,18 +468,19 @@ async function saveRules() {
         feedback.value = 'Rules saved. First matching rule wins.';
     }
     catch (error) {
+        if (access !== accessGeneration() || generation !== editorGeneration || id !== selected.value) return;
         const status = handleFailure(error);
-        if (access !== accessGeneration() || generation !== editorGeneration || id !== selected.value)
-            return;
         ruleConflict.value = status !== 400;
         feedback.value = status === 400 ? 'Rules rejected. Check typed conditions and safe relative templates.' : 'Rule outcome requires review. Refresh server values before explicitly replacing rules.';
     }
     finally {
-        busy.value = false;
+        if (generation === editorGeneration && id === selected.value && access === accessGeneration()) busy.value = false;
     }
 }
 async function settings(action: 'create' | 'name' | 'provider' | 'toggle' | 'test') {
     if (busy.value || configConflict.value || !props.online || action !== 'create' && authoritativeOwner.value !== selected.value)
+        return;
+    if ((action === 'toggle' && (dirtyRules.value || ruleConflict.value)) || (setupIncomplete.value && ruleConflict.value && (action === 'provider' || action === 'test')))
         return;
     if (action === 'test' && localFolderNeedsSave.value) {
         feedback.value = 'Choose a destination folder, then use Save and test folder.';
@@ -409,6 +489,7 @@ async function settings(action: 'create' | 'name' | 'provider' | 'toggle' | 'tes
     const access = accessGeneration();
     const id = selected.value;
     const generation = editorGeneration;
+    let ownsEditor = () => access === accessGeneration() && generation === editorGeneration && id === selected.value;
     busy.value = true;
     feedback.value = '';
     try {
@@ -418,11 +499,17 @@ async function settings(action: 'create' | 'name' | 'provider' | 'toggle' | 'tes
                 return;
             if (value?.id) {
                 markSetup(String(value.id), true);
+                if (!ownsEditor()) { await list(); return; }
+                dirtyName.value = dirtyProvider.value = false;
                 await open(String(value.id));
+                const createdId = String(value.id);
+                const createdGeneration = editorGeneration;
+                ownsEditor = () => access === accessGeneration() && createdGeneration === editorGeneration && createdId === selected.value;
                 tab.value = 'Settings';
                 if (routing.value?.enabled) await ensureSetupDisabled();
                 await list();
             }
+            if (access !== accessGeneration() || selected.value !== String(value?.id ?? '')) return;
             feedback.value = 'Save provider settings and pass their test to complete setup.';
         }
         else {
@@ -485,9 +572,9 @@ async function settings(action: 'create' | 'name' | 'provider' | 'toggle' | 'tes
         }
     }
     catch (error) {
+        if (access !== accessGeneration()) return;
+        if (!ownsEditor()) { if (action === 'create') void list(); return; }
         const status = handleFailure(error);
-        if (access !== accessGeneration() || action !== 'create' && (generation !== editorGeneration || id !== selected.value))
-            return;
         configConflict.value = status !== 400;
         password.value = '';
         const detail = (error as { detail?: string })?.detail;
@@ -495,7 +582,7 @@ async function settings(action: 'create' | 'name' | 'provider' | 'toggle' | 'tes
             : status === 400 ? 'Settings rejected. Check the supplied values.' : 'Settings outcome requires review. Reload saved settings before retrying.';
     }
     finally {
-        busy.value = false;
+        if (ownsEditor()) busy.value = false;
     }
 }
 async function ensureSetupDisabled() {
@@ -542,6 +629,8 @@ function close() {
     }
     editorGeneration++;
     sequence++;
+    editorController?.abort();
+    workController?.abort();
     selected.value = '';
     selectedConfiguration.value = undefined;
     password.value = '';
@@ -613,11 +702,11 @@ function close() {
                 <div class="fields">
                     <label class="field">
                         Name
-                        <input v-model="name" maxlength="200" required />
+                        <input v-model="name" maxlength="200" required @input="dirtyName = true" />
                     </label>
                     <label class="field">
                         Provider
-                        <select v-model="kind">
+                        <select v-model="kind" @change="dirtyProvider = true">
                             <option value="local">
                                 Local / mounted storage
                             </option>
@@ -659,10 +748,10 @@ function close() {
             </p>
             <p v-if="ruleConflict" class="notice error">
                 Server rules changed. Your draft is retained.
-                <button @click="dirtyRules = false; ruleConflict = false; read()">
+                <button :disabled="busy || !online" @click="reloadRules()">
                     Use server rules
                 </button>
-                <button @click="ruleConflict = false">
+                <button :disabled="busy || !online" @click="replaceRulesWithDraft()">
                     Explicitly replace with my draft
                 </button>
             </p>
@@ -814,7 +903,7 @@ function close() {
                 <button class="primary" :disabled="busy || !dirtyRules || ruleConflict || !online" @click="saveRules">
                     Save rules
                 </button>
-                <button @click="dirtyRules = false; ruleConflict = false; read()">
+                <button :disabled="busy || !online" @click="reloadRules()">
                     Reload saved rules
                 </button>
             </div>
@@ -856,7 +945,7 @@ function close() {
                 </div>
             </div>
             <div v-for="item in work?.items" :key="String(item.id)" :data-work-id="String(item.id)" tabindex="-1">
-                <DeliveryWork :work="item" :online="online" @refresh="readWork()" />
+                <DeliveryWork :work="item" :online="online" :recovery-sequence="workRecoverySequence" @refresh="readWork()" />
             </div>
             <p v-if="work && !work.items?.length" class="empty">
                 No work in this bounded page.
@@ -885,7 +974,7 @@ function close() {
                     <p id="local-folder-help" class="muted">Use an existing, writable folder on the machine running ShutterSpool. Enter its full path or choose Browse, then Save and test folder.</p>
                     <p v-if="feedback" id="local-folder-feedback" role="status" class="notice">
                         {{ feedback }}
-                        <button v-if="configConflict" type="button" @click="configConflict = false; dirtySettings = false; read()">Reload saved settings</button>
+                <button v-if="configConflict" type="button" :disabled="busy || !online" @click="reloadSettings()">Reload saved settings</button>
                     </p>
                 </template>
                 <template v-else>
@@ -929,7 +1018,7 @@ function close() {
     </section>
     <p v-if="feedback && (tab !== 'Settings' || destination?.kind !== 'local')" role="status" class="notice">
         {{ feedback }}
-        <button v-if="configConflict" @click="configConflict = false; dirtySettings = false; read()">
+        <button v-if="configConflict" :disabled="busy || !online" @click="reloadSettings()">
             Reload saved settings
         </button>
     </p>
