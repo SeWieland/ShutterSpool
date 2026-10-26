@@ -38,6 +38,7 @@ Update instructions where behavior or commands change, and check Markdown links 
 Keep one coherent change per branch and use semantic commit messages, such as `fix: preserve delivery target after retry`.
 Describe the concrete behavior, checks performed and material limits in the pull request.
 Changes to `main` require a pull request, passing `verify` and `Dependency review` checks against the current base branch, and resolved review conversations.
+CodeQL merge protection requires completed analysis and blocks qualifying new high/critical security findings or errors in changed code. GitHub exempts Dependabot PRs analyzed by default setup from this gate; `verify` and `Dependency review` remain required.
 Force-pushing or deleting `main` is blocked. There is no required approval count while the project has one maintainer; this does not replace the review expectations below.
 Workflows from external contributors require maintainer approval before running. Keep actions pinned to full commit SHAs and request only the token permissions each job needs.
 Substantive changes need review of behavior, code quality and documentation; visible changes also need desktop/phone and keyboard inspection.
