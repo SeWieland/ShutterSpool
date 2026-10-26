@@ -6,15 +6,17 @@ import ts from 'typescript';
 import { ref } from 'vue';
 
 function reconciliation(refresh) {
-    const handlers = new Map(), timers = new Map();
+    const handlers = new Map(), timers = new Map(), listeners = new Map();
+    const navigator = { onLine: true }, document = { hidden: false };
     let next = 0, lost, reconnect;
     const hub = { state: 'Disconnected', on: (name, callback) => handlers.set(name, callback),
         onreconnecting() {}, onreconnected(callback) { reconnect = callback; }, onclose() {},
         async start() { this.state = 'Connected'; }, async stop() { this.state = 'Disconnected'; } };
     class Builder { withUrl() { return this; } configureLogging() { return this; } withAutomaticReconnect() { return this; } build() { return hub; } }
-    const context = vm.createContext({ exports: {}, ref, navigator: { onLine: true },
-        document: { hidden: false, addEventListener() {}, removeEventListener() {} },
-        window: { addEventListener() {}, removeEventListener() {} }, onUnmounted() {},
+    Object.assign(document, { addEventListener: (name, callback) => listeners.set(`document:${name}`, callback), removeEventListener: name => listeners.delete(`document:${name}`) });
+    const context = vm.createContext({ exports: {}, ref, navigator,
+        document,
+        window: { addEventListener: (name, callback) => listeners.set(`window:${name}`, callback), removeEventListener: name => listeners.delete(`window:${name}`) }, onUnmounted() {},
         setTimeout: callback => { timers.set(++next, callback); return next; }, clearTimeout: id => timers.delete(id),
         setInterval: callback => { handlers.set('safety', callback); return 1; }, clearInterval() {},
         require: name => name === '@microsoft/signalr' ? { HubConnectionBuilder: Builder, LogLevel: { None: 0 } }
@@ -22,7 +24,9 @@ function reconciliation(refresh) {
     });
     vm.runInContext(ts.transpileModule(readFileSync(new URL('../app/lib/reconcile.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
     const live = context.exports.useReconciliation(refresh);
-    return { live, emit: (event, hint) => handlers.get(event)(hint), reconnect: () => reconnect(), lose: () => lost(),
+    return { live, emit: (event, hint) => handlers.get(event)(hint), reconnect: () => reconnect(), lose: () => lost(), listeners,
+        setOnline: value => { navigator.onLine = value; }, setHidden: value => { document.hidden = value; },
+        foreground: () => listeners.get('window:focus')(),
         async flush() { const pending = [...timers.values()]; timers.clear(); pending.forEach(callback => callback()); await new Promise(resolve => setImmediate(resolve)); } };
 }
 
@@ -83,4 +87,80 @@ test('connection recovery interrupts playback while ordinary safety reconciliati
     client.emit('resyncRequired');
     assert.equal(client.live.connectionRecovery.value, initial + 1);
     await client.flush();
+});
+
+test('hints invalidate only their scopes and unrelated bursts merge into one read', async () => {
+    const reads = [];
+    const client = reconciliation(async (ids, previews, scopes) => reads.push({ ids, previews, scopes: [...scopes].sort() }));
+    await client.live.initialize();
+    reads.length = 0;
+    client.emit('captureChanged', { captureId: 'capture-a', kind: 'capture' });
+    client.emit('previewReady', { captureId: 'capture-b' });
+    client.emit('sourceAuthenticationChanged', { sourceId: 'source-a', outcome: 'Rejected', observedAt: '2026-10-13T12:00:00Z', version: 1 });
+    await client.flush();
+    assert.equal(reads.length, 1);
+    assert.deepEqual(reads[0].scopes, ['capture', 'previews', 'sources']);
+    assert.deepEqual([...reads[0].ids], ['capture-a']);
+    assert.deepEqual([...reads[0].previews.ids], ['capture-b']);
+    reads.length = 0;
+    client.emit('captureChanged', { captureId: 'capture-c', kind: 'delivery' });
+    client.emit('captureChanged', { captureId: 'capture-d', kind: 'erasure' });
+    await client.flush();
+    assert.deepEqual(reads[0].scopes, ['capture', 'delivery', 'erasure', 'storage']);
+    assert.deepEqual([...reads[0].ids].sort(), ['capture-c', 'capture-d']);
+    reads.length = 0;
+    client.emit('captureChanged', { captureId: 'capture-e', kind: 'routing' });
+    client.emit('captureChanged', { captureId: 'capture-f', kind: 'retention' });
+    await client.flush();
+    assert.deepEqual(reads[0].scopes, ['capture', 'delivery', 'storage']);
+    reads.length = 0;
+    client.live.refresh();
+    await client.flush();
+    assert.deepEqual(reads[0].scopes, ['capture', 'delivery', 'erasure', 'previews', 'sources', 'storage']);
+    assert.equal(reads[0].previews.all, true, 'broad recovery invalidates visible preview URLs');
+});
+
+test('active refreshes stay serial and merge an invalidation received during a read', async () => {
+    let release;
+    let active = 0, peak = 0;
+    const reads = [];
+    let holdSources = false;
+    const client = reconciliation(async (_ids, _previews, scopes) => {
+        active++;
+        peak = Math.max(peak, active);
+        reads.push([...scopes].sort());
+        if (holdSources && scopes.has('sources')) await new Promise(resolve => { release = resolve; });
+        active--;
+    });
+    await client.live.initialize();
+    reads.length = 0;
+    holdSources = true;
+    client.live.invalidate('sources');
+    await client.flush();
+    client.live.invalidate('delivery');
+    release();
+    await new Promise(resolve => setImmediate(resolve));
+    await client.flush();
+    assert.equal(peak, 1);
+    assert.deepEqual(reads, [['sources'], ['delivery']]);
+});
+
+test('foreground recovery schedules stale scopes and disposal removes lifecycle listeners', async () => {
+    let reads = 0;
+    const client = reconciliation(async () => { reads++; });
+    await client.live.initialize();
+    const before = reads;
+    client.setHidden(true);
+    client.live.invalidate('erasure');
+    await client.flush();
+    assert.equal(reads, before);
+    client.setHidden(false);
+    client.foreground();
+    await client.flush();
+    assert.equal(reads, before + 1);
+    client.lose();
+    assert.equal(client.listeners.size, 0);
+    client.emit('captureChanged', { captureId: 'late' });
+    await client.flush();
+    assert.equal(reads, before + 1);
 });

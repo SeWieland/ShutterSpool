@@ -9,15 +9,19 @@ import { ref, computed, reactive, watch, nextTick } from 'vue';
 const activityContext = vm.createContext({ exports: {} });
 vm.runInContext(ts.transpileModule(readFileSync(new URL('../app/lib/source-activity.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, activityContext);
 const activityModule = activityContext.exports;
+const readPoolContext = vm.createContext({ exports: {} });
+vm.runInContext(ts.transpileModule(readFileSync(new URL('../app/lib/read-pool.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, readPoolContext);
+const readPoolModule = readPoolContext.exports;
 
 test('folder picker selects only a successfully read folder and fences stale reads and access loss', async () => {
-    let access = 0, lost, unmount;
+    let access = 0, lost;
     const requests = [], events = [];
-    const context = vm.createContext({ exports: {}, ref, computed, nextTick,
+    const unmountCallbacks = [];
+    const context = vm.createContext({ exports: {}, AbortController, ref, computed, watch, nextTick,
         defineProps: () => ({ initialPath: '', online: true }), defineEmits: () => (...event) => events.push(event),
-        onMounted() {}, onUnmounted(callback) { unmount = callback; },
-        require: name => name.endsWith('/session') ? { accessGeneration: () => access, onAccessLost(callback) { lost = callback; } }
-            : { api: { management: { destinations: { localFolders: { get: () => new Promise((resolve, reject) => requests.push({ resolve, reject })) } } } }, handleFailure() {} },
+        onMounted() {}, onUnmounted(callback) { unmountCallbacks.push(callback); },
+        require: name => name.endsWith('/session') ? { accessGeneration: () => access, onAccessLost(callback) { lost = callback; return () => {}; } }
+            : { api: { management: { destinations: { localFolders: { get: () => new Promise((resolve, reject) => requests.push({ resolve, reject })) } } } }, cancellable: signal => ({ signal }), handleFailure() {} },
     });
     const source = parse(readFileSync(new URL('../app/components/LocalFolderPicker.vue', import.meta.url), 'utf8')).descriptor.scriptSetup.content;
     vm.runInContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
@@ -35,19 +39,19 @@ test('folder picker selects only a successfully read folder and fences stale rea
     requests[3].resolve({ path: '/private', directories: [] }); await pending;
     assert.equal(run('listing.value'), undefined);
     assert.deepEqual(events.at(-1), ['close']);
-    unmount();
+    unmountCallbacks.forEach(callback => callback());
 });
 
 test('Source profiles load saved assignments and submit an explicit revision-guarded draft choice', async () => {
     const sources = reactive([{ id: 'camera', name: 'Camera', configurationRevision: 7, connectionProfile: 'LegacyFtps' }]);
     const requests = [];
     const context = vm.createContext({
-        exports: {}, ref, reactive, computed, onMounted() {}, onUnmounted() {},
+        exports: {}, AbortController, ref, reactive, computed, onMounted() {}, onUnmounted() {},
         defineProps: () => ({ sources }), defineEmits: () => () => {},
         watch: (target, callback, options) => target && typeof target === 'object' && 'value' in target ? watch(target, callback, { ...options, flush: 'sync' }) : () => {},
-        require: name => name.endsWith('/source-activity') ? activityModule : name.endsWith('/session')
+        require: name => name.endsWith('/source-activity') ? activityModule : name.endsWith('/read-pool') ? readPoolModule : name.endsWith('/session')
             ? { accessGeneration: () => 0, onAccessLost: () => () => {} }
-            : { api: { management: { sources: {
+                : { handleFailure() {}, api: { management: { sources: {
                 post: async body => { requests.push(body); return {}; },
                 byId: () => ({ put: async body => { requests.push(body); return {}; } }),
             } } } },
@@ -79,9 +83,9 @@ test('Source profiles load saved assignments and submit an explicit revision-gua
 });
 
 test('Delivery displays one Capture for confirmed RAW/JPEG work and marks unavailable reads as last known', () => {
-    const context = vm.createContext({ exports: {}, ref, computed, watch() {}, onMounted() {}, onUnmounted() {},
-        defineProps: () => ({ online: true, connected: true }),
-        require: name => name.includes('kiota') ? {} : name.endsWith('/session') ? { accessGeneration: () => 0 } : { api: {}, handleFailure() {} },
+    const context = vm.createContext({ exports: {}, AbortController, ref, computed, watch() {}, onMounted() {}, onUnmounted() {},
+        defineProps: () => ({ online: true, connected: true }), defineEmits: () => () => {},
+        require: name => name.includes('kiota') ? {} : name.endsWith('/read-pool') ? readPoolModule : name.endsWith('/session') ? { accessGeneration: () => 0 } : { api: {}, handleFailure() {} },
     });
     const source = parse(readFileSync(new URL('../app/components/DeliveryWorkspace.vue', import.meta.url), 'utf8')).descriptor.scriptSetup.content;
     vm.runInContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
@@ -100,11 +104,11 @@ test('delayed Source commands and removals preserve a newer owner draft on succe
             let finish; let reject; let refreshed = 0;
             const pending = () => new Promise((resolve, fail) => { finish = resolve; reject = fail; });
             const context = vm.createContext({
-                exports: {}, ref, reactive, computed, onMounted() {}, defineProps: () => ({ sources: [{ id: 'a', name: 'A', configurationRevision: 1 }, { id: 'b', name: 'B', configurationRevision: 1 }] }),
+                exports: {}, AbortController, ref, reactive, computed, onMounted() {}, defineProps: () => ({ sources: [{ id: 'a', name: 'A', configurationRevision: 1 }, { id: 'b', name: 'B', configurationRevision: 1 }] }),
                 defineEmits: () => () => { refreshed++; },
                 watch: (target, callback, options) => target?.value === '' ? watch(target, callback, { ...options, flush: 'sync' }) : () => {},
                 onUnmounted() {}, window: { confirm: () => true },
-                require: name => name.endsWith('/source-activity') ? activityModule : name.endsWith('/session') ? { accessGeneration: () => 0, onAccessLost: () => () => {} } : {
+                require: name => name.endsWith('/source-activity') ? activityModule : name.endsWith('/read-pool') ? readPoolModule : name.endsWith('/session') ? { accessGeneration: () => 0, onAccessLost: () => () => {} } : {
                     handleFailure: () => 409,
                     api: { management: { sources: { post: pending, byId: id => ({
                         put: pending, regenerateSecret: { post: pending }, delete: pending,
@@ -138,11 +142,11 @@ test('delayed Source commands and removals preserve a newer owner draft on succe
 
 test('normal Source creation retains its one-time credential after selecting the created owner', async () => {
     const context = vm.createContext({
-        exports: {}, ref, reactive, computed, onMounted() {}, defineProps: () => ({ sources: [] }), defineEmits: () => () => {},
+        exports: {}, AbortController, ref, reactive, computed, onMounted() {}, defineProps: () => ({ sources: [] }), defineEmits: () => () => {},
         watch: (target, callback, options) => target?.value === '' ? watch(target, callback, { ...options, flush: 'sync' }) : () => {},
         onUnmounted() {},
-        require: name => name.endsWith('/source-activity') ? activityModule : name.endsWith('/session') ? { accessGeneration: () => 0, onAccessLost: () => () => {} } : {
-            api: { management: { sources: {
+        require: name => name.endsWith('/source-activity') ? activityModule : name.endsWith('/read-pool') ? readPoolModule : name.endsWith('/session') ? { accessGeneration: () => 0, onAccessLost: () => () => {} } : {
+            handleFailure() {}, cancellable: signal => ({ signal }), api: { management: { sources: {
                 post: async () => ({ id: 'new', secret: 'synthetic-only' }),
                 byId: id => ({ get: async () => ({ id, name: 'New', configurationRevision: 0 }) }),
             } } },
@@ -163,10 +167,10 @@ test('a writable provider test cannot complete setup after a concurrent saved re
     let failRead = false;
     let finishTest;
     const context = vm.createContext({
-        exports: {}, ref, computed, defineProps: () => ({ online: true }), watch() {}, onMounted() {}, onUnmounted() {}, nextTick: async () => {},
+        exports: {}, AbortController, ref, computed, defineProps: () => ({ online: true }), defineEmits: () => () => {}, watch() {}, onMounted() {}, onUnmounted() {}, nextTick: async () => {},
         localStorage: { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value) },
-        require: name => name.includes('kiota') ? {} : name.endsWith('/session') ? { accessGeneration: () => 0 } : {
-            handleFailure: () => 503,
+        require: name => name.includes('kiota') ? {} : name.endsWith('/read-pool') ? readPoolModule : name.endsWith('/session') ? { accessGeneration: () => 0 } : {
+            cancellable: signal => ({ signal }), handleFailure: () => 503,
             api: { management: { destinations: { byId: id => ({
                 get: async () => {
                     if (failRead) throw new Error('current settings unavailable');
@@ -204,10 +208,10 @@ test('setup recovers a failed initial disable before saving provider settings wi
     const calls = [];
     const stored = new Map();
     const context = vm.createContext({
-        exports: {}, ref, computed, defineProps: () => ({ online: true }), watch() {}, onMounted() {}, onUnmounted() {}, nextTick: async () => {},
+        exports: {}, AbortController, ref, computed, defineProps: () => ({ online: true }), defineEmits: () => () => {}, watch() {}, onMounted() {}, onUnmounted() {}, nextTick: async () => {},
         localStorage: { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value) },
-        require: name => name.includes('kiota') ? {} : name.endsWith('/session') ? { accessGeneration: () => 0 } : {
-            handleFailure: () => 503,
+        require: name => name.includes('kiota') ? {} : name.endsWith('/read-pool') ? readPoolModule : name.endsWith('/session') ? { accessGeneration: () => 0 } : {
+            cancellable: signal => ({ signal }), handleFailure: () => 503,
             api: { management: { destinations: {
                 post: async () => ({ id: 'new' }),
                 get: async () => ({ items: [{ id: 'new' }] }),
@@ -258,9 +262,9 @@ test('local setup saves the chosen folder before testing and keeps rejected fold
     const calls = [];
     let savedRoot = null, revision = 0, rejectSave = false;
     const context = vm.createContext({
-        exports: {}, ref, computed, defineProps: () => ({ online: true }), watch() {}, onMounted() {}, onUnmounted() {}, nextTick: async () => {},
-        require: name => name.includes('kiota') ? {} : name.endsWith('/session') ? { accessGeneration: () => 0 } : {
-            handleFailure: () => 400,
+        exports: {}, AbortController, ref, computed, defineProps: () => ({ online: true }), defineEmits: () => () => {}, watch() {}, onMounted() {}, onUnmounted() {}, nextTick: async () => {},
+        require: name => name.includes('kiota') ? {} : name.endsWith('/read-pool') ? readPoolModule : name.endsWith('/session') ? { accessGeneration: () => 0 } : {
+            cancellable: signal => ({ signal }), handleFailure: () => 400,
             api: { management: { destinations: { byId: id => ({
                 get: async () => ({ id, kind: 'local', localRootPath: savedRoot, configurationRevision: revision }),
                 routing: { get: async () => ({ destinationId: id, configurationRevision: revision, enabled: false, rules: [] }) },
@@ -303,9 +307,9 @@ test('local setup saves the chosen folder before testing and keeps rejected fold
 test('Source removal sends its confirmed revision and clears the one-time credential', async () => {
     let removed; let refreshed = 0;
     const context = vm.createContext({
-        exports: {}, ref, reactive, computed, onMounted() {}, defineProps: () => ({ sources: [{ id: 'source', name: 'Camera', configurationRevision: 7 }] }),
+        exports: {}, AbortController, ref, reactive, computed, onMounted() {}, defineProps: () => ({ sources: [{ id: 'source', name: 'Camera', configurationRevision: 7 }] }),
         defineEmits: () => () => { refreshed++; }, watch() {}, onUnmounted() {},
-        require: name => name.endsWith('/source-activity') ? activityModule : name.endsWith('/session') ? { accessGeneration: () => 0, onAccessLost: () => () => {} } : {
+        require: name => name.endsWith('/source-activity') ? activityModule : name.endsWith('/read-pool') ? readPoolModule : name.endsWith('/session') ? { accessGeneration: () => 0, onAccessLost: () => () => {} } : {
             api: { management: { sources: { byId: id => ({ delete: async config => { removed = { id, revision: config.queryParameters.expectedRevision }; return { outcome: 'archived' }; } }) } } },
         },
     });
@@ -326,8 +330,8 @@ test('Retry is available only in the server-supported failure states', async () 
     let writes = 0;
     const props = reactive({ online: true, work: { id: 'work', state: 'Pending' } });
     const context = vm.createContext({
-        exports: {}, ref, reactive, computed, onMounted() {}, defineProps: () => props, defineEmits: () => () => {}, watch() {}, onUnmounted() {},
-        require: name => name.endsWith('/source-activity') ? activityModule : name.endsWith('/session') ? { accessGeneration: () => 0, onAccessLost: () => () => {} } : {
+        exports: {}, AbortController, ref, reactive, computed, onMounted() {}, defineProps: () => props, defineEmits: () => () => {}, watch() {}, onUnmounted() {},
+        require: name => name.endsWith('/source-activity') ? activityModule : name.endsWith('/read-pool') ? readPoolModule : name.endsWith('/session') ? { accessGeneration: () => 0, onAccessLost: () => () => {} } : {
             api: { management: { deliveries: { byId: () => ({ retry: { post: async () => { writes++; } } }) } } },
         },
     });
@@ -350,10 +354,10 @@ test('incomplete setup blocks rules and needs a successful test of the unchanged
     const stored = new Map([['shutterspool.destinationSetup::', '["new"]']]);
     let writable = false; let writes = 0;
     const context = vm.createContext({
-        exports: {}, ref, computed, defineProps: () => ({ online: true }), watch() {}, onMounted() {}, onUnmounted() {}, nextTick: async () => {},
+        exports: {}, AbortController, ref, computed, defineProps: () => ({ online: true }), defineEmits: () => () => {}, watch() {}, onMounted() {}, onUnmounted() {}, nextTick: async () => {},
         localStorage: { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value) },
-        require: name => name.includes('kiota') ? {} : name.endsWith('/session') ? { accessGeneration: () => 0 } : {
-            handleFailure: () => 503,
+        require: name => name.includes('kiota') ? {} : name.endsWith('/read-pool') ? readPoolModule : name.endsWith('/session') ? { accessGeneration: () => 0 } : {
+            cancellable: signal => ({ signal }), handleFailure: () => 503,
             api: { management: { destinations: { byId: id => ({
                 get: async () => ({ id, name: 'New', configurationRevision: 1, kind: 'local', localRootPath: '/photos' }),
                 routing: { get: async () => ({ destinationId: id, configurationRevision: 1, enabled: false, rules: [] }), put: async () => { writes++; } },
@@ -385,8 +389,8 @@ test('incomplete setup blocks rules and needs a successful test of the unchanged
 
 test('Source delay controls preserve exact seconds and convert whole weeks', () => {
     const context = vm.createContext({
-        exports: {}, ref, reactive, computed, onMounted() {}, defineProps: () => ({ sources: [] }), defineEmits: () => () => {}, watch() {}, onUnmounted() {},
-        require: name => name.endsWith('/source-activity') ? activityModule : name.endsWith('/session') ? { accessGeneration: () => 0, onAccessLost: () => () => {} } : {},
+        exports: {}, AbortController, ref, reactive, computed, onMounted() {}, defineProps: () => ({ sources: [] }), defineEmits: () => () => {}, watch() {}, onUnmounted() {},
+        require: name => name.endsWith('/source-activity') ? activityModule : name.endsWith('/read-pool') ? readPoolModule : name.endsWith('/session') ? { accessGeneration: () => 0, onAccessLost: () => () => {} } : {},
     });
     const source = parse(readFileSync(new URL('../app/components/SourceWorkspace.vue', import.meta.url), 'utf8')).descriptor.scriptSetup.content;
     vm.runInContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
@@ -402,10 +406,10 @@ test('Source delay controls preserve exact seconds and convert whole weeks', () 
 test('destination switches clear every owner-scoped draft before a delayed or failed read and block writes', async () => {
     let resolveRead; let writes = 0;
     const context = vm.createContext({
-        exports: {}, ref, computed, defineProps: () => ({ online: true }), watch() {}, onMounted() {}, onUnmounted() {}, nextTick: async () => {},
+        exports: {}, AbortController, ref, computed, defineProps: () => ({ online: true }), defineEmits: () => () => {}, watch() {}, onMounted() {}, onUnmounted() {}, nextTick: async () => {},
         window: { confirm: () => true },
-        require: name => name.includes('kiota') ? {} : name.endsWith('/session') ? { accessGeneration: () => 0 } : {
-            handleFailure: () => 503,
+        require: name => name.includes('kiota') ? {} : name.endsWith('/read-pool') ? readPoolModule : name.endsWith('/session') ? { accessGeneration: () => 0 } : {
+            cancellable: signal => ({ signal }), handleFailure: () => 503,
             api: { management: { destinations: { byId: id => ({
                 get: () => id === 'a' ? Promise.resolve({ id, name: 'A', configurationRevision: 1, kind: 'local', localRootPath: '/A' }) : new Promise(resolve => { resolveRead = resolve; }),
                 routing: { get: async () => ({ destinationId: id, configurationRevision: 1, rules: [{ name: id, conditions: [] }] }), put: async () => { writes++; } },
@@ -437,10 +441,10 @@ test('destination switches clear every owner-scoped draft before a delayed or fa
 test('a delayed provider save cannot clear a newer destination password or settings draft', async () => {
     let finishSave;
     const context = vm.createContext({
-        exports: {}, ref, computed, defineProps: () => ({ online: true }), watch() {}, onMounted() {}, onUnmounted() {}, nextTick: async () => {},
+        exports: {}, AbortController, ref, computed, defineProps: () => ({ online: true }), defineEmits: () => () => {}, watch() {}, onMounted() {}, onUnmounted() {}, nextTick: async () => {},
         window: { confirm: () => true },
-        require: name => name.includes('kiota') ? {} : name.endsWith('/session') ? { accessGeneration: () => 0 } : {
-            handleFailure: () => 503,
+        require: name => name.includes('kiota') ? {} : name.endsWith('/read-pool') ? readPoolModule : name.endsWith('/session') ? { accessGeneration: () => 0 } : {
+            cancellable: signal => ({ signal }), handleFailure: () => 503,
             api: { management: { destinations: { byId: id => ({
                 get: async () => ({ id, name: id, configurationRevision: 1, kind: 'local', localRootPath: '/' + id }),
                 routing: { get: async () => ({ destinationId: id, configurationRevision: 1, rules: [] }) },
@@ -466,9 +470,9 @@ test('destination name, provider and toggle saves preserve unrelated settings dr
     for (const action of ['name', 'provider', 'toggle']) {
         let finishSave;
         const context = vm.createContext({
-            exports: {}, ref, computed, defineProps: () => ({ online: true }), watch() {}, onMounted() {}, onUnmounted() {}, nextTick: async () => {},
-            require: name => name.includes('kiota') ? {} : name.endsWith('/session') ? { accessGeneration: () => 0 } : {
-                handleFailure: () => 503,
+            exports: {}, AbortController, ref, computed, defineProps: () => ({ online: true }), defineEmits: () => () => {}, watch() {}, onMounted() {}, onUnmounted() {}, nextTick: async () => {},
+            require: name => name.includes('kiota') ? {} : name.endsWith('/read-pool') ? readPoolModule : name.endsWith('/session') ? { accessGeneration: () => 0 } : {
+                cancellable: signal => ({ signal }), handleFailure: () => 503,
                 api: { management: { destinations: { byId: id => ({
                     get: async () => ({ id, name: 'Name draft', configurationRevision: 2, kind: 'local', localRootPath: '/provider draft' }),
                     routing: {
@@ -499,9 +503,9 @@ test('same-destination reopen isolates delayed settings and rule outcomes on suc
             let finish; let reject;
             const pending = () => new Promise((resolve, fail) => { finish = resolve; reject = fail; });
             const context = vm.createContext({
-                exports: {}, ref, computed, defineProps: () => ({ online: true }), watch() {}, onMounted() {}, onUnmounted() {}, nextTick: async () => {},
-                require: name => name.includes('kiota') ? {} : name.endsWith('/session') ? { accessGeneration: () => 0 } : {
-                    handleFailure: () => 409,
+                exports: {}, AbortController, ref, computed, defineProps: () => ({ online: true }), defineEmits: () => () => {}, watch() {}, onMounted() {}, onUnmounted() {}, nextTick: async () => {},
+                require: name => name.includes('kiota') ? {} : name.endsWith('/read-pool') ? readPoolModule : name.endsWith('/session') ? { accessGeneration: () => 0 } : {
+                    cancellable: signal => ({ signal }), handleFailure: () => 409,
                     api: { management: { destinations: { byId: id => ({
                         get: async () => ({ id, name: 'Saved', configurationRevision: 1, kind: 'local', localRootPath: '/saved' }),
                         routing: {
@@ -536,11 +540,11 @@ test('selecting Work reads its page once through the tab watcher', async () => {
     let workReads = 0;
     const stops = [];
     const context = vm.createContext({
-        exports: {}, ref, computed, defineProps: () => ({ online: true, generation: 0, motionEnabled: false }),
+        exports: {}, AbortController, ref, computed, defineProps: () => ({ online: true, generation: 0, motionEnabled: false }), defineEmits: () => () => {},
         watch: (...args) => { const stop = watch(...args); stops.push(stop); return stop; },
         onMounted() {}, onUnmounted() {}, nextTick,
-        require: name => name.includes('kiota') ? {} : name.endsWith('/session') ? { accessGeneration: () => 0 } : {
-            handleFailure: () => 503,
+        require: name => name.includes('kiota') ? {} : name.endsWith('/read-pool') ? readPoolModule : name.endsWith('/session') ? { accessGeneration: () => 0 } : {
+            cancellable: signal => ({ signal }), handleFailure: () => 503,
             api: { management: { destinations: { byId: id => ({
                 get: async () => ({ id, name: 'Destination', configurationRevision: 1, kind: 'local', localRootPath: '/photos' }),
                 routing: { get: async () => ({ destinationId: id, configurationRevision: 1, enabled: false, rules: [] }) },
@@ -571,4 +575,29 @@ test('selecting Work reads its page once through the tab watcher', async () => {
     } finally {
         stops.forEach(stop => stop());
     }
+});
+
+test('creating a dirty destination draft opens its saved editor even when browser setup storage is unavailable', async () => {
+    const context = vm.createContext({ exports: {}, AbortController, ref, computed, defineProps: () => ({ online: true }), defineEmits: () => () => {}, watch() {}, onMounted() {}, onUnmounted() {}, nextTick: async () => {},
+        localStorage: { getItem() { return '[]'; }, setItem() { throw new Error('storage denied'); } },
+        require: name => name.includes('kiota') ? {} : name.endsWith('/read-pool') ? readPoolModule : name.endsWith('/session') ? { accessGeneration: () => 0 } : {
+            cancellable: signal => ({ signal }), handleFailure: () => 503,
+            api: { management: { destinations: {
+                post: async () => ({ id: 'created' }),
+                get: async () => ({ items: [{ id: 'created', name: 'New archive', kind: 'local' }] }),
+                byId: id => ({
+                    get: async () => ({ id, name: 'New archive', configurationRevision: 1, kind: 'local' }),
+                    routing: { get: async () => ({ destinationId: id, configurationRevision: 1, enabled: false, rules: [] }) },
+                }),
+            } } },
+        },
+    });
+    const source = parse(readFileSync(new URL('../app/components/DeliveryWorkspace.vue', import.meta.url), 'utf8')).descriptor.scriptSetup.content;
+    vm.runInContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
+    const run = expression => vm.runInContext(expression, context);
+    run("name.value = 'New archive'; dirtyName.value = true");
+    await run("settings('create')");
+    assert.equal(run('selected.value'), 'created');
+    assert.equal(run('dirtySettings.value'), false);
+    assert.equal(run('setupIncomplete.value'), true, 'in-memory setup guard survives denied browser storage');
 });

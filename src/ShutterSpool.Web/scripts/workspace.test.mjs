@@ -7,32 +7,50 @@ import { parse, compileTemplate, compileScript } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import { ref, reactive, computed, watch, nextTick, effectScope } from 'vue';
 
-function moduleAt(name) {
-    const context = vm.createContext({ exports: {}, AbortController, setTimeout, clearTimeout });
-    vm.runInContext(ts.transpileModule(readFileSync(new URL(`../app/lib/${name}.ts`, import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
+function moduleAt(name, overrides = {}) {
+    const path = ['useGalleryGrid', 'useWorkspaceClock', 'usePhotoViewer', 'useViewerSession', 'useCurationVisit', 'useCaptureBrowser', 'useCaptureCurationActions', 'useWorkspacePreferences'].includes(name) ? `../app/composables/${name}.ts` : `../app/lib/${name}.ts`;
+    const moduleWatch = name === 'useWorkspacePreferences' ? watch : () => {};
+    const context = vm.createContext({ exports: {}, AbortController, setTimeout, clearTimeout, ...overrides.globals,
+        require: name => name === 'vue' ? overrides.vue ?? { ref, reactive, computed, watch: moduleWatch, nextTick, onMounted() {}, onUnmounted() {}, onScopeDispose() {}, provide() {}, inject: (_key, fallback) => fallback }
+            : name.endsWith('/api') ? overrides.api ?? { api: {}, handleFailure: error => error.responseStatusCode }
+                : name.endsWith('/session') ? overrides.session ?? { accessGeneration: () => 0 }
+                    : name.endsWith('/retention') ? moduleAt('retention')
+                        : name.endsWith('/workspace-preferences') ? moduleAt('workspace-preferences')
+                            : name.endsWith('/curation-session') ? moduleAt('curation-session')
+                                : name.endsWith('/useCurationVisit') ? moduleAt('useCurationVisit')
+                                    : moduleAt('workspace-interactions'),
+    });
+    vm.runInContext(ts.transpileModule(readFileSync(new URL(path, import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
     return context.exports;
 }
 function workspace(read, batch = async () => ({ items: [] }), browser = {}) {
-    const modules = { curation: moduleAt('curation-session'), interactions: moduleAt('workspace-interactions'), preferences: moduleAt('workspace-preferences'), retention: moduleAt('retention'), slideshow: moduleAt('gallery-slideshow'), chrome: moduleAt('fullscreen-chrome') };
-    let generation = 0; let lost;
+    let generation = 0; let lost; let dispose;
     const session = ref({ profile: { iss: 'synthetic', sub: 'operator' } });
+    const testApi = browser.api ?? { management: { captures: {
+        byId: id => ({ get: options => read(id, options), favorite: { put: browser.favorite ?? (async () => {}) }, trash: { post: browser.trash ?? (async () => {}) }, curation: { put: async body => ({ ...body, revision: body.expectedRevision + 1 }) } }),
+        batch: { curation: { post: batch }, hold: { post: batch }, restore: { post: batch }, release: { post: batch } },
+    } } };
+    class WorkspaceHTMLElement {}
+    const documentState = { activeElement: undefined, fullscreenElement: undefined, querySelector: () => undefined, elementFromPoint: () => undefined, exitFullscreen: async () => {}, addEventListener() {}, removeEventListener() {}, ...browser.document };
+    const modules = { curation: moduleAt('curation-session'), interactions: moduleAt('workspace-interactions'), preferences: moduleAt('workspace-preferences'), preferencesComposable: moduleAt('useWorkspacePreferences'), retention: moduleAt('retention'), slideshow: moduleAt('gallery-slideshow'), chrome: moduleAt('fullscreen-chrome'), grid: moduleAt('useGalleryGrid'), clock: moduleAt('useWorkspaceClock'), viewer: moduleAt('usePhotoViewer'), viewerSession: moduleAt('useViewerSession', { globals: { document: documentState, HTMLElement: WorkspaceHTMLElement }, vue: { ...Vue, nextTick: browser.nextTick ?? nextTick, onMounted() {}, onUnmounted() {} } }), curationVisit: moduleAt('useCurationVisit'), curationActions: moduleAt('useCaptureCurationActions', { api: { api: testApi, cancellable: signal => ({ signal }), handleFailure: error => error.responseStatusCode }, session: { accessGeneration: () => generation } }), captureBrowser: moduleAt('useCaptureBrowser') };
     const context = vm.createContext({
-        exports: {}, AbortController, structuredClone, session, localStorage: browser.storage, clearTimeout, setTimeout, useRouter: () => browser.router ?? ({ replace: async () => {}, beforeEach: () => () => {} }), ref, reactive, computed, defineProps: () => browser.props ?? ({}),
-        watch: browser.watch ?? (() => {}), onMounted() {}, onUnmounted() {}, onBeforeRouteLeave() {}, nextTick: browser.nextTick ?? (async () => {}),
-        window: { confirm: () => true, scrollY: 640, scrollBy() {}, scrollTo() {}, ...browser.window },
-        document: { activeElement: undefined, querySelector: () => undefined, elementFromPoint: () => undefined, ...browser.document },
+        exports: {}, AbortController, HTMLElement: WorkspaceHTMLElement, structuredClone, session, localStorage: browser.storage, clearTimeout, setTimeout, useRouter: () => browser.router ?? ({ replace: async () => {}, beforeEach: () => () => {} }), ref, reactive, computed, defineProps: () => browser.props ?? ({}),
+        watch: browser.watch ?? (() => {}), onMounted() {}, onUnmounted(callback) { dispose = callback; }, onBeforeRouteLeave() {}, defineExpose: value => Object.assign(browser.exposed ??= {}, value), nextTick: browser.nextTick ?? (async () => {}),
+        window: { confirm: () => true, scrollY: 640, scrollBy() {}, scrollTo() {}, addEventListener() {}, removeEventListener() {}, ...browser.window },
+        document: documentState,
         require: name => name.endsWith('/api') ? { api: { management: {
-            sources: { get: async () => ({ items: [{ curationMode: 'Manual' }] }) },
-            captures: { get: browser.page ?? (async () => ({ items: [], nextCursor: null })), byId: id => ({ get: () => read(id), curation: { put: async body => ({ ...body, revision: body.expectedRevision + 1 }) } }), batch: { curation: { post: batch }, hold: { post: batch }, restore: { post: batch }, release: { post: batch } } },
-        } }, cancellable: signal => ({getKey: () => 'shutterspool.abort', signal}), handleFailure: error => error.responseStatusCode }
+            sources: { get: browser.sources ?? (async () => ({ items: [{ curationMode: 'Manual' }] })) },
+            captures: { get: browser.page ?? (async () => ({ items: [], nextCursor: null })), byId: id => ({ get: options => read(id, options), curation: { put: async body => ({ ...body, revision: body.expectedRevision + 1 }) } }), batch: { curation: { post: batch }, hold: { post: batch }, restore: { post: batch }, release: { post: batch } } },
+        } }, cancellable: signal => ({getKey: () => 'shutterspool.abort', signal}), handleFailure: browser.handleFailure ?? (error => error.responseStatusCode) }
             : name.endsWith('/session') ? { session, accessGeneration: () => generation, onAccessLost: callback => { lost = callback; return () => {}; } }
-                : name.endsWith('/reconcile') ? { useReconciliation: () => ({ online: ref(true), connected: ref(true), activity: ref(undefined), authActivity: ref(undefined), phaseActivity: ref(undefined), unassignedRejection: ref(false), recoverySequence: ref(0), connectionRecovery: ref(0), initialize: async () => {} }) }
-                    : name.endsWith('/workspace-preferences') ? modules.preferences : name.endsWith('/curation-session') ? modules.curation : name.endsWith('/retention') ? modules.retention : name.endsWith('/gallery-slideshow') ? modules.slideshow : name.endsWith('/fullscreen-chrome') ? modules.chrome : modules.interactions,
+                    : name.endsWith('/reconcile') ? { useReconciliation: refresh => ({ online: ref(true), connected: ref(true), activity: ref(undefined), authActivity: ref(undefined), phaseActivity: ref(undefined), unassignedRejection: ref(false), recoverySequence: ref(0), connectionRecovery: ref(0), initialize: async () => {}, invalidate: (scopes, ids, previews) => refresh(ids, previews, new Set(typeof scopes === 'string' ? [scopes] : scopes)), refresh: () => refresh(undefined, undefined, new Set(['capture', 'previews', 'sources', 'delivery', 'storage', 'erasure'])) }) }
+                    : name.endsWith('/workspace-preferences') ? modules.preferences : name.endsWith('/useWorkspacePreferences') ? modules.preferencesComposable : name.endsWith('/useGalleryGrid') ? modules.grid : name.endsWith('/useWorkspaceClock') ? modules.clock : name.endsWith('/usePhotoViewer') ? modules.viewer : name.endsWith('/useViewerSession') ? modules.viewerSession : name.endsWith('/useCurationVisit') ? modules.curationVisit : name.endsWith('/useCaptureCurationActions') ? modules.curationActions : name.endsWith('/useCaptureBrowser') ? modules.captureBrowser : name.endsWith('/read-pool') ? moduleAt('read-pool') : name.endsWith('/curation-session') ? modules.curation : name.endsWith('/retention') ? modules.retention : name.endsWith('/gallery-slideshow') ? modules.slideshow : name.endsWith('/fullscreen-chrome') ? modules.chrome : modules.interactions,
         loseAccess() { generation++; session.value = null; lost(); },
     });
     const source = parse(readFileSync(new URL('../app/components/OperationalWorkspace.vue', import.meta.url), 'utf8')).descriptor.scriptSetup.content;
     vm.runInContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
     const run = expression => vm.runInContext(expression, context);
+    run.dispose = () => dispose?.();
     run.mount = () => {
         const file = readFileSync(new URL('../app/components/OperationalWorkspace.vue', import.meta.url), 'utf8');
         const result = compileTemplate({ source: parse(file).descriptor.template.content, filename: 'OperationalWorkspace.vue', id: 'workspace-lifecycle' });
@@ -41,15 +59,15 @@ function workspace(read, batch = async () => ({ items: [] }), browser = {}) {
         vm.runInContext(ts.transpileModule(result.code, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, template);
         const declarations = ts.createSourceFile('workspace.ts', source, ts.ScriptTarget.Latest, true).statements;
         const names = declarations.flatMap(statement => ts.isVariableStatement(statement)
-            ? statement.declarationList.declarations.filter(declaration => ts.isIdentifier(declaration.name)).map(declaration => declaration.name.text)
+            ? statement.declarationList.declarations.flatMap(declaration => ts.isIdentifier(declaration.name) ? [declaration.name.text] : ts.isObjectBindingPattern(declaration.name) ? declaration.name.elements.map(element => element.name.getText()) : [])
             : ts.isFunctionDeclaration(statement) && statement.name ? [statement.name.text] : []);
-        return mountTemplate(template.exports.render, run('({' + names.join(',') + '})'));
+        return mountTemplate(template.exports.render, run('({' + names.join(',') + '})'), browser.document, browser);
     };
     return run;
 }
 
-function mountTemplate(render, bindings) {
-    const node = (type, text = '') => ({ type, text, tagName: type.toUpperCase(), props: {}, children: [], parent: null, style: {}, options: [], focus() {}, closest() {}, addEventListener() {}, removeEventListener() {}, close() { this.props.open = false; }, showModal() { this.props.open = true; }, getAttribute(key) { return this.props[key] ?? null; } });
+function mountTemplate(render, bindings, documentOverrides = {}, browser = {}) {
+    const node = (type, text = '') => ({ type, text, tagName: type.toUpperCase(), props: {}, children: [], parent: null, style: {}, options: [], focus() {}, closest() {}, addEventListener() {}, removeEventListener() {}, setPointerCapture() {}, close() { this.props.open = false; }, showModal() { this.props.open = true; }, getAttribute(key) { return this.props[key] ?? null; } });
     const header = node('header'); const body = node('body'); const root = node('root');
     const renderer = Vue.createRenderer({
         createElement: type => node(type), createText: text => node('#text', text), createComment: text => node('#comment', text),
@@ -68,14 +86,40 @@ function mountTemplate(render, bindings) {
         querySelector: selector => selector === '.app-header' ? header : body,
     });
     const app = renderer.createApp({ setup: () => bindings, render });
+    app.config.warnHandler = message => { throw new Error(`Unexpected Vue warning: ${message}`); };
     const controls = parse(readFileSync(new URL('../app/components/CurationControls.vue', import.meta.url), 'utf8')).descriptor;
     const compiled = compileScript(controls, { id: 'curation-controls', inlineTemplate: true });
     const context = vm.createContext({ exports: {}, require: () => Vue });
     vm.runInContext(ts.transpileModule(compiled.content, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
     app.component('CurationControls', context.exports.default);
-    for (const name of ['UIcon', 'RatingStar', 'CaptureRating', 'AuthorizedPreview', 'CaptureEvidence', 'SourceWorkspace', 'DeliveryWorkspace', 'ReleaseLifetime', 'ReevaluateAction', 'RetentionLifetime', 'FavoriteControl', 'RetentionDetails', 'CaptureTrashAction', 'CaptureResumeAction', 'NoDeliveryIntentAction', 'PrivacyErasurePanel', 'TrashWorkspace', 'RetentionSettings']) {
-        app.component(name, { props: ['capture', 'captureId'], setup: props => () => Vue.h('mock-' + name, { captureId: props.captureId }, props.capture?.displayName ?? '') });
+    const ratingFilter = parse(readFileSync(new URL('../app/components/CaptureRatingFilter.vue', import.meta.url), 'utf8')).descriptor;
+    const compiledRatingFilter = compileScript(ratingFilter, { id: 'capture-rating-filter', inlineTemplate: true });
+    const ratingContext = vm.createContext({ exports: {}, document: { elementFromPoint: () => undefined, ...documentOverrides }, require: name => name.endsWith('/workspace-interactions') ? moduleAt('workspace-interactions') : Vue });
+    vm.runInContext(ts.transpileModule(compiledRatingFilter.content, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, ratingContext);
+    app.component('CaptureRatingFilter', ratingContext.exports.default);
+    if (browser.realTrashAction) {
+        const trashAction = parse(readFileSync(new URL('../app/components/CaptureTrashAction.vue', import.meta.url), 'utf8')).descriptor;
+        const compiledTrashAction = compileScript(trashAction, { id: 'capture-trash-action', inlineTemplate: true });
+        const trashContext = vm.createContext({ exports: {}, ref, watch, window: { confirm: () => true }, require: name => name.endsWith('/retention') ? moduleAt('retention') : Vue });
+        vm.runInContext(ts.transpileModule(compiledTrashAction.content, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, trashContext);
+        app.component('CaptureTrashAction', trashContext.exports.default);
     }
+    for (const name of ['UIcon', 'RatingStar', 'CaptureRating', 'AuthorizedPreview', 'CaptureEvidence', 'SourceWorkspace', 'DeliveryWorkspace', 'ReleaseLifetime', 'ReevaluateAction', 'RetentionLifetime', 'FavoriteControl', 'RetentionDetails', ...(browser.realTrashAction ? [] : ['CaptureTrashAction']), 'CaptureResumeAction', 'NoDeliveryIntentAction', 'PrivacyErasurePanel', 'TrashWorkspace', 'RetentionSettings', 'CollectionPicker', 'CollectionMove']) {
+        app.component(name, { props: ['capture', 'captureId', 'gridMaximumDimension', 'active', 'deliveryOnly'], setup: props => () => Vue.h('mock-' + name, { captureId: props.captureId, active: props.active, deliveryOnly: props.deliveryOnly }, props.capture?.displayName ?? '') });
+    }
+    for (const name of ['LazySourceWorkspace', 'LazyDeliveryWorkspace', 'LazyTrashWorkspace', 'LazyRetentionSettings']) {
+        app.component(name, { props: ['capture', 'captureId', 'gridMaximumDimension'], setup: props => () => Vue.h('mock-' + name, { captureId: props.captureId }, props.capture?.displayName ?? '') });
+    }
+    const gridPhoto = parse(readFileSync(new URL('../app/components/CaptureGridPhoto.vue', import.meta.url), 'utf8')).descriptor;
+    const compiledGridPhoto = compileScript(gridPhoto, { id: 'capture-grid-photo', inlineTemplate: true });
+    const gridPhotoContext = vm.createContext({ exports: {}, computed, require: () => Vue });
+    vm.runInContext(ts.transpileModule(compiledGridPhoto.content, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, gridPhotoContext);
+    app.component('CaptureGridPhoto', gridPhotoContext.exports.default);
+    const filmstrip = parse(readFileSync(new URL('../app/components/CaptureFilmstrip.vue', import.meta.url), 'utf8')).descriptor;
+    const compiledFilmstrip = compileScript(filmstrip, { id: 'capture-filmstrip', inlineTemplate: true });
+    const filmstripContext = vm.createContext({ exports: {}, require: () => Vue });
+    vm.runInContext(ts.transpileModule(compiledFilmstrip.content, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, filmstripContext);
+    app.component('CaptureFilmstrip', filmstripContext.exports.default);
     app.component('ApertureBackground', { props: ['view'], setup: props => () => Vue.h('mock-aperture', { class: 'aperture-fixture', view: props.view }) });
     app.mount(root);
     function find(type) {
@@ -101,13 +145,13 @@ test('explicit Capture links retain the requested photo despite Curation members
 });
 
 function sourceWorkspace(read, sources = [{ id: 'a', name: 'A', configurationRevision: 1 }, { id: 'b', name: 'B', configurationRevision: 1 }], authRead = async () => ({ coverageComplete: true, items: [] }), phaseRead = async () => ({ epoch: 'one', coverageComplete: true, items: [] }), management = {}, watchProperties = false) {
-    const props = reactive({ sources, connected: true });
+    const props = reactive({ sources, connected: true, gridMaximumDimension: 512 });
     let generation = 0; let accessLost;
     const context = vm.createContext({
         exports: {}, ref, reactive, computed, nextTick, Blob, URL: { createObjectURL: () => 'blob:synthetic', revokeObjectURL() {} }, clearTimeout, setTimeout, clearInterval, setInterval, onMounted() {}, AbortController, HTMLElement: class {}, window: { confirm: () => true }, document: { getElementById: () => ({ focus() {} }) },
         defineProps: () => props, defineEmits: () => () => {}, onUnmounted() {},
         watch: (target, callback, options) => Vue.isRef(target) || watchProperties ? watch(target, callback, { ...options, flush: 'sync' }) : () => {},
-        require: name => name.endsWith('/source-activity') ? moduleAt('source-activity') : name.endsWith('/session') ? { accessGeneration: () => generation, onAccessLost: callback => { accessLost = callback; return () => {}; } } : {
+        require: name => name.endsWith('/read-pool') ? moduleAt('read-pool') : name.endsWith('/source-activity') ? moduleAt('source-activity') : name.endsWith('/session') ? { accessGeneration: () => generation, onAccessLost: callback => { accessLost = callback; return () => {}; } } : {
             cancellable: signal => ({getKey: () => 'shutterspool.abort', signal}), handleFailure: error => error.responseStatusCode ?? 503, readSourceAuthenticationObservations: authRead, readSourceActivity: phaseRead, api: { management: { captures: { get: read }, ...management } },
         },
     });
@@ -125,7 +169,7 @@ function sourceWorkspace(read, sources = [{ id: 'a', name: 'A', configurationRev
         const names = declarations.flatMap(statement => ts.isVariableStatement(statement)
             ? statement.declarationList.declarations.filter(declaration => ts.isIdentifier(declaration.name)).map(declaration => declaration.name.text)
             : ts.isFunctionDeclaration(statement) && statement.name ? [statement.name.text] : []);
-        return mountTemplate(template.exports.render, { ...run('({' + names.join(',') + '})'), sources, connected: computed(() => props.connected), motionEnabled, previewVersions: {} });
+        return mountTemplate(template.exports.render, { ...run('({' + names.join(',') + '})'), sources, connected: computed(() => props.connected), gridMaximumDimension: props.gridMaximumDimension, motionEnabled, previewVersions: {} });
     };
     return run;
 }
@@ -169,6 +213,203 @@ test('erasure during a targeted read cannot shift its result onto an unrelated t
     await run("forgetUnavailableCapture('erased')"); finish({ id: 'read', displayName: 'SYNTHETIC_FRESH.JPG' }); await pending;
     assert.equal(run("rows.value.map(row=>String(row.id)).join(',')"), 'read,keep');
     assert.equal(run('rows.value[0].displayName'), 'SYNTHETIC_FRESH.JPG'); assert.equal(run('rows.value[1].displayName'), 'SYNTHETIC_KEEP.JPG');
+});
+
+test('leaving the photo browser aborts its pending page transport and fences the late response', async () => {
+    let signal; let resolve;
+    const run = workspace(async () => undefined, undefined, { page: request => {
+        signal = request.options?.[0]?.signal;
+        return new Promise(done => { resolve = done; });
+    } });
+    run("initialized.value = true; view.value = 'Gallery'; rows.value = [{ id: 'retained' }]");
+    const pending = run('loadPage(false)');
+    await settle();
+    assert.ok(signal);
+    await run("switchView('Sources')");
+    assert.equal(signal.aborted, true);
+    resolve({ items: [{ id: 'stale' }], nextCursor: null });
+    await pending;
+    assert.equal(run("rows.value.map(row => row.id).join(',')"), 'retained');
+});
+
+test('targeted reconciliation fences late success and failure after view, query, or workspace ownership changes', async () => {
+    for (const ownerChange of ['view', 'query', 'dispose']) {
+        const scope = effectScope();
+        let finish; let requestSignal; let failures = 0; let fullPageReads = 0; let detailReads = 0;
+        const run = scope.run(() => workspace((id, request) => {
+            if (detailReads++ > 0) return Promise.resolve({ id, displayName: 'new query detail' });
+            requestSignal = request?.options?.[0]?.signal;
+            return new Promise((resolve, reject) => { finish = ownerChange === 'query' ? () => reject({ responseStatusCode: 503 }) : () => resolve({ id, displayName: 'stale detail' }); });
+        }, undefined, {
+            watch,
+            handleFailure: error => { failures++; return error.responseStatusCode; },
+            page: async request => {
+                if (request.queryParameters.released === false) return { items: [] };
+                fullPageReads++;
+                return { items: [{ id: 'a', displayName: 'new query page' }], nextCursor: null };
+            },
+        }));
+        try {
+            run("view.value='Gallery'; initialized.value=true; rows.value=[{id:'a',displayName:'original row'}]");
+            const pending = run("refreshData(new Set(['a']), undefined, new Set(['capture']))");
+            await settle();
+            assert.ok(requestSignal, 'targeted detail read starts after the waiting-count read');
+            if (ownerChange === 'view') run("view.value='Sources'");
+            else if (ownerChange === 'query') run("filters.Gallery.tag='changed query'");
+            else run.dispose();
+            await settle();
+            assert.equal(requestSignal.aborted, true);
+            finish();
+            await pending;
+            await settle();
+            assert.equal(failures, 0, 'stale read failures never reach shared authentication/error handling');
+            if (ownerChange === 'query') assert.equal(fullPageReads, 1, 'the changed query may start its own page read');
+            assert.equal(run('rows.value[0].displayName'), 'original row', 'the old owner cannot overwrite the loaded workspace row');
+        } finally { scope.stop(); }
+    }
+});
+
+test('initial Immediate Sources snapshot can choose Gallery and still complete its Capture page read', async () => {
+    let inboxReads = 0;
+    const run = workspace(async id => ({ id }), undefined, {
+        watch,
+        sources: async () => ({ items: [{ id: 'source', curationMode: 'Immediate' }] }),
+        page: async request => {
+            if (request.queryParameters.released === false) return { items: [] };
+            inboxReads++;
+            return { items: [{ id: 'gallery-row' }], nextCursor: null };
+        },
+    });
+    await run("refreshData(undefined, undefined, new Set(['sources','capture']))");
+    assert.equal(run('view.value'), 'Gallery');
+    assert.equal(inboxReads, 1, 'changing the initial view inside its own refresh does not abort that refresh');
+    assert.equal(run('rows.value[0].id'), 'gallery-row');
+});
+
+test('Capture browser retains page cancellation ownership until continuation explicitly finishes', async () => {
+    const browser = moduleAt('useCaptureBrowser').useCaptureBrowser();
+    const parent = new AbortController();
+    const completed = browser.requestPage({ query: {}, parentSignal: parent.signal, read: async () => ({ items: [] }) });
+    await completed.response;
+    const continuationSignal = browser.requestSignal(completed.request);
+    assert.ok(continuationSignal, 'the request remains owned after its page GET settles');
+    parent.abort();
+    assert.equal(continuationSignal.aborted, true, 'the parent can cancel boundary/detail work that reuses the request signal');
+    assert.equal(browser.isCurrent(completed.request), false);
+    completed.finish();
+
+    const first = browser.beginRequest();
+    const signal = browser.requestSignal(first);
+    browser.rows.value = [{ id: 'gallery' }];
+    browser.save('Gallery');
+    browser.rows.value = [{ id: 'curation' }];
+    browser.save('Curation');
+    const second = browser.beginRequest();
+    assert.equal(signal.aborted, true);
+    assert.equal(browser.isCurrent(first), false);
+    browser.restore('Gallery');
+    assert.equal(browser.rows.value[0].id, 'gallery');
+    assert.ok(browser.requestSignal(second));
+    browser.cancelRequests();
+    assert.equal(browser.requestSignal(second), undefined);
+});
+
+test('page continuation boundary and detail transports abort when navigation supersedes the page owner', async () => {
+    for (const continuation of ['boundary', 'detail']) {
+        let detailSignal; let resolveDetail;
+        const run = workspace((id, request) => {
+            detailSignal = request?.options?.[0]?.signal;
+            return new Promise(resolve => { resolveDetail = resolve; });
+        }, undefined, {
+            page: async request => request.queryParameters.released === false ? { items: [] } : continuation === 'boundary'
+                ? { items: [{ id: 'incoming', acceptedAt: new Date('2026-01-01T00:00:00.000Z') }], nextCursor: 'next' }
+                : { items: [{ id: 'detail-target' }], nextCursor: null },
+        });
+        run(continuation === 'boundary'
+            ? "view.value='Gallery'; rows.value=[{id:'cached-boundary',acceptedAt:new Date('2026-01-01T00:00:00.000Z')}]; activeId.value='cached-boundary'"
+            : "view.value='Gallery'; rows.value=[]; activeId.value=''");
+        const pending = run(continuation === 'boundary' ? 'loadPage(false, true)' : 'loadPage(false)');
+        await settle();
+        assert.ok(detailSignal, `${continuation} continuation starts after the page transport resolves`);
+        await run("switchView('Sources')");
+        assert.equal(detailSignal.aborted, true, `${continuation} continuation shares cancellable page ownership`);
+        resolveDetail({ id: 'late', displayName: 'stale continuation' });
+        await pending;
+        assert.equal(run('rows.value.some(row => row.displayName === "stale continuation")'), false);
+    }
+});
+
+test('bulk metadata reads preserve selection order while honoring their four-request bound', async () => {
+    const { mapBounded } = moduleAt('useCurationVisit');
+    let active = 0; let peak = 0;
+    const result = await mapBounded(Array.from({ length: 13 }, (_, index) => index), 4, async value => {
+        active++;
+        peak = Math.max(peak, active);
+        await new Promise(resolve => setTimeout(resolve, value % 3));
+        active--;
+        return value * 2;
+    });
+    assert.equal(peak, 4);
+    assert.deepEqual(Array.from(result), Array.from({ length: 13 }, (_, index) => index * 2));
+});
+
+test('exposed departure guard preserves editor drafts when the operator cancels or approves navigation', () => {
+    let allow = false; let prompts = 0;
+    const run = workspace(async () => undefined, undefined, { window: { confirm: () => { prompts++; return allow; } } });
+    run("dirtyEditors.Sources = true; curationVisit.activeTag.value = 'unfinished tag'; bulkTag.value='unfinished bulk tag'");
+    assert.equal(run('requestDeparture()'), false);
+    assert.equal(prompts, 1);
+    assert.equal(run('dirtyEditors.Sources'), true);
+    assert.equal(run("tagDrafts.get('')"), 'unfinished tag');
+    assert.equal(run('bulkTag.value'), 'unfinished bulk tag');
+    assert.equal(run('unresolved.value'), true);
+    allow = true;
+    assert.equal(run('requestDeparture()'), true);
+    assert.equal(run('dirtyEditors.Sources'), true);
+    assert.equal(run("tagDrafts.get('')"), 'unfinished tag');
+    assert.equal(run('bulkTag.value'), '');
+});
+
+test('cancelled photo navigation retains an unfinished bulk tag and accepted discard clears it', async () => {
+    let allow = false;
+    const run = workspace(async () => undefined, undefined, { window: { confirm: () => allow } });
+    run("view.value='Curation'; bulkTag.value='pending bulk tag'");
+    await run("switchView('Sources')");
+    assert.equal(run('view.value'), 'Curation');
+    assert.equal(run('bulkTag.value'), 'pending bulk tag');
+    allow = true;
+    await run("switchView('Sources')");
+    assert.equal(run('view.value'), 'Sources');
+    assert.equal(run('bulkTag.value'), '');
+});
+
+test('bulk tag guard treats only successfully submitted text as clean', async () => {
+    let finishBatch;
+    const run = workspace(async id => ({ id, displayName: 'Photo A', curation: { revision: 3, tags: [] } }), () => new Promise(resolve => { finishBatch = resolve; }), { watch });
+    run("view.value='Curation'; rows.value=[{id:'a',displayName:'Photo A',curation:{revision:3,tags:[]}}]; selection.value=['a']; bulkTag.value='morning'");
+    const pending = run("bulk('tag')");
+    await settle();
+    run("bulkTag.value='changed while sending'");
+    finishBatch({ items: [{ id: 'a', status: 'committed', current: { revision: 4, tags: ['morning'] } }] });
+    await pending;
+    assert.equal(run('bulkTag.value'), 'changed while sending', 'a successful acknowledgement cannot erase newer typing');
+    assert.equal(run('unresolved.value'), true);
+
+    const completed = workspace(async id => ({ id, curation: { revision: 3, tags: [] } }), async () => ({ items: [{ id: 'a', status: 'committed', current: { revision: 4, tags: ['morning'] } }] }), { watch });
+    completed("view.value='Curation'; rows.value=[{id:'a',displayName:'Photo A',curation:{revision:3,tags:[]}}]; selection.value=['a']; bulkTag.value='morning'");
+    await completed("bulk('tag')");
+    assert.equal(completed('bulkTag.value'), '', 'the submitted draft is clean after a complete successful apply');
+    assert.equal(completed('unresolved.value'), false);
+});
+
+test('debounced tag text remains owned by the view where it was typed', async () => {
+    const run = workspace(async () => undefined, undefined, { watch });
+    run("view.value = 'Gallery'; filterTagDraft.value = 'morning'");
+    await nextTick();
+    await run("switchView('Curation')");
+    await new Promise(resolve => setTimeout(resolve, 220));
+    assert.equal(run('filters.Gallery.tag'), '');
+    assert.equal(run('filters.Curation.tag'), '');
 });
 
 test('authentication snapshot races retain newer persisted outcomes and distinguish no record from unavailable history', async () => {
@@ -327,10 +568,13 @@ test('rating filter highlights every signed value inside its selected interval',
     const tree = run.mount();
     try {
         for (const [start, end] of [[-1, 3], [-1, 0], [0, 0], [2, 4]]) {
-            run(`ratingRange(${start}); ratingRange(${end}, true)`);
+            run(`filter.value.rating = ${start}; filter.value.ratingMaximum = ${start}`);
             await Vue.nextTick();
             const buttons = tree.find('rating-interval').children.filter(node => node.props['data-rating'] != null);
             assert.equal(buttons.length, 7);
+            buttons.find(button => Number(button.props['data-rating']) === start).props.onClick({ shiftKey: false });
+            buttons.find(button => Number(button.props['data-rating']) === end).props.onClick({ shiftKey: true });
+            await Vue.nextTick();
             for (const button of buttons) {
                 const rating = Number(button.props['data-rating']);
                 assert.equal(button.props['aria-pressed'], rating >= start && rating <= end, `interval ${start}..${end}, rating ${rating}`);
@@ -377,16 +621,18 @@ test('authentication loss clears private Capture state and never sends a pending
 async function settle() { await nextTick(); await new Promise(resolve => setImmediate(resolve)); }
 
 function component(name, props, api) {
+    if (name === 'CaptureEvidence' && !('active' in props)) props.active = true;
     const scope = effectScope();
     const unmounted = [];
     let generation = 0;
     let accessLost;
     const context = vm.createContext({
-        exports: {}, defineProps: () => props, defineEmits: () => () => {},
+        exports: {}, AbortController, defineProps: () => props, defineEmits: () => () => {},
         ref, computed, watch, nextTick, onUnmounted: callback => unmounted.push(callback), onMounted() {},
         require: moduleName => moduleName.endsWith('/api')
             ? { api, cancellable: signal => ({getKey: () => 'shutterspool.abort', signal}), handleFailure: error => error.responseStatusCode }
             : moduleName.endsWith('/workspace-interactions') ? moduleAt('workspace-interactions')
+            : moduleName.endsWith('/read-pool') ? moduleAt('read-pool')
             : { accessGeneration: () => generation, onAccessLost: callback => { accessLost = callback; return () => {}; } },
     });
     const source = parse(readFileSync(new URL(`../app/components/${name}.vue`, import.meta.url), 'utf8')).descriptor.scriptSetup.content;
@@ -649,20 +895,134 @@ test('closing inspection or losing access fences a late Gallery detail response'
     }
 });
 
-test('rating pointer press retains native exact click while dragging selects an interval and consumes only its click', () => {
+test('rating pointer press retains native exact click while dragging selects an interval and consumes only its click', async () => {
     const target = value => ({ closest: () => ({ dataset: { rating: String(value) } }) });
     const run = workspace(async () => undefined, undefined, { document: { elementFromPoint: () => target(5) } });
-    run('testPointer = { button: 0, pointerId: 1, clientX: 10, clientY: 10, target: { closest: () => ({ dataset: { rating: "2" } }) }, currentTarget: { setPointerCapture() { pointerCaptures++ } } }; pointerCaptures = 0');
-    run('beginRatingDrag(testPointer); endRatingDrag(); ratingRange(2)');
-    assert.equal(run('pointerCaptures'), 0);
+    const tree = run.mount();
+    const interval = tree.find('rating-interval');
+    const button = interval.children.find(node => node.props['data-rating'] === 2);
+    button.props.onClick({ shiftKey: false }); await Vue.nextTick();
     assert.equal(run('filter.value.rating'), 2); assert.equal(run('filter.value.ratingMaximum'), 2);
-    run('beginRatingDrag(testPointer); moveRatingDrag(testPointer); endRatingDrag()');
+    let pointerCaptures = 0;
+    const pointer = { button: 0, pointerId: 1, clientX: 10, clientY: 10, target: target(2), currentTarget: { setPointerCapture() { pointerCaptures++; } } };
+    interval.props.onPointerdown(pointer);
+    assert.equal(pointerCaptures, 0);
+    interval.props.onPointerup();
+    interval.props.onPointerdown(pointer);
+    interval.props.onPointermove({ ...pointer, buttons: 1 });
+    interval.props.onPointerup(); await Vue.nextTick();
     assert.equal(run('filter.value.rating'), 2); assert.equal(run('filter.value.ratingMaximum'), 5);
-    run('prevented = 0; finishRatingClick({ preventDefault() { prevented++ }, stopPropagation() {} }); ratingRange(3)');
-    assert.equal(run('prevented'), 1);
-    assert.equal(run('filter.value.rating'), 3); assert.equal(run('filter.value.ratingMaximum'), 3);
-    run('ratingRange(5, true)');
-    assert.equal(run('filter.value.rating'), 3); assert.equal(run('filter.value.ratingMaximum'), 5);
+    tree.close();
+});
+
+test('Shift-clicking Rejected or Not Rated and dragging across zero retain the interval anchor', async () => {
+    const target = value => ({ closest: () => ({ dataset: { rating: String(value) } }) });
+    const run = workspace(async () => undefined, undefined, { document: { elementFromPoint: () => target(0) } });
+    run('filter.value.rating = 4; filter.value.ratingMaximum = 5');
+    const tree = run.mount();
+    const interval = tree.find('rating-interval');
+    const notRated = interval.children.find(node => node.props['data-rating'] === '0');
+    notRated.props.onClick({ shiftKey: true }); await Vue.nextTick();
+    assert.equal(run('filter.value.rating'), 0); assert.equal(run('filter.value.ratingMaximum'), 4);
+    const rejected = interval.children.find(node => node.props['data-rating'] === '-1');
+    rejected.props.onClick({ shiftKey: true }); await Vue.nextTick();
+    assert.equal(run('filter.value.rating'), -1); assert.equal(run('filter.value.ratingMaximum'), 4);
+    interval.props.onPointerdown({ button: 0, pointerId: 3, target: target(4) });
+    interval.props.onPointermove({ buttons: 1, pointerId: 3, clientX: 10, clientY: 10, currentTarget: { setPointerCapture() {} } });
+    interval.props.onPointerup(); await Vue.nextTick();
+    assert.equal(run('filter.value.rating'), 0); assert.equal(run('filter.value.ratingMaximum'), 4);
+    tree.close();
+});
+
+test('uncertain Trash stays locked until a complete explicit authoritative reread', async () => {
+    let posts = 0;
+    const retention = { captureRevision: 7, disposition: 'active', isFavorite: false, availableOriginals: [{ variant: 'RAW', byteLength: 10, state: 'available' }], timeline: { observedAt: new Date(), endsAt: new Date(Date.now() + 60_000) } };
+    const run = workspace(async id => ({ id, displayName: 'Photo A', retention }), undefined, { trash: async () => { posts++; throw { responseStatusCode: 503 }; } });
+    run("view.value='Curation'; rows.value=[{id:'a',displayName:'Photo A',retention:{captureRevision:7,disposition:'active',isFavorite:false,availableOriginals:[{variant:'RAW',byteLength:10,state:'available'}],timeline:{observedAt:new Date(),endsAt:new Date(Date.now()+60000)}}}]; selection.value=['a']");
+    await run('bulkTrash()');
+    assert.equal(posts, 1);
+    assert.deepEqual(Array.from(run('uncertainTrashIds.value')), ['a']);
+    assert.match(run('bulkResult.value'), /outcome unconfirmed/);
+    await run('bulkTrash()');
+    assert.equal(posts, 1, 'a second POST is blocked while the outcome is unknown');
+    const incomplete = workspace(async id => ({ id, retention: undefined }));
+    incomplete("view.value='Curation'; rows.value=[{id:'a',displayName:'Photo A',retention:{captureRevision:7,disposition:'active',isFavorite:false,availableOriginals:[{variant:'RAW',byteLength:10,state:'available'}],timeline:{observedAt:new Date(),endsAt:new Date(Date.now()+60000)}}}]; selection.value=['a']; uncertainTrashIds.value=['a']");
+    await incomplete('curationActions.verifyTrashOutcomes()');
+    assert.deepEqual(Array.from(incomplete('uncertainTrashIds.value')), ['a']);
+    const verified = workspace(async id => ({ id, retention: { ...retention, disposition: 'active' } }));
+    verified("view.value='Curation'; rows.value=[{id:'a',displayName:'Photo A',retention:{captureRevision:7,disposition:'active',isFavorite:false,availableOriginals:[{variant:'RAW',byteLength:10,state:'available'}],timeline:{observedAt:new Date(),endsAt:new Date(Date.now()+60000)}}}]; selection.value=['a']; uncertainTrashIds.value=['a']");
+    await verified('curationActions.verifyTrashOutcomes()');
+    assert.deepEqual(Array.from(verified('uncertainTrashIds.value')), []);
+});
+
+test('single-photo Trash shares the per-Capture uncertainty lock with bulk and remounted controls', async () => {
+    let posts = 0; let reads = 0;
+    const evidence = { captureRevision: 7, disposition: 'active', isFavorite: false, availableOriginals: [{ variant: 'RAW', byteLength: 10, state: 'available' }], timeline: { observedAt: new Date(), endsAt: new Date(Date.now() + 60_000) } };
+    const run = workspace(async id => { reads++; return { id, retention: evidence }; }, undefined, {
+        watch, realTrashAction: true,
+        trash: async () => { posts++; throw { responseStatusCode: 503 }; },
+    });
+    run("view.value='Gallery'; rows.value=[{id:'a',displayName:'Photo A',retention:{captureRevision:7,disposition:'active',isFavorite:false,availableOriginals:[{variant:'RAW',byteLength:10,state:'available'}],timeline:{observedAt:new Date(),endsAt:new Date(Date.now()+60000)}}}]; selection.value=['a']; activeId.value='a'; capture.value={id:'a',displayName:'Photo A',retention:{...rows.value[0].retention}}; galleryInspectionId.value='a'; galleryInspectionOpen.value=true");
+    const tree = run.mount();
+    const controls = tree.find('retention-action');
+    assert.ok(controls, 'the composed shell uses the actual single-photo Trash control');
+    const textOf = element => element.text + element.children.map(textOf).join('');
+    const button = (container, label) => container.children.find(element => element.tagName === 'BUTTON' && textOf(element).includes(label));
+    const move = button(controls, 'Move to Trash');
+    await move.props.onClick();
+    await settle();
+    assert.equal(posts, 1, 'the single-photo action submits through the shared owner');
+    assert.deepEqual(Array.from(run('uncertainTrashIds.value')), ['a']);
+    assert.ok(move.props.disabled, 'the child control reflects the central uncertainty lock');
+
+    await run("switchView('Curation')");
+    run("rows.value=[{id:'a',displayName:'Photo A',retention:{captureRevision:7,disposition:'active',isFavorite:false,availableOriginals:[{variant:'RAW',byteLength:10,state:'available'}],timeline:{observedAt:new Date(),endsAt:new Date(Date.now()+60000)}}}]; selection.value=['a']");
+    await run('bulkTrash()');
+    assert.equal(posts, 1, 'the alternate bulk control cannot repeat the uncertain single-photo POST');
+    await run("switchView('Gallery')");
+    run("rows.value=[{id:'a',displayName:'Photo A',retention:{captureRevision:7,disposition:'active',isFavorite:false,availableOriginals:[{variant:'RAW',byteLength:10,state:'available'}],timeline:{observedAt:new Date(),endsAt:new Date(Date.now()+60000)}}}]; galleryInspectionId.value='a'; galleryInspectionOpen.value=true; activeId.value='a'; capture.value={id:'a',displayName:'Photo A',retention:{...rows.value[0].retention}}");
+    await nextTick();
+    const remounted = tree.find('retention-action');
+    assert.ok(button(remounted, 'Refresh and verify'));
+    const verify = button(remounted, 'Refresh and verify');
+    await verify.props.onClick();
+    await settle();
+    assert.ok(reads > 0, 'the rendered verification control performs an authoritative reread');
+    assert.deepEqual(Array.from(run('uncertainTrashIds.value')), [], 'only the authoritative reread clears the shared lock');
+    await run("switchView('Curation')");
+    run("rows.value=[{id:'a',displayName:'Photo A',retention:{captureRevision:7,disposition:'active',isFavorite:false,availableOriginals:[{variant:'RAW',byteLength:10,state:'available'}],timeline:{observedAt:new Date(),endsAt:new Date(Date.now()+60000)}}}]; selection.value=['a']");
+    await run('bulkTrash()');
+    assert.equal(posts, 2, 'a fresh bulk command is allowed after verification');
+    await run("switchView('Gallery')");
+    run("rows.value=[{id:'a',displayName:'Photo A',retention:{captureRevision:7,disposition:'active',isFavorite:false,availableOriginals:[{variant:'RAW',byteLength:10,state:'available'}],timeline:{observedAt:new Date(),endsAt:new Date(Date.now()+60000)}}}]; galleryInspectionId.value='a'; galleryInspectionOpen.value=true; activeId.value='a'; capture.value={id:'a',displayName:'Photo A',retention:{...rows.value[0].retention}}");
+    await nextTick();
+    const lockedRemount = tree.find('retention-action');
+    const lockedMove = button(lockedRemount, 'Move to Trash');
+    assert.equal(lockedMove.props.disabled, true, 'a bulk failure locks a later single-photo remount too');
+    assert.ok(button(lockedRemount, 'Refresh and verify'));
+    tree.close();
+});
+
+test('pending bulk Trash keeps its per-Capture lock across confirmed departure and a late failure', async () => {
+    let rejectPost; let posts = 0;
+    const run = workspace(async id => ({ id, displayName: 'Photo A', retention: { captureRevision: 7 } }), undefined, {
+        watch,
+        trash: () => { posts++; return new Promise((_resolve, reject) => { rejectPost = reject; }); },
+        window: { confirm: () => true },
+    });
+    run("view.value='Curation'; rows.value=[{id:'a',displayName:'Photo A',retention:{captureRevision:7,disposition:'active',isFavorite:false,availableOriginals:[{variant:'RAW',byteLength:10,state:'available'}],timeline:{observedAt:new Date(),endsAt:new Date(Date.now()+60000)}}}]; selection.value=['a']");
+    const pending = run('bulkTrash()');
+    await settle();
+    assert.deepEqual(Array.from(run('pendingTrashIds.value')), ['a'], 'the shared lock is registered before the POST returns');
+    await run("switchView('Sources')");
+    await run("switchView('Curation')");
+    rejectPost({ responseStatusCode: 503 });
+    await pending;
+    assert.deepEqual(Array.from(run('pendingTrashIds.value')), []);
+    assert.deepEqual(Array.from(run('uncertainTrashIds.value')), ['a'], 'late failure after the visit changed remains uncertain');
+    run("selection.value=['a']; rows.value=[{id:'a',displayName:'Photo A',retention:{captureRevision:7,disposition:'active',isFavorite:false,availableOriginals:[{variant:'RAW',byteLength:10,state:'available'}],timeline:{observedAt:new Date(),endsAt:new Date(Date.now()+60000)}}}]");
+    await run('bulkTrash()');
+    assert.equal(posts, 1, 'returning to the workspace cannot blindly replay the pending command');
 });
 
 test('Gallery inspection failure stays recoverable and never permits Capture workflow commands', async () => {
@@ -775,6 +1135,25 @@ test('compiled Curation shell, filmstrip and unchanged comparison preview surviv
     run("selection.value = Array.from({ length: 100 }, (_, n) => String(n)); toggle('overflow')"); await Vue.nextTick();
     assert.ok(tree.find('error'), 'selection errors remain globally visible');
     tree.close();
+});
+
+test('Gallery delivery inspection reads evidence only while its details disclosure is actually open', async () => {
+    const run = workspace(async id => ({ id, curation: { revision: 1, releasedAt: new Date() }, assets: [] }));
+    const tree = run.mount();
+    try {
+        run("view.value = 'Gallery'; activeId.value = 'capture-a'");
+        await run("inspectCapture('capture-a', 'Pending', 'delivery')");
+        await Vue.nextTick();
+        const all = node => [node, ...node.children.flatMap(all)];
+        let evidence = all(tree.root).find(node => node.type === 'mock-CaptureEvidence');
+        assert.equal(evidence.props.active, true);
+        assert.equal(evidence.props.deliveryOnly, true);
+        const disclosure = all(tree.root).find(node => node.type === 'details' && String(node.props.class).includes('capture-evidence') && all(node).some(child => child.type === 'mock-CaptureEvidence'));
+        disclosure.props.onToggle({ target: { open: false } });
+        await Vue.nextTick();
+        evidence = all(tree.root).find(node => node.type === 'mock-CaptureEvidence');
+        assert.equal(evidence.props.active, false);
+    } finally { tree.close(); }
 });
 
 test('detail failures render locally in Gallery inspection and globally when no local inspector exists', async () => {
@@ -1017,8 +1396,8 @@ test('bulk rating autosave retains selection and reports only failures by photog
 
 test('pending bulk intent guards departure and abandoned reads cannot submit or recreate visit sessions', async () => {
     for (const leave of [false, true]) {
-        let resolve; let writes = 0; let prompts = 0;
-        const run = workspace(id => new Promise(done => { resolve = () => done({ id, curation: { revision: 1 } }); }),
+        let resolve; let signal; let writes = 0; let prompts = 0;
+        const run = workspace((id, request) => { signal = request?.options?.[0]?.signal; return new Promise(done => { resolve = () => done({ id, curation: { revision: 1 } }); }); },
             async () => { writes++; return { items: [{ id: 'a', status: 'committed' }] }; },
             { window: { confirm: () => { prompts++; return leave; } } });
         run("view.value = 'Curation'; selection.value = ['a']");
@@ -1026,6 +1405,7 @@ test('pending bulk intent guards departure and abandoned reads cannot submit or 
         await run("switchView('Sources')");
         assert.equal(prompts, 1);
         assert.equal(run('view.value'), leave ? 'Sources' : 'Curation');
+        if (leave) assert.equal(signal?.aborted, true, 'discarding the visit aborts pending read-only batch preparation');
         resolve(); await pending;
         assert.equal(writes, leave ? 0 : 1);
         assert.equal(run('editSessions.size'), leave ? 0 : 1);
@@ -1486,25 +1866,25 @@ test('personal preference scopes reset independently without touching filters or
     run("appearances.Gallery.fit='fit'; resetWorkspace()");
     assert.equal(run('workspacePreferences.width'), 'standard'); assert.equal(run('appearances.Gallery.fit'), 'fit'); assert.equal(run('appearances.Curation.density'), 310);
 });
-test('browser preferences hydrate before writes, isolate identities and recover from a failed explicit write', () => {
+test('browser preferences hydrate before writes, batch edits, isolate identities and recover from a failed explicit write', async () => {
     const scope = effectScope(); const records = new Map(); let denied = false; let writes = 0;
     const first = 'shutterspool-appearance-synthetic-operator', second = 'shutterspool-appearance-synthetic-other';
     records.set(first, JSON.stringify({ appearance: { width:'full', density:'spacious' } }));
     const run = scope.run(() => workspace(async () => undefined, undefined, { watch, storage: { getItem: key => records.get(key) ?? null, setItem: (key,value) => { writes++; if(denied) throw Error('full'); records.set(key,value); } } }));
     try {
-        run('hydratePreferences()'); assert.equal(writes,0); assert.equal(run('workspacePreferences.width'),'full');
-        run('appearances.Gallery.density=400'); assert.equal(writes,1); assert.equal(JSON.parse(records.get(first)).appearances.Curation.density,310);
+        assert.equal(writes,0); assert.equal(run('workspacePreferences.width'),'full');
+        run('appearances.Gallery.density=400'); run('flushPreferenceSave()'); assert.equal(writes,1); assert.equal(JSON.parse(records.get(first)).appearances.Curation.density,310);
         run("session.value={profile:{iss:'synthetic',sub:'other'}}"); assert.equal(writes,1); assert.equal(run('workspacePreferences.width'),'standard');
-        denied=true; run("workspacePreferences.width='full'"); assert.match(run('preferenceNotice.value'), /couldn't save/); assert.equal(records.has(second),false);
-        denied=false; run("workspacePreferences.motion='reduce'"); assert.equal(run('preferenceNotice.value'),''); assert.equal(JSON.parse(records.get(second)).workspace.width,'full');
+        denied=true; run("workspacePreferences.width='full'"); run('flushPreferenceSave()'); assert.match(run('preferenceNotice.value'), /couldn't save/); assert.equal(records.has(second),false);
+        denied=false; run("workspacePreferences.motion='reduce'"); run('flushPreferenceSave()'); assert.equal(run('preferenceNotice.value'),''); assert.equal(JSON.parse(records.get(second)).workspace.width,'full');
         const previous=records.get(first); run('loseAccess(); workspacePreferences.width="standard"'); assert.equal(records.get(first),previous); assert.equal(records.has(''),false);
     } finally { scope.stop(); }
 });
-test('corrupt or future preferences do not write during hydration, and failed migration keeps the old record', () => {
+test('corrupt or future preferences do not write during hydration, and failed migration keeps the old record', async () => {
     for (const raw of ['{broken','{"version":99}', '{"appearance":{"width":"full"}}']) {
         const scope=effectScope(); let saved=raw; let writes=0;
         const run=scope.run(()=>workspace(async()=>undefined, undefined, {watch,storage:{getItem:()=>saved,setItem:()=>{writes++;throw Error('full');}}}));
-        try { run('hydratePreferences()'); assert.equal(writes,0); run("workspacePreferences.motion='reduce'"); assert.equal(saved,raw); assert.ok(run('preferenceNotice.value')); }
+        try { assert.equal(writes,0); run("workspacePreferences.motion='reduce'"); run('flushPreferenceSave()'); assert.equal(saved,raw); assert.ok(run('preferenceNotice.value')); }
         finally {scope.stop();}
     }
 });
@@ -1539,7 +1919,7 @@ test('appearance order reset restores only selections still loaded by its asynch
     const scope = effectScope(); let finish;
     const run = scope.run(() => workspace(async id => ({ id }), undefined, { watch, page: () => new Promise(resolve => { finish = resolve; }) }));
     try {
-        run("hydratingPreferences=true; appearances.Gallery.sort='oldest'; hydratingPreferences=false; initialized.value=true; rows.value=[{id:'a'},{id:'b'}]; selection.value=['a','b']; resetAppearance()");
+        run("hydratingPreferences.value=true; appearances.Gallery.sort='oldest'; initialized.value=true; rows.value=[{id:'a'},{id:'b'}]; selection.value=['a','b']; hydratingPreferences.value=false; resetAppearance()");
         assert.equal(run('selection.value.length'), 0, 'unloaded membership is never claimed during the read');
         finish({ items: [{ id: 'a' }, { id: 'c' }] }); await settle();
         assert.equal(run("selection.value.join(',')"), 'a');
@@ -1563,27 +1943,27 @@ test('Trash Storage entry obeys curation departure guards and returns to the ori
     assert.equal(run('settingsSection.value'), 'Storage'); assert.equal(run('storageVisited.value'), true);
     await run('returnFromSettings()'); assert.equal(run('view.value'), 'Gallery'); assert.equal(run('retentionSurface.value'), 'trash');
 });
-test('denied browser storage reads leave usable in-memory preferences without hydration writes', () => {
+test('denied browser storage reads leave usable in-memory preferences without hydration writes', async () => {
     const scope = effectScope(); let writes = 0;
     const run = scope.run(() => workspace(async () => undefined, undefined, { watch, storage: { getItem() { throw Error('denied'); }, setItem() { writes++; throw Error('denied'); } } }));
     try {
-        run('hydratePreferences()'); assert.equal(writes, 0); assert.ok(run('preferenceNotice.value'));
-        run("workspacePreferences.width='full'; appearances.Gallery.fit='fit'");
-        assert.equal(run('workspacePreferences.width'), 'full'); assert.equal(run('appearances.Gallery.fit'), 'fit'); assert.equal(writes, 2);
+        assert.equal(writes, 0); assert.ok(run('preferenceNotice.value'));
+        run("workspacePreferences.width='full'; appearances.Gallery.fit='fit'"); run('flushPreferenceSave()');
+        assert.equal(run('workspacePreferences.width'), 'full'); assert.equal(run('appearances.Gallery.fit'), 'fit'); assert.equal(writes, 1);
     } finally { scope.stop(); }
 });
-test('tabs keep their own presentation and hydration never overwrites the last explicit writer', () => {
+test('tabs keep their own presentation and hydration never overwrites the last explicit writer', async () => {
     let saved = null; let writes = 0;
     const storage = { getItem: () => saved, setItem: (_key, value) => { saved = value; writes++; } };
     const scopes = [effectScope(), effectScope(), effectScope()];
     try {
         const first = scopes[0].run(() => workspace(async () => undefined, undefined, { watch, storage }));
         const second = scopes[1].run(() => workspace(async () => undefined, undefined, { watch, storage }));
-        first('hydratePreferences()'); second('hydratePreferences()'); assert.equal(writes, 0);
-        first("workspacePreferences.width='full'"); assert.equal(writes, 1); assert.equal(second('workspacePreferences.width'), 'standard');
-        second("workspacePreferences.motion='reduce'"); assert.equal(writes, 2); assert.equal(first('workspacePreferences.motion'), 'system');
+        assert.equal(writes, 0);
+        first("workspacePreferences.width='full'"); first('flushPreferenceSave()'); assert.equal(writes, 1); assert.equal(second('workspacePreferences.width'), 'standard');
+        second("workspacePreferences.motion='reduce'"); second('flushPreferenceSave()'); assert.equal(writes, 2); assert.equal(first('workspacePreferences.motion'), 'system');
         const reload = scopes[2].run(() => workspace(async () => undefined, undefined, { watch, storage }));
-        reload('hydratePreferences()'); assert.equal(writes, 2); assert.equal(reload('workspacePreferences.width'), 'standard'); assert.equal(reload('workspacePreferences.motion'), 'reduce');
+        assert.equal(writes, 2); assert.equal(reload('workspacePreferences.width'), 'standard'); assert.equal(reload('workspacePreferences.motion'), 'reduce');
         assert.equal(first('workspacePreferences.width'), 'full');
     } finally { for (const scope of scopes) scope.stop(); }
 });
@@ -1682,10 +2062,10 @@ test('both fullscreen workspaces wake hidden controls without activating the wak
         const run=workspace(async()=>({}),undefined,{window:{counters}});
         run(`full.value=true;view.value='${view}';chrome.start();viewerChrome.visible=false`);
         try {
-            run("viewerPointerDown({pointerType:'touch'}); pointerDown({pointerId:1,clientX:20,clientY:30,currentTarget:{setPointerCapture(){window.counters.captured++}}}); viewerClick({preventDefault(){window.counters.prevented++},stopPropagation(){window.counters.stopped++}})");
+        run("fullElement.value={clientWidth:200,clientHeight:100,querySelector:()=>null,getBoundingClientRect:()=>({left:0,top:0,width:200,height:100})}; viewerPointerDown({pointerType:'touch'}); pointerDown({pointerId:1,clientX:20,clientY:30,currentTarget:{setPointerCapture(){window.counters.captured++}}}); pointerDown({pointerId:2,clientX:30,clientY:30,currentTarget:{setPointerCapture(){window.counters.captured++}}}); pointerMove({pointerId:2,clientX:50,clientY:30}); viewerClick({preventDefault(){window.counters.prevented++},stopPropagation(){window.counters.stopped++}})");
             assert.equal(run('viewerChrome.visible'),true);
-            assert.deepEqual(counters,{prevented:1,stopped:1,captured:1});
-            assert.equal(run('pointers.size'),1);
+            assert.deepEqual(counters,{prevented:1,stopped:1,captured:2});
+            if (view === 'Curation') assert.ok(run('zoom.value') > 1);
             run("viewerPointerDown({pointerType:'touch'});viewerClick({preventDefault(){window.counters.prevented++},stopPropagation(){window.counters.stopped++}})");
             assert.equal(counters.stopped,1);
         } finally {run('chrome.stop()');}

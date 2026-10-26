@@ -12,6 +12,11 @@ Read the [core workflow](../../docs/core-workflow.md) for behavior and [system b
 ## Build and check
 
 From a clean checkout, run `dotnet tool restore` in the repository root, then `npm ci`, `npm run typecheck`, `npm test`, and `npm run build` here to generate Server `wwwroot`.
+The build checks generated bundle budgets before copying static output to Server.
+The [bundle check](scripts/check-bundle.mjs) bounds initial JavaScript/CSS bytes and gzip sizes, limits the largest JavaScript chunk,
+and verifies that the five workspace sections remain dynamic without static-HTML prefetches.
+Use `npm run check:bundle` to recheck the current generated output and manifest; generate them first.
+These are asset-size and loading-boundary checks, not measured load times.
 The native Node checks cover serial/coalesced autosave, uncertain outcomes, revision conflicts, released-Capture
 guards, reconciliation, comparison/drafts, zoom bounds, motion preferences and bounded preview requests using the existing TypeScript compiler.
 Run these commands from this directory; there is intentionally no repository-root `package.json`.
@@ -37,6 +42,19 @@ The shell retains one workspace across `/` and `/captures/:id`; explicit Capture
 Paged Capture reads and a bounded tile window keep browsing independent of original media size.
 Original downloads are not offered by this workspace; selection does not fetch originals.
 
+### State ownership and lifetimes
+
+`OperationalWorkspace` coordinates navigation and the active photograph.
+The composables in [app/composables](app/composables) own Capture browsing, visit-scoped curation intent,
+viewer interactions, grid measurement, account preferences and the shared foreground clock.
+Keep these responsibilities with their owners when extending an interaction; Server remains the workflow authority.
+
+Sources, Delivery, Trash and Storage settings load on demand; Sources and Delivery unmount when their view closes.
+Storage settings stay mounted across Workspace/Storage changes during a Settings visit so their draft survives.
+Delivery evidence reads begin when its disclosure opens.
+Read owners cancel obsolete transports and reject replies from an older request, editor, photograph or authentication generation.
+Cancellation of a read does not establish the outcome of a command.
+
 ### Browser preferences
 
 Workspace preferences apply across views for the signed-in account in this browser.
@@ -47,7 +65,8 @@ These settings change presentation only; shared storage policy remains separatel
 
 Preferences use browser-origin `localStorage`, keyed by issuer and subject; there is no server profile or cross-device synchronization.
 Loading validates allowlisted fields and copies legacy shared appearance values into both views without writing during hydration.
-The next explicit preference or filter change saves the current snapshot. Unknown preference formats remain untouched.
+Explicit preference and filter changes queue a batched snapshot write; interaction end, account changes and scope disposal flush pending writes.
+An account change flushes to the previous account's key before loading the next account. Unknown preference formats remain untouched.
 Browser storage failures keep preferences usable in memory and show a compact notice; a successful later write clears a write-failure notice.
 Tabs do not synchronize live: each keeps its in-memory presentation, and the last successful explicit change supplies the next reload's snapshot.
 Background loading or migration must not overwrite another tab's newer saved record.
@@ -56,17 +75,22 @@ Background loading or migration must not overwrite another tab's newer saved rec
 
 Bearer/refresh/ID tokens, private previews and curation drafts stay in memory.
 Only short-lived OIDC/PKCE transaction state uses tab-scoped `sessionStorage` (five-minute expiry).
-Only validated workspace, appearance and filter preferences persist; selections and curation drafts do not. Credentials are write-only.
+Validated workspace, appearance and filter preferences persist, along with account-scoped markers for unfinished destination setup.
+Selections and curation drafts do not persist. Credentials are write-only.
 The Server owns authorization and workflow truth, even when the UI hides a control.
 
 Curation autosave coalesces edits with at most one request in flight per Capture.
 Opening values and unfinished tag input survive photo/layout changes during a visit; leaving the photo workspaces requires resolving or explicitly abandoning unsaved work.
 Conflicts preserve intent for an explicit server/reapply choice.
 Released curation is read-only in this frontend; Favorite remains a separate revision-checked action.
+The shell also guards unsaved Source, destination and Storage edits when leaving their workspace.
+Sign-out, routes outside the workspace and browser unload check unresolved work; browser unload uses the browser's own warning.
 
 Kiota command transport retries are disabled.
 An uncertain mutation response requires an authoritative reread before another action; it must not silently repeat a command.
 Live subscription precedes snapshots; racing hints coalesce into a follow-up read.
+Refresh scopes separate Capture, preview, Source, delivery, storage and erasure changes.
+Inactive photo, delivery and storage views retain an invalidation for revalidation when opened; preview hints do not reload configuration.
 Reconnect, explicit Refresh and 60-second foreground reconciliation recover missed hints while preserving drafts and the active photograph.
 Stale observations remain dated last-known evidence rather than apparent live progress.
 

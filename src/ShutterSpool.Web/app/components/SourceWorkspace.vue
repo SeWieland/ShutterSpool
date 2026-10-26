@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { api, handleFailure, readSourceAuthenticationObservations, readSourceActivity, type SourceAuthenticationObservation } from '../lib/api';
+import { api, cancellable, handleFailure, readSourceAuthenticationObservations, readSourceActivity, type SourceAuthenticationObservation } from '../lib/api';
 import { SourceActivityState, activityPresentation, sourceActivityCounters, sourceStatusPosition, type SourceActivity } from '../lib/source-activity';
 import { onAccessLost, accessGeneration } from '../lib/session';
-import type { SourceConfigurationResponse, SourceDisplayResponse, CaptureInboxItemResponse } from '../api/models';
+import { createReadPool } from '../lib/read-pool';
+import type { SourceConfigurationPageResponse, SourceConfigurationResponse, SourceDisplayResponse, CaptureInboxItemResponse } from '../api/models';
 const props = defineProps<{
     gridMaximumDimension?: number;
     sources: SourceConfigurationResponse[];
@@ -14,9 +15,11 @@ const props = defineProps<{
     motionEnabled?: boolean;
     activity?: { captureId: string; kind: 'captureChanged' | 'previewReady'; sequence: number };
 }>();
+const sourceMetadataReads = createReadPool(4);
 const emit = defineEmits<{
     refresh: [
     ];
+    'dirty-change': [dirty: boolean];
 }>();
 const chosen = ref('');
 let disposed = false;
@@ -59,21 +62,25 @@ const selectedEndpoint = computed(() => capabilities.value?.profiles?.find(item 
 const canAssignProfile = computed(() => capabilityState.value === 'ready' && !!connectionProfile.value &&
     (selectedEndpoint.value?.enabled === true || (!!source.value && connectionProfile.value === source.value.connectionProfile)));
 let capabilitySequence = 0;
+let capabilityController: AbortController | undefined;
 async function refreshCapabilities() {
     const sequence = ++capabilitySequence;
     const access = accessGeneration();
+    capabilityController?.abort();
+    const controller = capabilityController = new AbortController();
     capabilityState.value = 'loading';
     try {
-        const value = await api.management.sourceCapabilities.get();
-        if (disposed || sequence !== capabilitySequence || access !== accessGeneration()) return;
+        const value = await sourceMetadataReads.run(controller.signal, () => api.management.sourceCapabilities.get({ options: [cancellable(controller.signal)] }));
+        if (disposed || controller.signal.aborted || sequence !== capabilitySequence || access !== accessGeneration()) return;
         if (!value?.profiles) throw new Error('Connection profiles unavailable.');
         capabilities.value = value;
         capabilityState.value = 'ready';
         if (!chosen.value && !dirty.value && !connectionProfile.value && value.profiles.some(item => item.profile === 'ModernFtps' && item.enabled))
             connectionProfile.value = 'ModernFtps';
     } catch (error) {
+        if (disposed || controller.signal.aborted || sequence !== capabilitySequence || access !== accessGeneration()) return;
         handleFailure(error);
-        if (!disposed && sequence === capabilitySequence && access === accessGeneration()) capabilityState.value = 'failed';
+        capabilityState.value = 'failed';
     }
 }
 function changeSettingsTab(event: KeyboardEvent, index: number) {
@@ -86,16 +93,23 @@ function changeSettingsTab(event: KeyboardEvent, index: number) {
 }
 const caBusy = ref(false);
 const caFeedback = ref('');
+let caSequence = 0;
+let caController: AbortController | undefined;
+let sourceReadSequence = 0;
+let sourceReadController: AbortController | undefined;
 async function downloadRoot() {
     if (caBusy.value || !connectionProfile.value || capabilityState.value !== 'ready') return;
     const access = accessGeneration();
     const profile = connectionProfile.value;
     const owner = ownerVersion;
+    const request = ++caSequence;
+    caController?.abort();
+    const controller = caController = new AbortController();
     caBusy.value = true;
     caFeedback.value = '';
     try {
-        const bytes = await api.management.sourceCapabilities.byProfile(profile).caRoot.get();
-        if (disposed || access !== accessGeneration() || owner !== ownerVersion || profile !== connectionProfile.value) return;
+        const bytes = await api.management.sourceCapabilities.byProfile(profile).caRoot.get({ options: [cancellable(controller.signal)] });
+        if (disposed || controller.signal.aborted || request !== caSequence || access !== accessGeneration() || owner !== ownerVersion || profile !== connectionProfile.value) return;
         if (!bytes) throw new Error('CA root unavailable.');
         const url = URL.createObjectURL(new Blob([bytes], { type: 'application/x-pem-file' }));
         const link = document.createElement('a');
@@ -104,9 +118,13 @@ async function downloadRoot() {
         link.click();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (error) {
+        if (disposed || controller.signal.aborted || request !== caSequence || access !== accessGeneration() || owner !== ownerVersion || profile !== connectionProfile.value) return;
         handleFailure(error);
-        if (access === accessGeneration() && owner === ownerVersion && profile === connectionProfile.value) caFeedback.value = 'CA root unavailable. Ask the operator to check the public root configured for this endpoint, then retry.';
-    } finally { caBusy.value = false; }
+        caFeedback.value = 'CA root unavailable. Ask the operator to check the public root configured for this endpoint, then retry.';
+    } finally {
+        if (!disposed && controller === caController && request === caSequence && owner === ownerVersion && access === accessGeneration() && profile === connectionProfile.value) caBusy.value = false;
+        if (caController === controller) caController = undefined;
+    }
 }
 onMounted(() => { void refreshCapabilities(); });
 const delay = ref(30);
@@ -118,7 +136,13 @@ function setDelay(seconds: number) {
 }
 const streamEnds = ref<Record<string, boolean>>({});
 const suppressStreamMotion = ref(true);
-watch(() => props.recoverySequence, () => { suppressStreamMotion.value = true; });
+watch(() => props.recoverySequence, (value, previous) => {
+    suppressStreamMotion.value = true;
+    if (value !== previous) {
+        void refreshRecent(props.sources);
+        void refreshStatus(props.sources.map(item => String(item.id)));
+    }
+});
 const busy = ref(false);
 const phases = reactive(new SourceActivityState());
 const phaseLoading = ref(false);
@@ -140,13 +164,13 @@ async function refreshPhases(ids: string[]) {
     phaseController?.abort();
     if (!ids.length) { phases.clear(); return; }
     const access = accessGeneration();
-    phaseController = new AbortController();
+    const controller = phaseController = new AbortController();
     phaseLoading.value = true;
     const readRevision = phases.revision;
     try {
         const unresolved = [...phases.items.values()].filter(item => !item.captureId && item.phase !== 'FailedUnavailable' && item.phase !== 'Stale').map(item => item.transferId);
-        const [result, known] = await Promise.all([readSourceActivity(ids, phaseController.signal),
-            unresolved.length ? readSourceActivity(ids, phaseController.signal, unresolved) : undefined]);
+        const [result, known] = await Promise.all([sourceMetadataReads.run(controller.signal, () => readSourceActivity(ids, controller.signal)),
+            unresolved.length ? sourceMetadataReads.run(controller.signal, () => readSourceActivity(ids, controller.signal, unresolved)) : undefined]);
         if (sequence !== phaseSequence || access !== accessGeneration()) return;
         if (known) {
             if (known.epoch !== result.epoch) throw new Error('Activity changed during the read.');
@@ -156,12 +180,16 @@ async function refreshPhases(ids: string[]) {
         }
         phases.reconcile(result, ids, readRevision);
     } catch (error) {
+        if (sequence !== phaseSequence || access !== accessGeneration()) return;
         handleFailure(error);
-        if (sequence === phaseSequence && access === accessGeneration()) phases.available = false;
-    } finally { if (sequence === phaseSequence) phaseLoading.value = false; }
+        phases.available = false;
+    } finally { if (!disposed && sequence === phaseSequence && access === accessGeneration()) phaseLoading.value = false; }
 }
 watch(() => props.phaseActivity, hint => {
     if (hint && props.sources.some(item => String(item.id) === hint.sourceId)) phases.observe(hint);
+}, { flush: 'sync' });
+watch(() => props.activity?.sequence, (value, previous) => {
+    if (value !== undefined && value !== previous) void refreshRecent(props.sources);
 }, { flush: 'sync' });
 const feedback = ref('');
 const feedbackNotice = ref<HTMLElement>();
@@ -241,19 +269,17 @@ async function removeSource() {
         dirty.value = false;
         feedback.value = result?.outcome === 'archived' ? `${target.name} archived. Existing Captures are preserved.` : result?.outcome === 'deleted' ? `${target.name} deleted.` : 'Removal outcome unavailable. Refresh Sources to confirm their state.';
     } catch (failure) {
-        const status = handleFailure(failure);
         if (access !== accessGeneration()) return;
-        if (!isCurrentOwner()) {
-            emit('refresh');
-            return;
-        }
+        if (!isCurrentOwner()) { emit('refresh'); return; }
+        const status = handleFailure(failure);
         removalDialog.value?.close();
         conflict.value = status !== 400;
         feedback.value = status === 409 ? 'Source settings changed. Reload saved settings before removing it.' : 'Removal outcome uncertain. Refresh Sources before retrying.';
-    } finally { busy.value = false; }
+    } finally { if (isCurrentOwner()) busy.value = false; }
 }
 const conflict = ref(false);
 const dirty = ref(false);
+watch(dirty, value => emit('dirty-change', value), { immediate: true });
 const selectionDialog = ref<HTMLDialogElement>();
 let pendingSelection: string | undefined;
 function selectSource(id: string) {
@@ -301,19 +327,30 @@ function observeStream(element: unknown, id: string) {
 }
 const recent = ref<Record<string, CaptureInboxItemResponse[]>>({});
 const display = ref<Record<string, SourceDisplayResponse>>({});
+const displaySequence = new Map<string, number>();
+const recentSequence = new Map<string, number>();
+const displayControllers = new Map<string, AbortController>();
+const recentControllers = new Map<string, AbortController>();
 function displaySource(item: SourceConfigurationResponse) {
     const cached = display.value[String(item.id)];
     return cached && cached.configurationRevision === item.configurationRevision ? cached : item;
 }
 async function readDisplay(id: string, access: number) {
+    displayControllers.get(id)?.abort();
+    const controller = new AbortController();
+    displayControllers.set(id, controller);
+    const request = (displaySequence.get(id) ?? 0) + 1;
+    displaySequence.set(id, request);
+    const current = () => !disposed && !controller.signal.aborted && access === accessGeneration() && displaySequence.get(id) === request && props.sources.some(item => String(item.id) === id);
     try {
-        const value = await api.management.sources.byId(id).display.get();
-        if (disposed || access !== accessGeneration()) return;
+        const value = await sourceMetadataReads.run(controller.signal, () => api.management.sources.byId(id).display.get({ options: [cancellable(controller.signal)] }));
+        if (!current()) return;
         if (String(value?.id) === id) display.value[id] = value!;
         else delete display.value[id];
     } catch (error) {
+        if (!current()) return;
         handleFailure(error);
-        if (!disposed && access === accessGeneration()) delete display.value[id];
+        if (current()) delete display.value[id];
     }
 }
 const recentState = ref<Record<string, 'loading' | 'ready' | 'failed'>>({});
@@ -362,10 +399,10 @@ async function refreshAuthentication(ids: string[]) {
     const access = accessGeneration();
     authController?.abort();
     if (!ids.length || ids.length > 100) return;
-    authController = new AbortController();
+    const controller = authController = new AbortController();
     authLoading.value = true;
     try {
-        const result = await readSourceAuthenticationObservations(ids, authController.signal);
+        const result = await sourceMetadataReads.run(controller.signal, () => readSourceAuthenticationObservations(ids, controller.signal));
         if (sequence !== authReadSequence || access !== accessGeneration()) return;
         const updated = { ...authentication.value };
         for (const id of ids) {
@@ -380,8 +417,8 @@ async function refreshAuthentication(ids: string[]) {
         }
         authentication.value = updated;
     } catch (error) {
-        handleFailure(error);
         if (sequence !== authReadSequence || access !== accessGeneration()) return;
+        handleFailure(error);
         const updated = { ...authentication.value };
         for (const id of ids) {
             const previous = updated[id];
@@ -389,7 +426,7 @@ async function refreshAuthentication(ids: string[]) {
                 { version: previous?.version ?? 0, available: false, coverageComplete: false };
         }
         authentication.value = updated;
-    } finally { if (sequence === authReadSequence) authLoading.value = false; }
+    } finally { if (!disposed && sequence === authReadSequence && access === accessGeneration()) authLoading.value = false; }
 }
 watch(() => props.authActivity, hint => {
     if (!hint) return;
@@ -405,13 +442,23 @@ watch(() => props.authActivity, hint => {
         authTimers.set(id, setTimeout(() => { delete authPulses.value[id]; authTimers.delete(id); }, 2000));
     }
 }, { flush: 'sync' });
-watch(() => props.sources.map(item => String(item.id)), ids => {
+const sourceInventoryKey = () => JSON.stringify(props.sources.map(item => [String(item.id), item.configurationRevision ?? null]));
+watch(sourceInventoryKey, () => {
+    const ids = props.sources.map(item => String(item.id));
     authentication.value = Object.fromEntries(Object.entries(authentication.value).filter(([id]) => ids.includes(id)));
     for (const id of authTimers.keys()) if (!ids.includes(id)) { clearTimeout(authTimers.get(id)); authTimers.delete(id); delete authPulses.value[id]; }
     void refreshStatus(ids);
 }, { immediate: true });
 watch(chosen, () => {
     ownerVersion++;
+    sourceReadSequence++;
+    sourceReadController?.abort();
+    sourceReadController = undefined;
+    busy.value = false;
+    caSequence++;
+    caController?.abort();
+    caController = undefined;
+    caBusy.value = false;
     caFeedback.value = '';
     dirty.value = false;
     conflict.value = false;
@@ -423,6 +470,7 @@ watch(chosen, () => {
     removal.value = undefined;
     removalDialog.value?.close();
 }, { flush: 'sync' });
+watch(connectionProfile, () => { caSequence++; caController?.abort(); caController = undefined; caBusy.value = false; }, { flush: 'sync' });
 watch(source, value => {
     if (dirty.value) {
         if (value?.configurationRevision !== revision.value) {
@@ -442,6 +490,15 @@ watch(source, value => {
 let pendingSources: SourceConfigurationResponse[] | undefined;
 let readingRecent = false;
 async function refreshRecent(items: SourceConfigurationResponse[]) {
+    if (readingRecent) {
+        for (const source of items) {
+            const id = String(source.id);
+            recentControllers.get(id)?.abort();
+            recentSequence.set(id, (recentSequence.get(id) ?? 0) + 1);
+            displayControllers.get(id)?.abort();
+            displaySequence.set(id, (displaySequence.get(id) ?? 0) + 1);
+        }
+    }
     pendingSources = items;
     if (readingRecent)
         return;
@@ -451,35 +508,49 @@ async function refreshRecent(items: SourceConfigurationResponse[]) {
         while (pendingSources && access === accessGeneration()) {
             const pass = pendingSources;
             pendingSources = undefined;
-            for (const source of pass.slice(0, 30)) {
+            const tasks = pass.slice(0, 30).map(source => {
                 const id = String(source.id);
+                recentControllers.get(id)?.abort();
+                const controller = new AbortController();
+                recentControllers.set(id, controller);
+                const request = (recentSequence.get(id) ?? 0) + 1;
+                recentSequence.set(id, request);
+                return { source, id, request, controller };
+            });
+            await Promise.all(tasks.map(async ({ source, id, request, controller }) => {
+                const current = () => !disposed && !controller.signal.aborted && access === accessGeneration() && recentSequence.get(id) === request && props.sources.some(item => String(item.id) === id);
                 recentState.value[id] = 'loading';
                 try {
-                    const [page] = await Promise.all([api.management.captures.get({ queryParameters: { sourceId: id, limit: 30 } }), readDisplay(id, access)]);
-                    if (disposed || access !== accessGeneration())
-                        return;
+                    const page = await sourceMetadataReads.run(controller.signal, () => api.management.captures.get({ queryParameters: { sourceId: id, limit: 30 }, options: [cancellable(controller.signal)] }));
+                    if (!current()) return;
+                    await readDisplay(id, access);
+                    if (!current()) return;
                     recent.value[id] = page?.items ?? [];
                     recentState.value[id] = 'ready';
                     void nextTick(() => measureStream(String(source.id)));
                 }
                 catch (failure) {
+                    if (!current()) return;
                     handleFailure(failure);
-                    if (access !== accessGeneration()) return;
                     recentState.value[id] = 'failed';
                 }
-                if (pendingSources)
-                    break;
-            }
+            }));
         }
     }
     finally {
         readingRecent = false;
-        await nextTick();
-        if (!readingRecent) suppressStreamMotion.value = false;
+        if (!disposed && access === accessGeneration()) {
+            await nextTick();
+            if (!disposed && access === accessGeneration() && !readingRecent) suppressStreamMotion.value = false;
+        }
     }
 }
-watch(() => props.sources, items => {
-    const ids = new Set(items.map(item => String(item.id)));
+watch(sourceInventoryKey, () => {
+    const sourceIds = props.sources.map(item => String(item.id));
+    const items = props.sources;
+    const ids = new Set(sourceIds);
+    for (const [id, controller] of displayControllers) if (!ids.has(id)) { controller.abort(); displayControllers.delete(id); displaySequence.delete(id); }
+    for (const [id, controller] of recentControllers) if (!ids.has(id)) { controller.abort(); recentControllers.delete(id); recentSequence.delete(id); }
     recent.value = Object.fromEntries(Object.entries(recent.value).filter(([id]) => ids.has(id)));
     recentState.value = Object.fromEntries(Object.entries(recentState.value).filter(([id]) => ids.has(id)));
     streamEnds.value = Object.fromEntries(Object.entries(streamEnds.value).filter(([id]) => ids.has(id)));
@@ -489,6 +560,13 @@ watch(() => props.sources, items => {
 }, { immediate: true });
 const unsubscribe = onAccessLost(() => {
     capabilitySequence++;
+    capabilityController?.abort();
+    caSequence++;
+    caController?.abort();
+    caController = undefined;
+    sourceReadSequence++;
+    sourceReadController?.abort();
+    sourceReadController = undefined;
     capabilities.value = undefined;
     authReadSequence++;
     phaseSequence++;
@@ -501,6 +579,12 @@ const unsubscribe = onAccessLost(() => {
     authTimers.forEach(clearTimeout);
     authTimers.clear();
     pendingSources = undefined;
+    displaySequence.clear();
+    recentSequence.clear();
+    displayControllers.forEach(controller => controller.abort());
+    displayControllers.clear();
+    recentControllers.forEach(controller => controller.abort());
+    recentControllers.clear();
     clearCredentialSecrets();
     replacingCredential.value = false;
     credentialErrors.value = {};
@@ -523,9 +607,17 @@ onUnmounted(() => {
     pendingStatus = undefined;
     phaseSequence++;
     phaseController?.abort();
+    capabilitySequence++;
+    capabilityController?.abort();
+    caSequence++;
+    caController?.abort();
+    sourceReadSequence++;
+    sourceReadController?.abort();
     clearInterval(phaseClock);
     authReadSequence++;
     authController?.abort();
+    displayControllers.forEach(controller => controller.abort());
+    recentControllers.forEach(controller => controller.abort());
     authTimers.forEach(clearTimeout);
     phases.clear();
     authentication.value = {};
@@ -565,8 +657,13 @@ async function command(action: 'save' | 'enabled' | 'secret' | 'create') {
                 return;
             }
             returnedSecret = result?.secret ?? undefined;
-            if (result?.id)
-                value = await api.management.sources.byId(String(result.id)).get();
+            if (result?.id) {
+                sourceReadController?.abort();
+                const controller = sourceReadController = new AbortController();
+                const request = ++sourceReadSequence;
+                value = await sourceMetadataReads.run(controller.signal, () => api.management.sources.byId(String(result.id)).get({ options: [cancellable(controller.signal)] }));
+                if (controller.signal.aborted || request !== sourceReadSequence || controller !== sourceReadController || disposed || accessGeneration() !== generation || !isCurrentOwner()) return;
+            }
         }
         else {
             const endpoint = api.management.sources.byId(owner);
@@ -596,13 +693,12 @@ async function command(action: 'save' | 'enabled' | 'secret' | 'create') {
             : 'Saved. Policy changes apply to future Captures.';
     }
     catch (error) {
-        const status = handleFailure(error);
-        if (accessGeneration() !== generation)
-            return;
+        if (accessGeneration() !== generation) return;
         if (!isCurrentOwner()) {
             emit('refresh');
             return;
         }
+        const status = handleFailure(error);
         type FieldErrors = { additionalData?: Record<string, unknown> } & Record<string, unknown>;
         const problem = error as { title?: string; errors?: FieldErrors; additionalData?: { errors?: FieldErrors; field?: string; errorCode?: string } };
         const validation = problem.errors ?? problem.additionalData?.errors;
@@ -625,27 +721,37 @@ async function command(action: 'save' | 'enabled' | 'secret' | 'create') {
         }
     }
     finally {
-        if (isCurrentOwner()) customPassword.value = '';
-        busy.value = false;
+        if (isCurrentOwner() && accessGeneration() === generation) customPassword.value = '';
+        if (isCurrentOwner() && accessGeneration() === generation) busy.value = false;
     }
 }
 async function reload() {
     if (busy.value) return;
     const owner = ownerVersion;
     const access = accessGeneration();
+    sourceReadController?.abort();
+    const controller = sourceReadController = new AbortController();
+    const request = ++sourceReadSequence;
+    const current = () => !disposed && !controller.signal.aborted && controller === sourceReadController && request === sourceReadSequence && owner === ownerVersion && access === accessGeneration();
     busy.value = true;
     try {
-        const saved = chosen.value ? await api.management.sources.byId(chosen.value).get() : await api.management.sources.get();
+        const saved = await sourceMetadataReads.run<SourceConfigurationResponse | SourceConfigurationPageResponse | undefined>(controller.signal, () => chosen.value
+            ? api.management.sources.byId(chosen.value).get({ options: [cancellable(controller.signal)] })
+            : api.management.sources.get({ options: [cancellable(controller.signal)] }));
         if (!saved) throw new Error('Saved Sources unavailable.');
-        if (owner !== ownerVersion || access !== accessGeneration() || disposed) return;
+        if (!current()) return;
         if ('configurationRevision' in saved) revision.value = saved.configurationRevision;
         conflict.value = false;
         feedback.value = 'Saved Sources reread. Check the list before submitting again. Passwords cannot be recovered; replace a lost generated password deliberately.';
         emit('refresh');
     } catch (error) {
+        if (!current()) return;
         handleFailure(error);
-        if (owner === ownerVersion && access === accessGeneration()) feedback.value = 'Saved Sources unavailable. Your draft is retained. Retry the reread before submitting.';
-    } finally { busy.value = false; }
+        feedback.value = 'Saved Sources unavailable. Your draft is retained. Retry the reread before submitting.';
+    } finally {
+        if (current()) busy.value = false;
+        if (sourceReadController === controller) sourceReadController = undefined;
+    }
 }
 function refreshStatus(ids: string[]): Promise<void> {
     pendingStatus = ids;

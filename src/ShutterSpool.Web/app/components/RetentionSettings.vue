@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { settingsChanges, storageMessage, historyStatus, reviewEstimates, type SettingFormat } from '../lib/storage-presentation';
-import { api, handleFailure } from '../lib/api';
+import { api, cancellable, handleFailure } from '../lib/api';
 import { accessGeneration, onAccessLost } from '../lib/session';
 import { durationHours, durationFromHours } from '../lib/retention';
 import { formatFileSize } from '../lib/workspace-interactions';
@@ -50,6 +50,12 @@ const feedback = ref('');
 const historyError = ref('');
 let sequence = 0;
 let disposed = false;
+let loadController: AbortController | undefined;
+let historyController: AbortController | undefined;
+let reviewController: AbortController | undefined;
+function cancelLoad() { loadController?.abort(); loadController = undefined; }
+function cancelHistory() { historyController?.abort(); historyController = undefined; }
+function cancelReview() { reviewController?.abort(); reviewController = undefined; }
 function body() {
     const policy = { ...settings.value?.settings, automaticRemovalEnabled: automatic.value,
         trashRecoveryWindow: durationFromHours(trashHours.value), restoreProtection: durationFromHours(restoreHours.value), galleryMaximum: durationFromHours(galleryDays.value * 24),
@@ -89,7 +95,7 @@ function displaySetting(value: unknown, format: SettingFormat) {
     return String(value);
 }
 function invalidateReview() {
-    reviewSequence++; reviewing.value = false; impact.value = undefined; reviewDraft.value = undefined; acknowledge.value = false; stage.value = 'editing';
+    reviewSequence++; cancelReview(); reviewing.value = false; impact.value = undefined; reviewDraft.value = undefined; acknowledge.value = false; stage.value = 'editing';
 }
 async function backToEditing() {
     invalidateReview(); await nextTick();
@@ -106,12 +112,14 @@ function freezeDraft(value: ReturnType<typeof body>) {
 watch([quotaGiB, highGiB, recoveryGiB, automatic, quotaActive, cacheMode, memoryMiB, trashHours, restoreHours, galleryDays, lifetimes], () => { invalidateReview(); emit('dirty', !valid.value || !baseline.value || hasChanges.value); }, { deep: true });
 async function load(initial = false, clearFeedbackOnSuccess = true) {
     if (initial) invalidateReview();
-    const access = accessGeneration(), request = ++sequence; busy.value = true; refreshing.value = true;
+    cancelLoad();
+    const access = accessGeneration(), request = ++sequence, controller = new AbortController(); loadController = controller; busy.value = true; refreshing.value = true;
     try {
-        const [settingsRead, capacityRead] = await Promise.allSettled([api.management.retention.settings.get(), api.management.retention.capacity.get()]);
+        const options = { options: [cancellable(controller.signal)] };
+        const [settingsRead, capacityRead] = await Promise.allSettled([api.management.retention.settings.get(options), api.management.retention.capacity.get(options)]);
+        if (disposed || controller.signal.aborted || access !== accessGeneration() || request !== sequence) return;
         if (settingsRead.status === 'rejected') handleFailure(settingsRead.reason);
         if (capacityRead.status === 'rejected') handleFailure(capacityRead.reason);
-        if (disposed || access !== accessGeneration() || request !== sequence) return;
         const saved = settingsRead.status === 'fulfilled' ? settingsRead.value : undefined;
         const snapshot = capacityRead.status === 'fulfilled' ? capacityRead.value : undefined;
         if (snapshot) capacity.value = snapshot;
@@ -139,34 +147,35 @@ async function load(initial = false, clearFeedbackOnSuccess = true) {
                 : 'We could not check storage or saved settings. Your edits are kept. Refresh before saving.';
         await loadHistory();
     } catch (failure) {
-        handleFailure(failure);
-        if (access === accessGeneration() && request === sequence) { stale.value = true; feedback.value = 'We could not check storage. Your edits are kept. Refresh before saving.'; }
-    } finally { if (request === sequence) { busy.value = false; refreshing.value = false; } }
+        if (!controller.signal.aborted && !disposed && access === accessGeneration() && request === sequence) { handleFailure(failure); stale.value = true; feedback.value = 'We could not check storage. Your edits are kept. Refresh before saving.'; }
+    } finally { if (loadController === controller) loadController = undefined; if (request === sequence) { busy.value = false; refreshing.value = false; } }
 }
 async function loadHistory(next = false) {
-    const access = accessGeneration(), request = ++historySequence; historyError.value = '';
+    cancelHistory();
+    const access = accessGeneration(), request = ++historySequence, controller = new AbortController(); historyController = controller; historyError.value = '';
     try {
-        const result = await api.management.retention.history.get({ queryParameters: { pageSize: 30, cursor: next ? history.value?.nextCursor ?? undefined : undefined } });
-        if (access === accessGeneration() && !disposed && request === historySequence) { if (!result) throw new Error('History unavailable'); history.value = next ? { ...result, items: [...(history.value?.items ?? []), ...(result.items ?? [])] } : result; }
-    } catch (failure) { handleFailure(failure); if (access === accessGeneration() && !disposed) historyError.value = 'Cleanup history could not be loaded. Retry to check again.'; }
+        const result = await api.management.retention.history.get({ queryParameters: { pageSize: 30, cursor: next ? history.value?.nextCursor ?? undefined : undefined }, options: [cancellable(controller.signal)] });
+        if (!controller.signal.aborted && access === accessGeneration() && !disposed && request === historySequence) { if (!result) throw new Error('History unavailable'); history.value = next ? { ...result, items: [...(history.value?.items ?? []), ...(result.items ?? [])] } : result; }
+    } catch (failure) { if (!controller.signal.aborted && access === accessGeneration() && !disposed && request === historySequence) { handleFailure(failure); historyError.value = 'Cleanup history could not be loaded. Retry to check again.'; } }
+    finally { if (historyController === controller) historyController = undefined; }
 }
 async function preview() {
     if (!valid.value || !hasChanges.value || busy.value || reviewing.value || stale.value || policyChanged.value || !props.online) return;
-    const access = accessGeneration(), request = ++reviewSequence;
+    cancelReview();
+    const access = accessGeneration(), request = ++reviewSequence, controller = new AbortController(); reviewController = controller;
     const snapshot = freezeDraft(body());
     editorScroll = window.scrollY ?? 0;
     editorFocus = typeof document !== 'undefined' ? document.activeElement as HTMLElement : undefined;
     reviewDraft.value = snapshot; impact.value = undefined; acknowledge.value = false; reviewing.value = true; stage.value = 'review'; feedback.value = '';
     await nextTick(); reviewHeading.value?.focus();
     try {
-        const result = await api.management.retention.settings.preview.post(snapshot);
-        if (disposed || access !== accessGeneration() || request !== reviewSequence) return;
+        const result = await api.management.retention.settings.preview.post(snapshot, { options: [cancellable(controller.signal)] });
+        if (disposed || controller.signal.aborted || access !== accessGeneration() || request !== reviewSequence) return;
         if (!result) throw new Error('Impact unavailable');
         impact.value = result;
     } catch (failure) {
-        handleFailure(failure);
-        if (!disposed && access === accessGeneration() && request === reviewSequence) feedback.value = 'We could not review these changes. Return to editing and try again.';
-    } finally { if (request === reviewSequence) reviewing.value = false; }
+        if (!controller.signal.aborted && !disposed && access === accessGeneration() && request === reviewSequence) { handleFailure(failure); feedback.value = 'We could not review these changes. Return to editing and try again.'; }
+    } finally { if (reviewController === controller) reviewController = undefined; if (request === reviewSequence) reviewing.value = false; }
 }
 async function save() {
     if (impactBlocked.value || !reviewDraft.value || !valid.value || busy.value || reviewing.value || stale.value || policyChanged.value || !props.online) return;
@@ -180,14 +189,13 @@ async function save() {
         feedback.value = 'Settings saved. Freed space appears after files have actually been removed.';
         await load(true, false);
     } catch (failure) {
-        const status = handleFailure(failure);
-        if (!disposed && access === accessGeneration() && request === reviewSequence) { invalidateReview(); stale.value = true; feedback.value = status === 409 ? 'Settings changed elsewhere. Reload saved settings, then review your changes again.' : 'We could not confirm the save. Refresh saved settings before trying again.'; }
+        if (!disposed && access === accessGeneration() && request === reviewSequence) { const status = handleFailure(failure); invalidateReview(); stale.value = true; feedback.value = status === 409 ? 'Settings changed elsewhere. Reload saved settings, then review your changes again.' : 'We could not confirm the save. Refresh saved settings before trying again.'; }
     } finally { if (!disposed && access === accessGeneration()) busy.value = false; }
 }
 onMounted(() => void load(true));
-watch(() => props.generation, () => { if (!busy.value && !reviewing.value) void load(); });
-onUnmounted(() => { disposed = true; sequence++; historySequence++; invalidateReview(); });
-onAccessLost(() => { sequence++; historySequence++; invalidateReview(); baseline.value = undefined; settings.value = undefined; capacity.value = undefined; history.value = undefined; impact.value = undefined; feedback.value = ''; });
+watch(() => props.generation, () => { if (loadController || !busy.value && !reviewing.value) void load(); });
+const stopOnAccessLost = onAccessLost(() => { sequence++; historySequence++; cancelLoad(); cancelHistory(); invalidateReview(); busy.value = false; refreshing.value = false; baseline.value = undefined; settings.value = undefined; capacity.value = undefined; history.value = undefined; impact.value = undefined; feedback.value = ''; });
+onUnmounted(() => { disposed = true; sequence++; historySequence++; cancelLoad(); cancelHistory(); invalidateReview(); stopOnAccessLost(); });
 </script>
 
 <template>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { storageMessage, surfaceProgress, operationStatus } from '../lib/storage-presentation';
 import { formatFileSize } from '../lib/workspace-interactions';
-import { api, handleFailure } from '../lib/api';
+import { api, cancellable, handleFailure } from '../lib/api';
 import { accessGeneration, onAccessLost } from '../lib/session';
 import { retentionTiming, type RetentionEvidence } from '../lib/retention';
 import type { PrivacyErasureResponse, PrivacyErasurePreviewResponse, PrivacyErasureOperationListResponse, PrivacyErasurePreviewRequest } from '../api/models';
@@ -48,30 +48,32 @@ const pendingOnly = ref(true);
 const knownRemovedScope = computed(() => props.evidence?.disposition === 'purged' && !!props.evidence.availableOriginals?.length && props.evidence.availableOriginals.every(asset => asset.state === 'removed'));
 let sequence = 0;
 let disposed = false;
+let readController: AbortController | undefined;
+function cancelRead() { readController?.abort(); readController = undefined; }
+function beginRead() { cancelRead(); const controller = new AbortController(); readController = controller; return controller; }
 const canConfirm = computed(() => !!selection.value && ['Pending', 'Blocked'].includes(preview.value?.status ?? '') && (preview.value?.assetCount ?? 0) > 0);
-watch(() => props.captureId, () => { sequence++; clearConfirmation(); busy.value = false; preview.value = undefined; selection.value = undefined; operation.value = undefined; operationId.value = ''; feedback.value = ''; stale.value = false; });
-watch(() => props.evidence?.captureRevision, () => { sequence++; clearConfirmation(); busy.value = false; if (operationId.value) stale.value = true; });
+watch(() => props.captureId, () => { sequence++; cancelRead(); clearConfirmation(); busy.value = false; preview.value = undefined; selection.value = undefined; operation.value = undefined; operationId.value = ''; feedback.value = ''; stale.value = false; });
+watch(() => props.evidence?.captureRevision, () => { sequence++; cancelRead(); clearConfirmation(); busy.value = false; if (operationId.value) stale.value = true; });
 async function previewSelection() {
     if (!props.captureId || busy.value || operationId.value || !props.online || props.evidence?.captureRevision == null) return;
     const originals = props.evidence.availableOriginals;
     if (!originals?.length || originals.some(asset => !asset.assetId) || retentionTiming(props.evidence, Date.now(), true).stale) { feedback.value = 'We could not check the full set of originals recently. Refresh this photograph before reviewing private data removal.'; return; }
     if (props.evidence.disposition === 'purged' && !knownRemovedScope.value) { feedback.value = 'The removal evidence is incomplete. Refresh this photograph; each original removal must be verified before its private data can be erased.'; return; }
-    const request = ++sequence, access = accessGeneration(); busy.value = true; feedback.value = '';
+    const request = ++sequence, access = accessGeneration(), controller = beginRead(); busy.value = true; feedback.value = '';
     confirmationFocus = typeof document !== 'undefined' ? document.activeElement as HTMLElement : undefined;
     const originalsSnapshot = originals.map(asset => ({ ...asset }));
     const nameSnapshot = props.displayName ?? 'Photograph';
     const removedSnapshot = knownRemovedScope.value;
     const scope = { selections: [{ captureId: props.captureId, expectedRevision: props.evidence.captureRevision, assetIds: originals.map(asset => String(asset.assetId)) }] };
     try {
-        const result = await api.management.retention.erasures.preview.post(scope);
-        if (disposed || request !== sequence || access !== accessGeneration()) return;
+        const result = await api.management.retention.erasures.preview.post(scope, { options: [cancellable(controller.signal)] });
+        if (disposed || controller.signal.aborted || request !== sequence || access !== accessGeneration()) return;
         if (!result) throw new Error('Erasure preview unavailable');
         selection.value = scope; preview.value = result; reviewedOriginals.value = originalsSnapshot; reviewedName.value = nameSnapshot; reviewedRemovedScope.value = removedSnapshot;
         openConfirmation('erase');
     } catch (failure) {
-        handleFailure(failure);
-        if (!disposed && request === sequence && access === accessGeneration()) { selection.value = undefined; preview.value = undefined; feedback.value = 'We could not check what would be erased. Refresh this photograph and review the request again.'; }
-    } finally { if (request === sequence) busy.value = false; }
+        if (!controller.signal.aborted && !disposed && request === sequence && access === accessGeneration()) { handleFailure(failure); selection.value = undefined; preview.value = undefined; feedback.value = 'We could not check what would be erased. Refresh this photograph and review the request again.'; }
+    } finally { if (readController === controller) readController = undefined; if (request === sequence) busy.value = false; }
 }
 async function begin() {
     if (busy.value || operationId.value || !props.online || !canConfirm.value || !selection.value || !props.captureId || !consent.value || confirmationMode.value !== 'erase') return;
@@ -87,37 +89,34 @@ async function begin() {
         feedback.value = 'Request saved. Check the progress below for each part; pending does not mean erased.';
         emit('requested', captureId);
     } catch (failure) {
-        handleFailure(failure);
-        if (!disposed && request === sequence && access === accessGeneration()) { clearConfirmation(); stale.value = true; feedback.value = 'We could not check whether the request saved. Check its status here or in Settings before making another request.'; }
+        if (!disposed && request === sequence && access === accessGeneration()) { handleFailure(failure); clearConfirmation(); stale.value = true; feedback.value = 'We could not check whether the request saved. Check its status here or in Settings before making another request.'; }
     } finally { if (request === sequence) busy.value = false; }
 }
 async function readStatus(id = operationId.value) {
     if (!id || busy.value || !props.online) return;
-    const request = ++sequence, access = accessGeneration(); busy.value = true;
+    const request = ++sequence, access = accessGeneration(), controller = beginRead(); busy.value = true;
     try {
-        const result = await api.management.retention.erasures.byOperationId(id).get();
-        if (disposed || request !== sequence || access !== accessGeneration()) return;
+        const result = await api.management.retention.erasures.byOperationId(id).get({ options: [cancellable(controller.signal)] });
+        if (disposed || controller.signal.aborted || request !== sequence || access !== accessGeneration()) return;
         if (!result) throw new Error('Status unavailable');
         operationId.value = id; operation.value = result; stale.value = false;
         if (props.captureId && ['Pending', 'Completed'].includes(result.status ?? '')) emit('requested', props.captureId);
     } catch (failure) {
-        handleFailure(failure);
-        if (!disposed && request === sequence && access === accessGeneration()) { stale.value = true; feedback.value = 'Progress could not be checked. The last result is still shown. Check again; the request was not repeated.'; }
-    } finally { if (request === sequence) busy.value = false; }
+        if (!controller.signal.aborted && !disposed && request === sequence && access === accessGeneration()) { handleFailure(failure); stale.value = true; feedback.value = 'Progress could not be checked. The last result is still shown. Check again; the request was not repeated.'; }
+    } finally { if (readController === controller) readController = undefined; if (request === sequence) busy.value = false; }
 }
 async function loadOperations(next = false) {
     if (busy.value || !props.online) return;
     if (next && !operations.value?.nextCursor) return;
-    const request = ++sequence, access = accessGeneration(); busy.value = true;
+    const request = ++sequence, access = accessGeneration(), controller = beginRead(); busy.value = true;
     try {
-        const result = await api.management.retention.erasures.get({ queryParameters: { pageSize: 50, pendingOnly: pendingOnly.value, cursor: next ? operations.value?.nextCursor ?? undefined : undefined } });
-        if (disposed || request !== sequence || access !== accessGeneration()) return;
+        const result = await api.management.retention.erasures.get({ queryParameters: { pageSize: 50, pendingOnly: pendingOnly.value, cursor: next ? operations.value?.nextCursor ?? undefined : undefined }, options: [cancellable(controller.signal)] });
+        if (disposed || controller.signal.aborted || request !== sequence || access !== accessGeneration()) return;
         if (!result) throw new Error('Requests unavailable');
         operations.value = next ? { ...result, operations: [...new Map([...(operations.value?.operations ?? []), ...(result.operations ?? [])].map(item => [String(item.operationId), item])).values()] } : result; stale.value = false;
     } catch (failure) {
-        handleFailure(failure);
-        if (!disposed && request === sequence && access === accessGeneration()) { stale.value = true; feedback.value = 'Privacy requests could not be loaded. Refresh to try again; missing progress does not mean removal finished.'; }
-    } finally { if (request === sequence) busy.value = false; }
+        if (!controller.signal.aborted && !disposed && request === sequence && access === accessGeneration()) { handleFailure(failure); stale.value = true; feedback.value = 'Privacy requests could not be loaded. Refresh to try again; missing progress does not mean removal finished.'; }
+    } finally { if (readController === controller) readController = undefined; if (request === sequence) busy.value = false; }
 }
 async function continueOperation() {
     if (busy.value || stale.value || !props.online || !operationId.value || !consent.value || confirmationMode.value !== 'continue') return;
@@ -126,15 +125,22 @@ async function continueOperation() {
         const result = await api.management.retention.erasures.byOperationId(operationId.value).continueEscaped.post({ confirmed: true });
         if (!disposed && request === sequence && access === accessGeneration()) { if (!result) throw new Error('Continuation unconfirmed'); operation.value = result; clearConfirmation(); }
     } catch (failure) {
-        handleFailure(failure);
-        if (!disposed && request === sequence && access === accessGeneration()) { stale.value = true; feedback.value = 'We could not check whether removal continued. Check its status before trying again.'; }
+        if (!disposed && request === sequence && access === accessGeneration()) { handleFailure(failure); stale.value = true; feedback.value = 'We could not check whether removal continued. Check its status before trying again.'; }
     } finally { if (request === sequence) busy.value = false; }
 }
 onMounted(() => { if (!props.captureId) void loadOperations(); });
-watch(pendingOnly, () => { if (!props.captureId) void loadOperations(); });
-watch(() => props.generation, () => { if (operationId.value) void readStatus(); else if (!props.captureId) void loadOperations(); });
-onUnmounted(() => { disposed = true; sequence++; clearConfirmation(); });
-onAccessLost(() => { sequence++; clearConfirmation(); busy.value = false; operation.value = undefined; operations.value = undefined; operationId.value = ''; preview.value = undefined; selection.value = undefined; feedback.value = ''; });
+watch(pendingOnly, () => {
+    if (!props.captureId) {
+        if (readController) { sequence++; cancelRead(); busy.value = false; }
+        void loadOperations();
+    }
+});
+watch(() => props.generation, () => {
+    if (readController) { sequence++; cancelRead(); busy.value = false; }
+    if (operationId.value) void readStatus(); else if (!props.captureId) void loadOperations();
+});
+const stopOnAccessLost = onAccessLost(() => { sequence++; cancelRead(); clearConfirmation(); busy.value = false; operation.value = undefined; operations.value = undefined; operationId.value = ''; preview.value = undefined; selection.value = undefined; feedback.value = ''; });
+onUnmounted(() => { disposed = true; sequence++; cancelRead(); clearConfirmation(); stopOnAccessLost(); });
 </script>
 
 <template>

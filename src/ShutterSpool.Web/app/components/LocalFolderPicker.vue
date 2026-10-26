@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { api, handleFailure } from '../lib/api';
+import { api, cancellable, handleFailure } from '../lib/api';
 import { accessGeneration, onAccessLost } from '../lib/session';
 const props = defineProps<{ initialPath: string; online: boolean }>();
 const emit = defineEmits<{ select: [path: string]; close: [] }>();
@@ -12,24 +12,28 @@ const busy = ref(false);
 const error = ref('');
 let sequence = 0;
 let disposed = false;
+let browseController: AbortController | undefined;
+function cancelBrowse() { browseController?.abort(); browseController = undefined; }
 async function browse(value = '') {
     if (!props.online || disposed) return;
-    const request = ++sequence, access = accessGeneration();
+    cancelBrowse();
+    const request = ++sequence, access = accessGeneration(), controller = new AbortController();
+    browseController = controller;
     busy.value = true; error.value = ''; listing.value = undefined;
     try {
-        const result = await api.management.destinations.localFolders.get({ queryParameters: { path: value || undefined } });
-        if (disposed || request !== sequence || access !== accessGeneration()) return;
+        const result = await api.management.destinations.localFolders.get({ queryParameters: { path: value || undefined }, options: [cancellable(controller.signal)] });
+        if (disposed || controller.signal.aborted || request !== sequence || access !== accessGeneration()) return;
         if (!result) throw new Error('Folder listing unavailable');
         listing.value = result; path.value = result.path ?? '';
         await nextTick();
-        if (!disposed && request === sequence) location.value?.focus();
+        if (!disposed && !controller.signal.aborted && request === sequence && access === accessGeneration()) location.value?.focus();
     } catch (failure) {
-        handleFailure(failure);
-        if (!disposed && request === sequence && access === accessGeneration()) {
+        if (!controller.signal.aborted && !disposed && request === sequence && access === accessGeneration()) {
+            handleFailure(failure);
             const detail = (failure as { detail?: string })?.detail;
             error.value = detail || 'We could not open this folder. Check the path and server permissions, or choose another folder.';
         }
-    } finally { if (request === sequence) busy.value = false; }
+    } finally { if (browseController === controller) browseController = undefined; if (!disposed && request === sequence) busy.value = false; }
 }
 function choose() {
     if (!disposed && !busy.value && props.online && listing.value?.path) {
@@ -38,8 +42,10 @@ function choose() {
     }
 }
 onMounted(() => { dialog.value?.showModal(); void browse(props.initialPath); });
-onUnmounted(() => { disposed = true; sequence++; });
-onAccessLost(() => { sequence++; listing.value = undefined; path.value = ''; error.value = ''; emit('close'); });
+onUnmounted(() => { disposed = true; sequence++; cancelBrowse(); });
+const stopOnAccessLost = onAccessLost(() => { sequence++; cancelBrowse(); busy.value = false; listing.value = undefined; path.value = ''; error.value = ''; emit('close'); });
+onUnmounted(stopOnAccessLost);
+watch(() => props.online, online => { if (!online) { sequence++; cancelBrowse(); busy.value = false; } });
 </script>
 
 <template>

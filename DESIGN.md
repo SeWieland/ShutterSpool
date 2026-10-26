@@ -55,6 +55,8 @@ The initial slice is dark only, including on an operating system that prefers li
 ## Colors
 
 Use the frontmatter palette for the page, panels, preview surface, borders and text.
+The semantic CSS tokens live in `main.css`; workspace styles consume them, and Nuxt UI's surface, text and border
+variables map to the same tokens.
 The logo supplies electric-blue primary actions and deep-navy supporting artwork. Links, focus and selection
 use a lighter shade of the same blue (`#6d92ff`) to preserve small-text contrast on elevated dark surfaces.
 Inline text links stay underlined without hover; the brand and photograph tiles retain their existing control styling.
@@ -71,6 +73,7 @@ Wrap long names in detail and expose a full accessible name when inbox titles tr
 ## Layout
 
 Standard workspace width is at most 1440px, with 24px desktop gutters and 16px phone gutters; Full width expands the shell.
+The header is 80px high on desktop and 68px at widths of 760px or less.
 Settings keeps one bounded content column beside a compact Workspace/Storage rail; on phones the two labeled choices sit above it.
 Form content remains bounded even with Full width selected.
 The desktop detail preview sits beside a 384px inspector with a charcoal surface background; below 760px they stack.
@@ -121,12 +124,13 @@ one shared caption background. Rule choices reuse these SVG ratings: filled 1–
 Camera/tags appear on hover, with paired-Asset camera identities deduplicated and the same background/transparency
 as the caption. Selection and details icons share round semitransparent hover/focus surfaces.
 Per-Asset metadata and delivery attempts belong in detail without internal UUID clutter.
-Use the full-color mark at 56px in the desktop header, 48px on phones and 72px on app sign-in.
+Use the full-color mark at 56px in the desktop header, 44px on phones (40px at 350px or less), and 72px on app sign-in.
 Tiny contexts use the crisp six-blade SVG outline with a hexagonal aperture; blue, white and navy variants share the geometry.
 The favicon uses a navy ground and blue outline. Preserve the full-color primary artwork.
 Curation uses signed ratings -1/0/1–5, an optional fixed color label and individual Unicode text tags.
-Rating filters use the signed icon controls for exact clicks and inclusive drag/Shift ranges, without duplicate
-From/Through selectors. Highlight every included value, including Not Rated when the range crosses zero.
+Rating filters show visible numbers beside the 1–5 star icons and use signed controls for exact clicks and inclusive
+drag/Shift ranges, without duplicate From/Through selectors. Highlight every included value, including Not Rated when
+the range crosses zero.
 Serialized autosave preserves per-Capture local intent; commas remain part of each tag.
 Release now stays disabled while committed edits are unresolved; Hold/Restore reflect saved policy before release.
 Conflicts show server values beside retained draft values and require an explicit choice.

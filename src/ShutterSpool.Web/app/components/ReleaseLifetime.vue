@@ -1,6 +1,10 @@
 <script setup lang="ts">
-import type { curationTiming } from '../lib/workspace-interactions';
-defineProps<{ state: ReturnType<typeof curationTiming> }>();
+import type { CaptureCurationResponse } from '../api/models';
+import { curationTiming } from '../lib/workspace-interactions';
+import { injectWorkspaceClock } from '../composables/useWorkspaceClock';
+const props = defineProps<{ curation?: CaptureCurationResponse | null }>();
+const now = injectWorkspaceClock();
+const state = computed(() => curationTiming(props.curation, now.value));
 </script>
 
 <template>

@@ -67,16 +67,16 @@ test('stale evidence freezes at observation; unknown and unscheduled state get n
 });
 
 function component(name, props, management, confirm = () => true) {
-    let generation = 0, unmount, accessLost; const events = [];
-    const scope = vm.createContext({ exports: {}, ref, computed, reactive, nextTick, useId: () => 'synthetic-dialog', watch: (target, callback) => watch(target, callback, { flush: 'sync' }),
-        defineProps: () => props, defineEmits: () => (...event) => events.push(event), onMounted() {}, onUnmounted(callback) { unmount = callback; },
+    let generation = 0, accessLost; const unmount = [], events = [];
+    const scope = vm.createContext({ exports: {}, ref, computed, reactive, nextTick, AbortController, AbortSignal, useId: () => 'synthetic-dialog', watch: (target, callback) => watch(target, callback, { flush: 'sync' }),
+        defineProps: () => props, defineEmits: () => (...event) => events.push(event), onMounted() {}, onUnmounted(callback) { unmount.push(callback); },
         window: { confirm, scrollY: 0, scrollTo() {} }, document: { activeElement: undefined }, clearInterval, setInterval,
         crypto: { randomUUID: () => '00000000-0000-0000-0000-000000000001' },
-        require: source => source.endsWith('/storage-presentation') ? presentation.exports : source.endsWith('/workspace-interactions') ? interactions.exports : source.endsWith('/retention') ? context.exports : source.endsWith('/session') ? { accessGeneration: () => generation, onAccessLost(callback) { accessLost = callback; } } : { api: { management }, handleFailure: failure => failure.status },
+        require: source => source.endsWith('/storage-presentation') ? presentation.exports : source.endsWith('/workspace-interactions') ? interactions.exports : source.endsWith('/retention') ? context.exports : source.endsWith('/session') ? { accessGeneration: () => generation, onAccessLost(callback) { accessLost = callback; return () => { if (accessLost === callback) accessLost = undefined; }; } } : { api: { management }, cancellable: signal => ({ signal }), handleFailure: failure => failure.status },
     });
     const script = parse(readFileSync(new URL(`../app/components/${name}.vue`, import.meta.url), 'utf8')).descriptor.scriptSetup.content;
     vm.runInContext(ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, scope);
-    return { run: expression => vm.runInContext(expression, scope), events, lose: () => { generation++; accessLost?.(); }, dispose: () => unmount?.(), render() {
+    return { run: expression => vm.runInContext(expression, scope), events, lose: () => { generation++; accessLost?.(); }, dispose: () => unmount.forEach(callback => callback()), render() {
         const descriptor = parse(readFileSync(new URL(`../app/components/${name}.vue`, import.meta.url), 'utf8')).descriptor;
         const compiled = compileScript(descriptor, { id: 'retention-control', inlineTemplate: true });
         const renderScope = vm.createContext({ ...scope, exports: {}, require: source => source === 'vue' ? Vue : scope.require(source) });
@@ -120,15 +120,126 @@ test('a late heart completion cannot announce or reconcile a different photograp
     const pending = fixture.run('toggle()'); props.captureId = 'new'; finish({}); await pending;
     assert.equal(fixture.events.length, 0); assert.notEqual(fixture.run('feedback.value'), 'Favorite saved.');
 });
-test('Trash failure does not request closing inspection and late success keeps the new photo feedback', async () => {
-    let finish, fail;
-    const props = reactive({ captureId: 'old', name: 'Old', evidence: { captureRevision: 2, asOf: new Date(), isFavorite: false, availableOriginals: [] } });
-    const fixture = component('CaptureTrashAction', props, { captures: { byId: () => ({ trash: { post: () => new Promise((resolve, reject) => { finish = resolve; fail = reject; }) } }) } });
-    let pending = fixture.run('trash()'); fail({ status: 409 }); await pending;
-    assert.equal(fixture.events[0][2], false);
-    pending = fixture.run('trash()'); props.captureId = 'new'; finish({}); await pending;
-    assert.equal(fixture.events[1][1], 'old'); assert.equal(fixture.events[1][2], true);
-    assert.equal(fixture.run('feedback.value'), '');
+test('Trash child validates evidence and emits a confirmed submission for shell-owned mutation', () => {
+    let confirmations = 0;
+    const evidence = { captureRevision: 2, asOf: new Date(), isFavorite: true, availableOriginals: [{ variant: 'JPEG', byteLength: 5, state: 'available' }] };
+    const props = reactive({ captureId: 'shot', name: 'Shot', evidence });
+    const fixture = component('CaptureTrashAction', props, {}, message => { confirmations++; assert.match(message, /JPEG \(5 bytes/); assert.match(message, /Favorite: yes/); assert.match(message, /only copies/); return true; });
+    fixture.run('trash()');
+    assert.equal(confirmations, 1);
+    assert.deepEqual(fixture.events, [['submit', 'shot', 2]], 'the child hands the confirmed id and revision to its owner');
+
+    props.evidence = { ...evidence, availableOriginals: [{ variant: 'JPEG', byteLength: 5, state: 'unknown' }] };
+    fixture.run('trash()');
+    assert.deepEqual(fixture.events[1], ['refresh', 'shot', false], 'missing removal authority requests fresh evidence without submitting');
+    assert.match(fixture.run('feedback.value'), /could not check the originals/);
+    assert.equal(confirmations, 1);
+
+    props.evidence = evidence;
+    const rejectConfirmation = component('CaptureTrashAction', props, {}, () => false);
+    rejectConfirmation.run('trash()');
+    assert.equal(rejectConfirmation.events.length, 0, 'canceling confirmation emits no mutation request');
+});
+test('Capture evidence reads only while active, forwards cancellation, and aborts when hidden', async () => {
+    let lost, unmount; const requests = [];
+    const props = reactive({ capture: { id: 'shot', assets: [], curation: {} }, generation: 0, active: false, focusState: 'Attention' });
+    let focusCount = 0, focusableVisible = false;
+    const management = { captures: { byId: () => ({
+        routing: { get: options => new Promise(resolve => requests.push({ kind: 'routing', options, resolve })) },
+        deliveries: { get: options => new Promise(resolve => requests.push({ kind: 'deliveries', options, resolve })) },
+        actions: { get: options => new Promise(resolve => requests.push({ kind: 'actions', options, resolve })) },
+    }) } };
+    const scope = vm.createContext({ exports: {}, AbortController, ref, computed, watch: (target, callback) => watch(target, callback, { flush: 'sync' }), nextTick, defineProps: () => props, defineEmits: () => () => {}, onUnmounted: callback => { unmount = callback; },
+        require: name => name.endsWith('/api') ? { api: { management }, cancellable: signal => ({ signal }), handleFailure() {} } : name.endsWith('/session') ? { accessGeneration: () => 0, onAccessLost: callback => { lost = callback; return () => { if (lost === callback) lost = undefined; }; } } : { deliveryPresentation: () => ({ tone: 'neutral', icon: '', label: '' }), formatFileSize: String },
+    });
+    const script = parse(readFileSync(new URL('../app/components/CaptureEvidence.vue', import.meta.url), 'utf8')).descriptor.scriptSetup.content;
+    vm.runInContext(ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, scope);
+    const run = expression => vm.runInContext(expression, scope);
+    scope.focusable = { dataset: { workState: 'Failed' }, closest: () => null, focus: () => focusCount++, scrollIntoView() {} };
+    scope.focusableVisible = () => focusableVisible;
+    run("evidence.value = { querySelectorAll: () => focusableVisible() ? [focusable] : [] }");
+    await nextTick(); assert.equal(requests.length, 0, 'collapsed evidence must not load in the background');
+    props.active = true; await nextTick();
+    assert.equal(requests.length, 3);
+    assert.ok(requests.every(request => request.options.options[0].signal instanceof AbortSignal));
+    requests.forEach(request => request.resolve({ items: [], nextCursor: null }));
+    await new Promise(resolve => setImmediate(resolve));
+    await nextTick(); assert.equal(focusCount, 0, 'a focus request is consumed when its first eligible read has no matching work');
+    assert.equal(run('deliveryReadSequence.value'), 1, 'only a successful current deliveries read advances recovery reconciliation');
+    focusableVisible = true;
+    run("deliveries.value = { items: [{ state: 'Failed' }] }");
+    await nextTick(); assert.equal(focusCount, 0, 'later evidence arrival cannot steal focus after the request was consumed');
+    props.generation++;
+    assert.equal(requests.length, 6, 'visible evidence refreshes when live generation changes');
+    props.focusState = 'RetryWait';
+    run("deliveries.value = { items: [] }");
+    props.active = false;
+    await nextTick(); assert.equal(focusCount, 0, 'deactivation while a focus continuation is queued cannot move focus');
+    assert.ok(requests.slice(3).every(request => request.options.options[0].signal.aborted), 'hiding the disclosure cancels pending reads');
+    const savedDecisions = run('decisions.value');
+    requests.slice(3).forEach(request => request.resolve({ items: [], nextCursor: null })); await nextTick();
+    assert.equal(run('deliveryReadSequence.value'), 1, 'late hidden results cannot clear uncertain recovery state');
+    assert.equal(run('decisions.value'), savedDecisions, 'late hidden results cannot replace already loaded evidence');
+    unmount?.(); assert.equal(lost, undefined, 'unmount releases the access-loss callback');
+});
+test('source activity observation helpers pass their AbortSignal to Kiota requests', async () => {
+    const calls = [];
+    const adapter = { management: { sources: { authenticationObservations: { get: async options => { calls.push(options); return { items: [], coverageComplete: true }; } }, }, activity: { transfers: { get: async options => { calls.push(options); return { epoch: 'epoch', items: [], coverageComplete: true }; } } } } };
+    const context = vm.createContext({ exports: {}, AbortController, AbortSignal, location: { origin: 'https://synthetic.example' },
+        require: name => name.includes('kiota-bundle') ? { DefaultRequestAdapter: class { constructor() {} } } : name.includes('kiota-http-fetchlibrary') ? { HttpClient: class {} } : name.endsWith('/shutterSpoolClient') ? { createShutterSpoolClient: () => adapter } : name.endsWith('/session') ? { clearAccess() {}, token: async () => '', onAccessLost: () => () => {} } : { withPreviewSlot: action => action() },
+    });
+    vm.runInContext(ts.transpileModule(readFileSync(new URL('../app/lib/api.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
+    const signal = new AbortController().signal;
+    await context.exports.readSourceAuthenticationObservations(['source'], signal);
+    await context.exports.readSourceActivity(['source'], signal);
+    assert.equal(calls.length, 2);
+    assert.ok(calls.every(options => options.options[0].signal === signal));
+});
+test('Trash uncertainty and shared pending state block submit while verification is an explicit event', () => {
+    const evidence = { captureRevision: 2, asOf: new Date(), isFavorite: false, availableOriginals: [{ variant: 'JPEG', byteLength: 5, state: 'available' }] };
+    const props = reactive({ captureId: 'shot', name: 'Shot', evidence, uncertain: true });
+    const fixture = component('CaptureTrashAction', props, {}, () => true);
+    fixture.run('trash()');
+    assert.equal(fixture.events.length, 0, 'uncertain outcome never submits another destructive command');
+    fixture.run('verify()');
+    assert.deepEqual(fixture.events, [['verify', 'shot']], 'verification is delegated to the persistent owner');
+
+    props.pending = true;
+    fixture.run('verify()'); fixture.run('trash()');
+    assert.equal(fixture.events.length, 1, 'pending state disables both verification and submission');
+    props.pending = false; props.verifying = true;
+    fixture.run('verify()');
+    assert.equal(fixture.events.length, 1, 'verification cannot be duplicated while already running');
+    props.verifying = false; props.disabled = true;
+    fixture.run('verify()'); fixture.run('trash()');
+    assert.equal(fixture.events.length, 1, 'access or parent locks disable all child requests');
+});
+
+test('resume recovery reads forward cancellation and cannot update an action after owner replacement', async () => {
+    let read, writes = 0;
+    const props = reactive({ captureId: 'old', name: 'Old', evidence: {
+        captureRevision: 2, asOf: new Date(), isFavorite: false,
+        availableOriginals: [{ variant: 'JPEG', byteLength: 5, state: 'available' }],
+        isPaused: true, disposition: 'active',
+    } });
+    const endpoint = {
+        get: options => new Promise(resolve => { read = { options, resolve }; }),
+        resume: { post: async () => { writes++; throw new Error('response lost'); } },
+    };
+    const fixture = component('CaptureResumeAction', props, { captures: { byId: () => endpoint } });
+    await fixture.run('resume()');
+    assert.equal(writes, 1);
+    assert.equal(fixture.run('needsReconcile.value'), true);
+    const pending = fixture.run('checkCurrent()');
+    const signal = read.options.options[0].signal;
+    assert.ok(signal instanceof AbortSignal);
+    props.captureId = 'new';
+    assert.equal(signal.aborted, true, 'the action aborts its superseded authoritative read');
+    read.resolve({ retention: { captureRevision: 99 } });
+    await pending;
+    assert.equal(fixture.run('verifiedRevision'), undefined, 'the action ignores the late read result');
+    assert.equal(fixture.events.length, 1, 'the replaced owner receives no refresh event');
+    fixture.dispose();
 });
 test('Empty loaded Trash confirms only its frozen loaded scope and reports per-item conflicts', async () => {
     const commands = [], prompts = [];

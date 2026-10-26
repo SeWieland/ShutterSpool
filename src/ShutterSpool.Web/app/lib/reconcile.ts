@@ -7,8 +7,11 @@ export interface PreviewInvalidation {
     all: boolean;
 }
 
+export type RefreshScope = 'capture' | 'previews' | 'sources' | 'delivery' | 'storage' | 'erasure';
+const allScopes: RefreshScope[] = ['capture', 'previews', 'sources', 'delivery', 'storage', 'erasure'];
+
 export function useReconciliation(
-    refresh: (ids?: Set<string>, previews?: PreviewInvalidation) => Promise<void>,
+    refresh: (ids?: Set<string>, previews?: PreviewInvalidation, scopes?: Set<RefreshScope>) => Promise<void>,
 ) {
     const online = ref(navigator.onLine);
     const connected = ref(false);
@@ -23,6 +26,7 @@ export function useReconciliation(
     let initial: Promise<void> | undefined;
     let stopped = false;
     let running = false;
+    const pendingScopes = new Set<RefreshScope>();
     let broad = false;
     const affected = new Set<string>();
     const previewIds = new Set<string>();
@@ -39,34 +43,49 @@ export function useReconciliation(
         running = true;
         const ids = broad ? undefined : new Set(affected);
         const previews = { ids: new Set(previewIds), all: allPreviews };
+        const scopes = new Set(pendingScopes);
         broad = false;
+        pendingScopes.clear();
         affected.clear();
         previewIds.clear();
         allPreviews = false;
         try {
-            await refresh(ids?.size ? ids : undefined, previews);
+            await refresh(ids?.size ? ids : undefined, previews, scopes);
         } catch {
             // The next foreground/safety read retries without an unbounded failure loop.
         } finally {
             running = false;
-            if (broad || affected.size || previewIds.size || allPreviews)
+            if (pendingScopes.size || broad || affected.size || previewIds.size || allPreviews)
                 queueFlush();
         }
     }
-    function schedule(id?: string, previewReady = false) {
+    function invalidate(scopes: RefreshScope | Iterable<RefreshScope>, ids?: Set<string>, previews?: PreviewInvalidation) {
         if (stopped) return;
-        if (!id || affected.size >= 60) {
-            broad = true;
-            affected.clear();
-        } else affected.add(id);
-        if (previewReady && id) {
-            if (previewIds.size >= 60) {
+        const incoming = typeof scopes === 'string' ? [scopes] : [...scopes];
+        for (const scope of incoming)
+            pendingScopes.add(scope);
+        if (pendingScopes.size > allScopes.length) pendingScopes.clear(), allScopes.forEach(scope => pendingScopes.add(scope));
+        if (incoming.includes('capture')) {
+            if (!ids || broad || affected.size + ids.size > 60) {
+                broad = true;
+                affected.clear();
+            } else for (const id of ids) affected.add(id);
+        }
+        if (previews && incoming.includes('previews')) {
+            if (previews.all || previewIds.size + previews.ids.size > 60) {
                 allPreviews = true;
                 previewIds.clear();
-            }
-            else if (!allPreviews) previewIds.add(id);
+            } else if (!allPreviews) for (const id of previews.ids) previewIds.add(id);
+        } else if (!previews && incoming.includes('previews')) {
+            allPreviews = true;
+            previewIds.clear();
         }
         queueFlush();
+    }
+    function schedule(id?: string, previewReady = false) {
+        if (previewReady && id) invalidate('previews', undefined, { ids: new Set([id]), all: false });
+        else if (id) invalidate('capture', new Set([id]));
+        else invalidate(allScopes);
     }
     function queueFlush() {
         if (!debounce)
@@ -78,7 +97,11 @@ export function useReconciliation(
     hub.on("captureChanged", (hint: { captureId: string; kind?: string }) => {
         if (stopped) return;
         activity.value = { ...hint, changeKind: hint.kind, kind: 'captureChanged', sequence: (activity.value?.sequence ?? 0) + 1 };
-        schedule(hint.captureId);
+        const scopes: RefreshScope[] = hint.kind === 'erasure'
+            ? ['capture', 'erasure', 'storage']
+            : hint.kind === 'retention' ? ['capture', 'storage']
+                : hint.kind === 'delivery' || hint.kind === 'routing' ? ['capture', 'delivery'] : ['capture'];
+        invalidate(scopes, new Set([hint.captureId]));
     });
     hub.on("previewReady", (hint: { captureId: string }) => {
         if (stopped) return;
@@ -90,13 +113,13 @@ export function useReconciliation(
         if (!authVersions.has(hint.sourceId) && authVersions.size >= 100) authVersions.delete(authVersions.keys().next().value!);
         authVersions.set(hint.sourceId, hint.version);
         authActivity.value = hint;
-        schedule();
+        invalidate('sources');
     });
     hub.on("resyncRequired", () => { connectionRecovery.value++; recoverySequence.value++; schedule(); });
     hub.on('sourceActivityChanged', (hint: SourceActivity) => {
         if (stopped) return;
         phaseActivity.value = hint;
-        schedule(hint.captureId);
+        invalidate(hint.captureId ? ['sources', 'capture'] : 'sources', hint.captureId ? new Set([hint.captureId]) : undefined);
     });
     hub.on('unassignedAuthenticationActivity', (hint: { observedAt: string }) => {
         if (!Number.isFinite(Date.parse(hint.observedAt)) || document.hidden || stopped) return;
@@ -189,5 +212,5 @@ export function useReconciliation(
             await flush();
         })();
     }
-    return { online, connected, activity, authActivity, phaseActivity, unassignedRejection, recoverySequence, connectionRecovery, initialize, refresh: () => schedule() };
+    return { online, connected, activity, authActivity, phaseActivity, unassignedRejection, recoverySequence, connectionRecovery, initialize, invalidate, refresh: () => schedule() };
 }
