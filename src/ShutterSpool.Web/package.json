@@ -22,7 +22,7 @@
     "esbuild@0.27.2": true
   },
   "dependencies": {
-    "@microsoft/kiota-bundle": "1.0.0-preview.106",
+    "@microsoft/kiota-bundle": "1.0.0-preview.111",
     "@microsoft/signalr": "10.0.11",
     "@nuxt/ui": "4.11.3",
     "oidc-client-ts": "3.5.0",
