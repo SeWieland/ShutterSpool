@@ -129,7 +129,12 @@ def main() -> int:
     result = subprocess.run(command, text=True, capture_output=True, check=False)
     combined_output = result.stdout + "\n" + result.stderr
     if not is_registry_access_denial(result.returncode, combined_output):
-        print("Registry access did not produce a clear 401/403 denial; isolation is unverified.", file=sys.stderr)
+        if result.returncode == 0:
+            print("Registry read succeeded in a context expected to be denied; isolation failed.", file=sys.stderr)
+        else:
+            status = re.search(r"\b[45][0-9]{2}\b", combined_output)
+            detail = f"; HTTP status {status.group()}" if status else ""
+            print(f"Registry command failed with exit code {result.returncode}{detail}, without a clear authorization denial; isolation is unverified.", file=sys.stderr)
         return 1
     print("Registry access returned an explicit authorization denial.")
     return 0
