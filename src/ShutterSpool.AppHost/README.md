@@ -97,7 +97,7 @@ When changing the graph, stop/restart through Aspire, then `aspire wait server -
 and wait for each enabled edge. Source edits require no graph restart.
 Build before setting ingress environment variables, then use `aspire start --no-build --non-interactive` so build-time OpenAPI discovery does not inherit incomplete callback settings.
 
-The edge is Community SFTPGo `2.7.5-9888a3d1`, pinned to `drakkan/sftpgo@sha256:9011fe608d336d3daf6ed6224b16fd40443aab8f3335e0b20853d6a539c58738`. It has no spool mount or exposed administration, SSH/SFTP or WebDAV listener. Its private HTTPFs endpoint streams into ShutterSpool's spool-owned receive operation; a synchronous upload hook establishes successful completion before Asset publication and FTP success. Its account store is disposable; every login and upload admission checks PostgreSQL.
+The edge uses the Community SFTPGo image pinned in [Program.cs](Program.cs). The [third-party notices](../../THIRD-PARTY-NOTICES.md#sftpgo-camera-ingress) identify its matching source and license terms. It has no spool mount or exposed administration, SSH/SFTP or WebDAV listener. Its private HTTPFs endpoint streams into ShutterSpool's spool-owned receive operation; a synchronous upload hook establishes successful completion before Asset publication and FTP success. Its account store is disposable; every login and upload admission checks PostgreSQL.
 
 Map and allow exactly the configured profile TCP ports in the host firewall; passive host and container port numbers match and are not proxied.
 Control/data peer checks stay enabled; active FTP and SITE are disabled.

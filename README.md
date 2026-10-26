@@ -25,8 +25,12 @@ The [source map](src/README.md) and [test guide](tests/README.md) locate impleme
 
 For development setup, checks and contribution guidance, see [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md).
 
-Open-source distribution is intended; no license has been selected or granted by this README.
-Third-party assets retain their own accompanying licenses.
+## License
+
+ShutterSpool's original code, documentation and project-created artwork are available under the [MIT License](LICENSE).
+[Third-party material and separately fetched components](THIRD-PARTY-NOTICES.md) retain their own terms.
+In particular, the optional SFTPGo camera edge uses AGPL-3.0-only with additional upstream terms; MIT does not license the entire combined deployment.
+Distribution and hosted operation must satisfy the applicable component and combined-work obligations.
 
 ## AI usage
 

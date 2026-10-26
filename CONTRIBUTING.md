@@ -42,3 +42,10 @@ Use synthetic photographs and controlled endpoints in review evidence.
 Do not publish packages, deploy, modify production data or contact external recipients as part of an ordinary contribution.
 
 The [release conventions](docs/release-policy.md) describe shared versions, artifact identity, compatibility and published notes.
+
+## Contribution rights
+
+Submit only material you have the right to contribute.
+Your original contributions are provided under the project's [MIT License](LICENSE).
+Identify any third-party material and its source, preserve its license and notices, and explain any redistribution requirements.
+Do not submit credentials, private media or material with uncertain provenance.
