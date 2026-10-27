@@ -17,18 +17,19 @@ SPEC.loader.exec_module(build_release)
 
 
 class ReleaseBuildTests(unittest.TestCase):
-    def test_candidate_targets_the_accepted_personal_ghcr_namespace(self):
-        self.assertEqual("ghcr.io/sewieland/shutterspool", build_release.IMAGE_REPOSITORY)
+    def test_versions_classify_experimental_and_stable_builds(self):
+        for version, experimental in (("0.1.0", True), ("0.1.0-alpha.1", True),
+                                      ("1.0.0-rc.1", True), ("1.0.0", False), ("2.3.4", False)):
+            with self.subTest(version=version):
+                build_release.validate_selection(version, "a" * 40, "a" * 40, False, False)
+                self.assertEqual(experimental, build_release.is_prerelease(version))
 
-    def test_requires_matching_explicit_prerelease_revision(self):
+    def test_requires_matching_revision_and_oci_compatible_semver(self):
         with self.assertRaises(build_release.BuildError):
             build_release.validate_selection("0.1.0-alpha.1", "a" * 40, "b" * 40, False, False)
-        with self.assertRaises(build_release.BuildError):
-            build_release.validate_selection("0.1.0", "a" * 40, "a" * 40, False, False)
-        with self.assertRaises(build_release.BuildError):
-            build_release.validate_selection("0.1.0-alpha.01", "a" * 40, "a" * 40, False, False)
-        with self.assertRaises(build_release.BuildError):
-            build_release.validate_selection("0.1.0-alpha.1+build.1", "a" * 40, "a" * 40, False, False)
+        for version in ("01.0.0", "1.0", "0.1.0-alpha.01", "0.1.0-alpha.1+build.1", "v1.0.0", "1.0.0-" + "a" * 128):
+            with self.subTest(version=version), self.assertRaises(build_release.BuildError):
+                build_release.validate_version(version)
 
     def test_package_declares_the_initial_migration_and_no_historical_upgrade(self):
         compatibility = build_release.DATABASE_COMPATIBILITY
@@ -36,9 +37,23 @@ class ReleaseBuildTests(unittest.TestCase):
         self.assertTrue(migration.is_file())
         self.assertEqual("initial-create", compatibility["baseline"])
         self.assertFalse(compatibility["historicalUpgradeSupported"])
-        self.assertEqual("pending", compatibility["qualification"])
-        self.assertEqual({"kind": "fresh-install-only", "publishedRelease": None, "qualification": "not-supported"},
+        self.assertNotIn("qualification", compatibility)
+        self.assertEqual({"kind": "fresh-install-only", "publishedRelease": None},
                          build_release.UPGRADE_BASELINE)
+
+    def test_release_archive_inventories_only_distributed_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "server-image.oci.tar").write_bytes(b"local image")
+            (root / ".env").write_text("SERVER_IMAGE=example@sha256:digest\n", encoding="utf-8")
+            (root / "release-manifest.json").write_text(json.dumps({"artifacts": build_release.file_manifest(root)}), encoding="utf-8")
+            archive = build_release.release_archive(root)
+            with tarfile.open(archive) as bundle:
+                self.assertEqual({".env", "release-manifest.json"}, set(bundle.getnames()))
+                manifest = json.load(bundle.extractfile("release-manifest.json"))
+            self.assertEqual({".env"}, set(manifest["artifacts"]))
+            checksum = archive.with_suffix(archive.suffix + ".sha256").read_text(encoding="utf-8")
+            self.assertEqual(f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n", checksum)
 
     def test_dirty_source_requires_rehearsal_override(self):
         with self.assertRaises(build_release.BuildError):

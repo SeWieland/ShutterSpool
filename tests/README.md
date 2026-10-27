@@ -9,10 +9,10 @@ Pull requests targeting `main` also run `Dependency review`, which rejects newly
 Dependabot checks GitHub Actions, npm and NuGet weekly and proposes security updates; updates still require the normal checks and maintainer review.
 GitHub-managed CodeQL scans Actions, C#, JavaScript/TypeScript and Python on supported pushes and pull requests and on its scheduled runs. Static analysis complements the checks below; it does not qualify camera or recovery behavior.
 
-Pushes to `main` and pull requests targeting `main` run the .NET suites with PostgreSQL, frontend type/test/build checks, migration and generated-client consistency checks, camera-client security, edge certificate validation and lightweight release-builder/publication tests.
+Pushes to `main` and pull requests targeting `main` run the .NET suites with PostgreSQL, frontend type/test/build checks, migration and generated-client consistency checks, camera-client security, edge certificate validation and release-builder/publication checks.
 The release-builder and publication tests use temporary fixtures and perform no application builds or registry writes.
-Full image/Compose builds and private GHCR staging are manual through the [private candidate workflow](../.github/workflows/candidate.yml), with an explicit prerelease version and exact source commit on `main`.
-Its staging gate remains disabled until the access configuration and required checks are accepted. See the [release workflow conventions](../docs/release-policy.md#stage-and-promote-artifacts); offline tests do not qualify live access or public publication.
+Version tags on commits in `main` with successful CI run the [`release.yml` workflow](../.github/workflows/release.yml), which builds the image and Compose package, publishes the image to GHCR and prepares a GitHub Release draft. The maintainer reviews and publishes the draft.
+The workflow retains the completed build as a seven-day Actions artifact so failed jobs can be rerun without rebuilding. Offline tests do not establish live GHCR access or anonymous retrieval. See the [release workflow conventions](../docs/release-policy.md#publish-from-a-version-tag).
 Backup/restore rehearsals and the opt-in runtime/provider checks below are separate qualification work; run the affected checks when changing those boundaries and before claiming release readiness.
 
 ## .NET suites
@@ -67,7 +67,7 @@ Run checks from the repository root with Python 3.10+ unless noted. These use co
 | `python tests/verify-camera-ftp-client.py` | Exercise the shared `tests/camera_ftp.py` client's certificate/hostname validation, protected-data and no-plaintext-fallback behavior. |
 | `python tests/verify-edge-startup.py` | Reject absent, expired, wrong-host or wrong-key edge certificates; requires a POSIX shell and OpenSSL. |
 | `python tests/verify-release-build.py` | Check package construction and refusal paths with controlled fixtures. |
-| `bash tests/verify-container-promotion.sh` | Check our tag collision and partial-retry behavior with a temporary ORAS substitute. Requires Bash; no registry credentials or network access. |
+| `bash tests/verify-release-publication.sh` | Check only the publication helper's own collision and partial-retry decisions with controlled command substitutes; requires Bash, jq, tar and sha256sum, with no registry credentials or network access. |
 | `python tests/verify-ftps-edge.py` | Exercise the pinned disposable edge's protocol behavior and controlled certificate replacement; requires Docker and OpenSSL. Add `--legacy` for the separate RSA AES-CBC profile. |
 | `python tests/verify-keycloak-theme.py` | Check theme preflight, selection and fallback in the pinned Keycloak shell with a controlled administrative-command stub; requires Docker. |
 | `python tests/verify-sftpgo-httpfs.py` | Characterize synchronous completion, same-name uploads, rejected append/resume and hook-failure cleanup with synthetic bytes on a disposable loopback FTP endpoint; requires Docker. |
@@ -78,6 +78,6 @@ The FTPS edge check validates a synthetic replacement certificate's chain, hostn
 It does not exercise ACME issuance, unattended renewal or a physical camera's trust store.
 The SFTPGo check removes its own uniquely named container and temporary callback listener; it characterizes the dependency rather than proving ShutterSpool's end-to-end durability.
 
-For package construction see [Compose candidate building](../src/ShutterSpool.AppHost/README.md#prepare-a-compose-candidate).
+For package construction see [Compose package building](../src/ShutterSpool.AppHost/README.md#build-a-compose-package).
 For an actual stopped-writer backup/restore use the [operator maintenance guide](../deploy/operations/README.md).
 Check explicit skips and the relevant runtime evidence before making an installation, recovery or compatibility claim.

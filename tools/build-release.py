@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare a private, local linux/amd64 ShutterSpool candidate artifact."""
+"""Build a local linux/amd64 image and Compose release package without publishing."""
 
 from __future__ import annotations
 
@@ -20,15 +20,14 @@ ROOT = Path(__file__).resolve().parents[1]
 APPHOST = ROOT / "src/ShutterSpool.AppHost/ShutterSpool.AppHost.csproj"
 DOCKERFILE = ROOT / "deploy/Server.Dockerfile"
 IMAGE_REPOSITORY = "ghcr.io/sewieland/shutterspool"
-SEMVER_PRERELEASE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$")
+SEMVER = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$")
 ASPIRE_CLI_VERSION = "13.6.0"
 DATABASE_COMPATIBILITY = {
     "baseline": "initial-create",
     "initialMigration": "20261025211318_InitialCreate",
     "historicalUpgradeSupported": False,
-    "qualification": "pending",
 }
-UPGRADE_BASELINE = {"kind": "fresh-install-only", "publishedRelease": None, "qualification": "not-supported"}
+UPGRADE_BASELINE = {"kind": "fresh-install-only", "publishedRelease": None}
 LFS_HEADER = b"version https://git-lfs.github.com/spec/v1\n"
 COMPOSE_VARIABLES = {
     "BACKEND_SUBNET", "COMPOSE_PROJECT_NAME", "HTTPS_LISTEN_ADDRESS", "HTTPS_PORT",
@@ -57,10 +56,15 @@ def run(command: list[str], *, cwd: Path = ROOT, env: dict[str, str] | None = No
 
 
 def validate_version(version: str) -> None:
-    match = SEMVER_PRERELEASE.fullmatch(version)
+    match = SEMVER.fullmatch(version)
     if not match or any(identifier.isdigit() and len(identifier) > 1 and identifier.startswith("0")
-                        for identifier in match.group(4).split(".")) or "+" in version:
-        raise BuildError("Candidate version must be an explicit SemVer prerelease with an OCI-compatible tag, such as 0.1.0-alpha.1.")
+                        for identifier in (match.group(4) or "").split(".")) or len(version) > 128:
+        raise BuildError("Version must be OCI-compatible SemVer without build metadata, such as 0.1.0-alpha.1 or 1.0.0.")
+
+
+def is_prerelease(version: str) -> bool:
+    validate_version(version)
+    return version.startswith("0.") or "-" in version
 
 
 def required_sdk_version(global_json: Path = ROOT / "global.json") -> tuple[int, int, int]:
@@ -71,7 +75,7 @@ def required_sdk_version(global_json: Path = ROOT / "global.json") -> tuple[int,
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise BuildError(f"Cannot read a numeric SDK version from {global_json}.") from exc
     if len(parts) != 3 or sdk.get("rollForward") != "latestPatch":
-        raise BuildError("Candidate builds require a three-part SDK version with the existing latestPatch roll-forward policy.")
+        raise BuildError("Package builds require a three-part SDK version with the existing latestPatch roll-forward policy.")
     return parts
 
 
@@ -89,7 +93,7 @@ def validate_sdk_version(actual: str, required: tuple[int, int, int]) -> str:
 
 def validate_aspire_cli_version(actual: str) -> str:
     if actual.split("+", maxsplit=1)[0] != ASPIRE_CLI_VERSION:
-        raise BuildError(f"Candidate builds require Aspire CLI {ASPIRE_CLI_VERSION}; found {actual}.")
+        raise BuildError(f"Package builds require Aspire CLI {ASPIRE_CLI_VERSION}; found {actual}.")
     return actual
 
 
@@ -102,7 +106,7 @@ def source_identity(allow_dirty: bool) -> tuple[str, bool, dict[str, str]]:
     revision = run(["git", "rev-parse", "HEAD"]).lower()
     status = run(["git", "status", "--porcelain", "--untracked-files=all"])
     if status and not allow_dirty:
-        raise BuildError("Source tree is dirty; commit the candidate inputs or use --allow-dirty for a development rehearsal.")
+        raise BuildError("Source tree is dirty; commit the package inputs or use --allow-dirty for a development rehearsal.")
     if status:
         print("Development rehearsal: source tree is dirty; output will be labelled unreleased.", file=sys.stderr)
     tracked = run(["git", "ls-files", "-co", "--exclude-standard", "-z"]).split("\0")
@@ -118,7 +122,7 @@ def validate_selection(version: str, selected_revision: str, head_revision: str,
     if selected_revision.lower() != head_revision.lower():
         raise BuildError(f"Selected revision {selected_revision} does not match checkout HEAD {head_revision}.")
     if dirty and not allow_dirty:
-        raise BuildError("Source tree is dirty; commit the candidate inputs or use --allow-dirty for a development rehearsal.")
+        raise BuildError("Source tree is dirty; commit the package inputs or use --allow-dirty for a development rehearsal.")
 
 
 def copy_tree(source: Path, destination: Path) -> None:
@@ -181,12 +185,12 @@ def build_source_paths(relative_paths: list[str]) -> list[str]:
 
 def verify_source_unchanged(revision: str, initial: dict[str, str], allow_dirty: bool) -> dict[str, str]:
     if run(["git", "rev-parse", "HEAD"]).lower() != revision:
-        raise BuildError("Git HEAD changed during candidate preparation.")
+        raise BuildError("Git HEAD changed during package preparation.")
     paths = run(["git", "ls-files", "-co", "--exclude-standard", "-z"]).split("\0")
     current = source_snapshot(ROOT, build_source_paths(paths))
     changed = changed_paths(initial, current)
     if changed and not allow_dirty:
-        raise BuildError("Source files changed during candidate preparation: " + ", ".join(changed))
+        raise BuildError("Source files changed during package preparation: " + ", ".join(changed))
     return current
 
 
@@ -194,7 +198,7 @@ def verify_oci_attestations(archive: Path, expected_digest: str) -> list[str]:
     def read_json(bundle: tarfile.TarFile, name: str) -> dict[str, object]:
         member = bundle.extractfile(name)
         if member is None:
-            raise BuildError(f"OCI candidate is missing {name}.")
+            raise BuildError(f"OCI package is missing {name}.")
         return json.load(member)
 
     with tarfile.open(archive, "r") as bundle:
@@ -205,10 +209,10 @@ def verify_oci_attestations(archive: Path, expected_digest: str) -> list[str]:
         nested_name = "blobs/sha256/" + expected_digest.removeprefix("sha256:")
         nested_blob = bundle.extractfile(nested_name)
         if nested_blob is None:
-            raise BuildError("OCI candidate manifest blob is missing.")
+            raise BuildError("OCI package manifest blob is missing.")
         nested_bytes = nested_blob.read()
         if hashlib.sha256(nested_bytes).hexdigest() != expected_digest.removeprefix("sha256:"):
-            raise BuildError("OCI candidate manifest digest does not match its content.")
+            raise BuildError("OCI package manifest digest does not match its content.")
         nested = json.loads(nested_bytes)
         attestation = next((item for item in nested.get("manifests", [])
                             if item.get("annotations", {}).get("vnd.docker.reference.type") == "attestation-manifest"), None)
@@ -227,13 +231,25 @@ def verify_oci_attestations(archive: Path, expected_digest: str) -> list[str]:
     required = {"https://spdx.dev/Document", "https://slsa.dev/provenance/v1"}
     missing = required - predicates
     if missing:
-        raise BuildError("OCI candidate lacks required SBOM/provenance attestations: " + ", ".join(sorted(missing)))
+        raise BuildError("OCI package lacks required SBOM/provenance attestations: " + ", ".join(sorted(missing)))
     return sorted(predicates)
 
 
 def file_manifest(directory: Path) -> dict[str, dict[str, object]]:
     return {path.relative_to(directory).as_posix(): {"size": path.stat().st_size, "sha256": sha256_file(path)}
-            for path in sorted(directory.rglob("*")) if path.is_file() and path.name != "release-manifest.json"}
+            for path in sorted(directory.rglob("*")) if path.is_file()
+            and path.name not in {"release-manifest.json", "server-image.oci.tar", "shutterspool-compose.tar.gz", "shutterspool-compose.tar.gz.sha256"}}
+
+
+def release_archive(directory: Path) -> Path:
+    archive = directory / "shutterspool-compose.tar.gz"
+    files = [*file_manifest(directory), "release-manifest.json"]
+    with tarfile.open(archive, "w:gz") as bundle:
+        for relative in files:
+            bundle.add(directory / relative, arcname=relative)
+    archive.with_suffix(archive.suffix + ".sha256").write_text(
+        f"{sha256_file(archive)}  {archive.name}\n", encoding="utf-8")
+    return archive
 
 
 def image_refs(compose_file: Path) -> list[str]:
@@ -265,7 +281,7 @@ def base_images(dockerfile: Path, build_args: dict[str, str] | None = None) -> l
 def parse_docker_versions(output: str) -> tuple[str, str]:
     client, separator, server = output.strip().partition("|")
     if not separator or not client.strip() or not server.strip():
-        raise BuildError("Docker client and server versions must both be available for a reproducible candidate build.")
+        raise BuildError("Docker client and server versions must both be available for a reproducible package build.")
     return client.strip(), server.strip()
 
 
@@ -311,10 +327,10 @@ def publish_compose(args: argparse.Namespace, output: Path, enabled_profiles: se
     output.mkdir(parents=True)
     run([args.aspire, "publish", "--apphost", str(APPHOST), "--output-path", str(output), "--non-interactive"],
         env=publish_environment(enabled_profiles))
-    candidates = [*output.rglob("docker-compose.yaml"), *output.rglob("docker-compose.yml")]
-    if len(candidates) != 1:
-        raise BuildError(f"Expected one generated Compose file for {sorted(enabled_profiles)}, found {len(candidates)}.")
-    compose = candidates[0]
+    packages = [*output.rglob("docker-compose.yaml"), *output.rglob("docker-compose.yml")]
+    if len(packages) != 1:
+        raise BuildError(f"Expected one generated Compose file for {sorted(enabled_profiles)}, found {len(packages)}.")
+    compose = packages[0]
     refs = validate_compose(compose)
     if not {"camera-edge", "server"}.issubset(set(re.findall(r"(?m)^  ([a-zA-Z0-9_-]+):\s*$", compose.read_text(encoding="utf-8")))):
         raise BuildError("Aspire publish omitted the required Server or camera-edge service.")
@@ -334,10 +350,10 @@ def prepare(args: argparse.Namespace) -> Path:
     validate_selection(args.version, args.revision, revision, dirty, args.allow_dirty)
     output = args.output.resolve()
     if output.exists():
-        raise BuildError(f"Refusing to overwrite existing candidate artifacts: {output}")
+        raise BuildError(f"Refusing to overwrite existing package artifacts: {output}")
     output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="shutterspool-candidate-", dir=output.parent) as temp:
-        stage = Path(temp) / "candidate"
+    with tempfile.TemporaryDirectory(prefix="shutterspool-package-", dir=output.parent) as temp:
+        stage = Path(temp) / "package"
         stage.mkdir()
         (stage / "profiles").mkdir()
         variants = [
@@ -385,18 +401,18 @@ def prepare(args: argparse.Namespace) -> Path:
         build_tools = build_environment(args)
         source_at_finish = verify_source_unchanged(revision, source_at_start, args.allow_dirty)
         env_template = (ROOT / "deploy/.env.example").read_text(encoding="utf-8")
-        env_template = env_template.replace("SHUTTERSPOOL_VERSION=REPLACE_WITH_CANDIDATE_VERSION", f"SHUTTERSPOOL_VERSION={args.version}")
-        env_template = env_template.replace("SERVER_IMAGE=REPLACE_WITH_QUALIFIED_IMAGE_DIGEST", f"SERVER_IMAGE={image}@{digest}")
+        env_template = env_template.replace("SHUTTERSPOOL_VERSION=REPLACE_WITH_RELEASE_VERSION", f"SHUTTERSPOOL_VERSION={args.version}")
+        env_template = env_template.replace("SERVER_IMAGE=REPLACE_WITH_IMAGE_DIGEST", f"SERVER_IMAGE={image}@{digest}")
         (stage / ".env").write_text(env_template, encoding="utf-8")
         manifest = {
             "format": 1, "version": args.version, "commit": revision,
-            "candidateStatus": "development-rehearsal" if dirty or changed_paths(source_at_start, source_at_finish) else "unreleased-candidate",
-            "qualification": "pending", "qualificationNote": "A successful artifact build does not qualify installation, upgrade, recovery, host, or public-ingress claims.",
+            "developmentBuild": dirty or bool(changed_paths(source_at_start, source_at_finish)),
+            "prerelease": is_prerelease(args.version),
             "buildInputs": {"startSha256": fingerprint_snapshot(source_at_start),
                             "finishSha256": fingerprint_snapshot(source_at_finish),
                             "hasConcurrentChanges": bool(changed_paths(source_at_start, source_at_finish)),
                             "changedFiles": changed_paths(source_at_start, source_at_finish)},
-            "platform": "linux/amd64", "serverImage": {"reference": image, "digest": digest, "artifact": "server-image.oci.tar"},
+            "platform": "linux/amd64", "serverImage": {"reference": image, "digest": digest},
             "attestations": attestations,
             "buildEnvironment": build_tools,
             "sdkImageVersion": sdk_image_version, "sdkHostVersion": sdk_host_version,
@@ -413,9 +429,10 @@ def prepare(args: argparse.Namespace) -> Path:
         manifest["buildInputs"]["hasConcurrentChanges"] = bool(changed)
         manifest["buildInputs"]["changedFiles"] = changed
         if changed:
-            manifest["candidateStatus"] = "development-rehearsal"
+            manifest["developmentBuild"] = True
             print("Development rehearsal warning: build inputs changed during preparation: " + ", ".join(changed), file=sys.stderr)
         (stage / "release-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        release_archive(stage)
         stage.rename(output)
     return output
 
@@ -424,7 +441,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True)
     parser.add_argument("--revision", required=True, help="Exact 40-character Git SHA to build")
-    parser.add_argument("--output", required=True, type=Path, help="New local candidate artifact directory")
+    parser.add_argument("--output", required=True, type=Path, help="New local package artifact directory")
     parser.add_argument("--aspire", default="aspire")
     parser.add_argument("--docker", default="docker")
     parser.add_argument("--allow-dirty", action="store_true", help="Allow a labelled, unreleased development rehearsal")

@@ -81,8 +81,8 @@ jobs:
         run: python tests/verify-camera-ftp-client.py
       - name: Verify release builder
         run: python tests/verify-release-build.py
-      - name: Test container promotion conflict handling
-        run: bash tests/verify-container-promotion.sh
+      - name: Test release publication conflict handling
+        run: bash tests/verify-release-publication.sh
       - name: Test supplied camera certificate validation
         run: python tests/verify-edge-startup.py
       - name: Restore core tests

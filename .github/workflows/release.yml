@@ -1,0 +1,137 @@
+name: Prepare tagged release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-publication
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.ref_name }}
+  REPOSITORY: ${{ github.repository }}
+
+jobs:
+  build:
+    if: github.repository == 'SeWieland/ShutterSpool'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          lfs: true
+      - name: Require source on main and successful CI
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          git merge-base --is-ancestor HEAD origin/main
+          commit=$(git rev-parse HEAD)
+          test "$(gh api "repos/$REPOSITORY/commits/$RELEASE_TAG" --jq .sha)" = "$commit"
+          python -c 'import runpy,sys; runpy.run_path("tools/build-release.py")["validate_version"](sys.argv[1])' "${RELEASE_TAG#v}"
+          for workflow in CI CodeQL; do
+            test "$(gh run list --repo "$REPOSITORY" --workflow "$workflow" --commit "$commit" --branch main --limit 1 --json conclusion --jq '.[0].conclusion')" = success
+          done
+          artifacts=$(gh api "repos/$REPOSITORY/actions/runs/$RUN_ID/artifacts" --jq '.artifacts[].name')
+          if grep -Fxq "release-$RUN_ID" <<< "$artifacts"; then
+            echo 'Build already retained. Re-run only failed jobs to reuse it.' >&2; exit 1
+          fi
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6 # v1
+        with:
+          url: https://github.com/oras-project/oras/releases/download/v1.3.6/oras_1.3.6_linux_amd64.tar.gz
+          checksum: 66fb0ad7206f3f6fa77ed5b552049d364ccf4b50b1684554f731f76302b52ca0
+      - name: Refuse to rebuild an existing version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          printf '%s' "$GH_TOKEN" | oras login ghcr.io --username "$ACTOR" --password-stdin
+          reference="ghcr.io/sewieland/shutterspool:${RELEASE_TAG#v}"
+          if oras resolve "$reference" 2>"$RUNNER_TEMP/registry-error"; then
+            echo 'Image version exists. Resume its retained publication job instead.' >&2; exit 1
+          fi
+          grep -Fxq "Error response from registry: failed to resolve digest: $reference: not found" "$RUNNER_TEMP/registry-error"
+          if gh release view "$RELEASE_TAG" --repo "$REPOSITORY" --json isDraft 2>"$RUNNER_TEMP/release-error" > /dev/null; then
+            echo 'Release already exists. Resume its retained publication job instead.' >&2; exit 1
+          fi
+          grep -Fxq 'release not found' "$RUNNER_TEMP/release-error"
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: src/ShutterSpool.Web/package.json
+          cache: npm
+          cache-dependency-path: src/ShutterSpool.Web/package-lock.json
+      - name: Install Aspire CLI
+        run: |
+          dotnet tool install --tool-path "$RUNNER_TEMP/aspire" Aspire.Cli --version 13.6.0
+          echo "$RUNNER_TEMP/aspire" >> "$GITHUB_PATH"
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - name: Build image and Compose archive
+        run: >-
+          python tools/build-release.py --version "${RELEASE_TAG#v}" --revision "$(git rev-parse HEAD)"
+          --output "$RUNNER_TEMP/release"
+      - name: Retain build for publication and failed-job retries
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/release/server-image.oci.tar
+            ${{ runner.temp }}/release/shutterspool-compose.tar.gz
+            ${{ runner.temp }}/release/shutterspool-compose.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: write
+      actions: read
+    steps:
+      - name: Check out the same tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6 # v1
+        with:
+          url: https://github.com/oras-project/oras/releases/download/v1.3.6/oras_1.3.6_linux_amd64.tar.gz
+          checksum: 66fb0ad7206f3f6fa77ed5b552049d364ccf4b50b1684554f731f76302b52ca0
+      - name: Download this run's retained build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.run_id }}
+        run: gh run download "$RUN_ID" --repo "$REPOSITORY" --name "release-$RUN_ID" --dir "$RUNNER_TEMP/release"
+      - name: Publish container and prepare draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          export RELEASE_COMMIT
+          RELEASE_COMMIT=$(git rev-parse HEAD)
+          git merge-base --is-ancestor HEAD origin/main
+          test "$(gh api "repos/$REPOSITORY/commits/$RELEASE_TAG" --jq .sha)" = "$RELEASE_COMMIT"
+          printf '%s' "$GH_TOKEN" | oras login ghcr.io --username "$ACTOR" --password-stdin
+          bash tools/publish-release.sh "$RUNNER_TEMP/release" "$REPOSITORY" "$RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"

@@ -16,7 +16,7 @@ See the guides below for their configuration and compatibility limits.
 Choose your task from the [Using, Operating and Developing guides](docs/README.md).
 For camera setup, start with [camera compatibility](docs/camera-compatibility.md).
 For a basic installation, start with the [packaged setup TL;DR](deploy/README.md#tldr).
-[Operator instructions](docs/setup/README.md) cover configuration, supported recovery and incompatible older-data transitions. Generated candidates do not imply a published release.
+[Operator instructions](docs/setup/README.md) cover configuration, supported recovery and incompatible older-data transitions. A locally built package is not a published release.
 
 Developers can [understand the architecture](docs/architecture/system-boundaries.md),
 [follow a photograph through the code](docs/core-workflow.md), then
