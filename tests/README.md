@@ -9,10 +9,10 @@ Pull requests targeting `main` also run `Dependency review`, which rejects newly
 Dependabot checks GitHub Actions, npm and NuGet weekly and proposes security updates; updates still require the normal checks and maintainer review.
 GitHub-managed CodeQL scans Actions, C#, JavaScript/TypeScript and Python on supported pushes and pull requests and on its scheduled runs. Static analysis complements the checks below; it does not qualify camera or recovery behavior.
 
-Pushes to `main` and pull requests targeting `main` run the .NET suites with PostgreSQL, frontend type/test/build checks, migration and generated-client consistency checks, camera-client security, edge certificate validation and lightweight release-builder/publication tests.
-The release-builder and publication tests use temporary fixtures and perform no application builds or registry writes.
-Full image/Compose builds and private GHCR staging are manual through the [private candidate workflow](../.github/workflows/candidate.yml), with an explicit prerelease version and exact source commit on `main`.
-Its staging gate remains disabled until the access configuration and required checks are accepted. See the [release workflow conventions](../docs/release-policy.md#stage-and-promote-artifacts); offline tests do not qualify live access or public publication.
+Pushes to `main` and pull requests targeting `main` run the .NET suites with PostgreSQL, frontend type/test/build checks, migration and generated-client consistency checks, camera-client security, edge certificate validation and release-builder checks.
+The release-builder tests use temporary fixtures and perform no application builds or registry writes.
+Version tags on commits in `main` with successful CI run the [`release.yml` workflow](../.github/workflows/release.yml), which builds and pushes the image with the official Docker action, packages the Compose ZIP, checks anonymous manifest retrieval and release assets, then publishes the GitHub Release.
+Available package files are retained as a seven-day Actions artifact. Offline tests do not establish live GHCR access or anonymous retrieval. See the [release workflow conventions](../docs/release-policy.md#publish-from-a-version-tag).
 Backup/restore rehearsals and the opt-in runtime/provider checks below are separate qualification work; run the affected checks when changing those boundaries and before claiming release readiness.
 
 ## .NET suites
@@ -66,9 +66,7 @@ Run checks from the repository root with Python 3.10+ unless noted. These use co
 | --- | --- |
 | `python tests/verify-camera-ftp-client.py` | Exercise the shared `tests/camera_ftp.py` client's certificate/hostname validation, protected-data and no-plaintext-fallback behavior. |
 | `python tests/verify-edge-startup.py` | Reject absent, expired, wrong-host or wrong-key edge certificates; requires a POSIX shell and OpenSSL. |
-| `python tests/verify-release-build.py` | Check package construction and refusal paths with controlled fixtures. |
-| `python tests/verify-ghcr-publication.py` | Check candidate and bundle identities, OCI graph/attestation integrity and immutable-tag conflict/retry handling with offline fixtures. No registry credentials or network access are used. |
-| `python tests/verify-registry-isolation.py` | Check the synthetic OCI layout generator, unique probe tags, overwrite refusal and explicit authorization-denial classification. No registry credentials or network access are used. |
+| `python tests/verify-release-build.py` | Check Compose package construction and refusal paths with controlled fixtures. |
 | `python tests/verify-ftps-edge.py` | Exercise the pinned disposable edge's protocol behavior and controlled certificate replacement; requires Docker and OpenSSL. Add `--legacy` for the separate RSA AES-CBC profile. |
 | `python tests/verify-keycloak-theme.py` | Check theme preflight, selection and fallback in the pinned Keycloak shell with a controlled administrative-command stub; requires Docker. |
 | `python tests/verify-sftpgo-httpfs.py` | Characterize synchronous completion, same-name uploads, rejected append/resume and hook-failure cleanup with synthetic bytes on a disposable loopback FTP endpoint; requires Docker. |
@@ -79,24 +77,6 @@ The FTPS edge check validates a synthetic replacement certificate's chain, hostn
 It does not exercise ACME issuance, unattended renewal or a physical camera's trust store.
 The SFTPGo check removes its own uniquely named container and temporary callback listener; it characterizes the dependency rather than proving ShutterSpool's end-to-end durability.
 
-### GHCR staging access probe
-
-This temporary setup check is separate from the integrity, approval and anonymous-retrieval checks required for each publication.
-The manually dispatched [GHCR staging isolation workflow](../.github/workflows/registry-isolation.yml) writes only a non-runnable synthetic image and a synthetic Compose/manifest bundle under unique tags in `ghcr.io/sewieland/shutterspool-candidates`. It never builds the application image, publishes a release, changes package visibility or deletes tags.
-
-1. Run it from `main` in `SeWieland/ShutterSpool` with `mode=create` and confirm the synthetic-only checkbox.
-2. After that succeeds, open the personal account's `shutterspool-candidates` package settings. Confirm the package is private and remove inherited repository access. Inspect user, Actions and Codespaces grants, remove unintended access, then grant `SeWieland/ShutterSpool` explicit Actions write access. GitHub documents [per-package inheritance controls for personal accounts](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility#selecting-the-inheritance-setting-for-packages-scoped-to-your-personal-account); the organization-level inheritance switch is separate. The package must remain private.
-3. Start a second dispatch with `mode=check`, entering the create run's ID and attempt.
-
-The check workflow recreates that deterministic fixture, then a `packages: read` job proves the tagged image and bundle exist and verifies the retrieved bundle files against their source hashes.
-A dependent job first checks anonymous access, then logs in with its `GITHUB_TOKEN` that has no `packages` permission and checks both objects again. The anonymous and limited-token controls use separate ORAS auth files.
-Only explicit registry authorization denials count, including 401/403 responses and recognized `unauthorized`/`denied` messages; a missing object, timeout or unrelated failure is reported as unverified.
-If GHCR rejects the limited-scope token during login, the authenticated negative control is marked unavailable.
-
-GitHub separately [warns that public-repository Actions grants may permit fork access to private packages](https://docs.github.com/en/packages/managing-github-packages-using-github-actions-workflows/publishing-and-installing-a-package-with-github-actions#default-permissions-and-access-settings-for-packages-modified-through-workflows).
-The manual setup reviews the package controls; the workflow checks the documented retrieval and denial behavior. It does not establish access behavior for an independent account or genuine fork.
-Do not place real candidates in staging until the package is private and the intended access configuration has been reviewed.
-
-For package construction see [Compose candidate building](../src/ShutterSpool.AppHost/README.md#prepare-a-compose-candidate).
+For package construction see [Compose package building](../src/ShutterSpool.AppHost/README.md#build-a-compose-package).
 For an actual stopped-writer backup/restore use the [operator maintenance guide](../deploy/operations/README.md).
 Check explicit skips and the relevant runtime evidence before making an installation, recovery or compatibility claim.
