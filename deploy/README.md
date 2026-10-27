@@ -3,19 +3,19 @@
 Choose an experimental release before the project has a stable `1.x` release. Every `0.x` version and every prerelease suffix is experimental. Unsuffixed releases beginning with `1.0.0` carry the documented stable compatibility promise.
 
 This package targets one Server instance on one Linux amd64 Docker host.
-Inspect `release-manifest.json` for the version, source commit, image digest, dependency versions and compatibility limits.
+Inspect `release-manifest.json` for the version, source commit, platform, image digest, upstream image references, database compatibility and upgrade baseline.
 A build alone does not qualify compatibility; follow the instructions and limits published with that release.
 The observed test environment is Docker Desktop/WSL2 with Linux volumes. Native Linux storage, ARM and public FTPS require separate qualification.
 
 ## Get a published release
 
-Download `shutterspool-compose.tar.gz` and `shutterspool-compose.tar.gz.sha256` from the chosen [GitHub Release](https://github.com/SeWieland/ShutterSpool/releases). Verify the checksum, then extract the package in a new private Linux working directory:
+Download `shutterspool-compose.zip` and `shutterspool-compose.zip.sha256` from the chosen [GitHub Release](https://github.com/SeWieland/ShutterSpool/releases). Verify the checksum, then extract the package in a new private Linux working directory:
 
 ```sh
 umask 077
 mkdir install
-sha256sum --check shutterspool-compose.tar.gz.sha256
-tar -xzf shutterspool-compose.tar.gz -C install
+sha256sum --check shutterspool-compose.zip.sha256
+unzip -q shutterspool-compose.zip -d install
 cd install
 ```
 
@@ -29,7 +29,6 @@ The manifest inventories the distributed package files and records the source co
 For a package with bundled PostgreSQL, Valkey, Keycloak and Traefik:
 
 1. [Download, verify and extract a published package](#get-a-published-release), then open a shell in the extracted directory.
-   For a local build instead, use its output directory and load its retained image with `docker load --input server-image.oci.tar`.
    Prepare private file directories and configuration:
 
    ```sh
@@ -59,7 +58,7 @@ Use the [component choices](#choose-components) for external services or another
 ## Prerequisites and custody
 
 Operators need Docker Engine/Compose, Linux storage, standard PostgreSQL/archive tools for maintenance, and OpenSSL for supplied-certificate checks.
-Extracting a published Compose archive needs `tar` with gzip support and `sha256sum`.
+Extracting a published Compose archive needs `unzip` and `sha256sum`.
 They do not need source, Aspire, Node or the .NET SDK.
 Keep package/configuration on a private Linux filesystem, with a unique Compose project name.
 Do not use `docker compose down -v`, volume pruning or a new database with an old spool as troubleshooting.
@@ -96,8 +95,7 @@ Do not start overlapping Server instances with different file selections against
 ## Configure and start
 
 1. Open the extracted package in its private Linux directory and retain its manifest.
-   For a local build, use its output directory and load its retained image with `docker load --input server-image.oci.tar` if not already loaded.
-   A published release uses the exact public image digest supplied in its package; no source checkout, SDK or registry credentials are needed.
+   A published release uses the exact public image digest supplied in its package; no source checkout, SDK, ORAS or registry credentials are needed.
    Operators should not rebuild a qualified image.
 2. Edit the generated `.env`, preserving its version and digest-pinned `SERVER_IMAGE` reference; `.env.example` is an unpopulated reference template.
    Populate the configuration examples under `config` as directed by their filenames.

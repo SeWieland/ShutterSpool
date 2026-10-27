@@ -2,9 +2,10 @@
 
 A ShutterSpool release has one shared product version and identifiable artifacts.
 A generated package or green build is not a published release or evidence of compatibility with every deployment.
+Applicable license and security requirements, and truthful compatibility claims, apply to experimental releases too.
 See [package installation](../deploy/README.md) and [maintenance](../deploy/operations/README.md) for operational requirements.
 
-Pushing a release tag authorizes publication of its matching container and draft GitHub Release. The maintainer reviews the draft before publishing it.
+Pushing an eligible release tag authorizes publication of its matching container and complete GitHub Release.
 
 ## One version identifies the release
 
@@ -20,7 +21,7 @@ Do not create separate frontend, .NET project or package release sequences.
 ## Artifact identity and compatibility
 
 Derive artifact versions from one selected version and commit.
-Record the source commit, artifact digests, dependency versions/digests, database compatibility and supported upgrade baseline in the release manifest.
+The compact release manifest records version, source commit, platform, server image reference/digest, upstream images, database compatibility, upgrade baseline and distributed file inventory.
 The current database baseline is `initial-create` (`20261025211318_InitialCreate`). Packages declare `fresh-install-only` with no historical upgrade support. Do not claim an upgrade path until that baseline is qualified.
 Never move a published tag or replace its artifacts with different bytes; packaging fixes receive a new shared version.
 Development builds identify their commit and unreleased status.
@@ -35,23 +36,23 @@ Do not infer physical-camera, provider, power-loss or restore-after-erasure guar
 
 ## Publish from a version tag
 
-The [`release.yml` workflow](../.github/workflows/release.yml) runs for `vX.Y.Z` and `vX.Y.Z-suffix` tags on commits in `main`. It checks required CI, builds the tag's exact source once, publishes the versioned image to `ghcr.io/sewieland/shutterspool`, and opens a draft GitHub Release with the Compose archive and checksum attached. Build credentials have only package-read access; the separate publication job receives package-write access.
+The [`release.yml` workflow](../.github/workflows/release.yml) runs for `vX.Y.Z` and `vX.Y.Z-suffix` tags on commits in `main`. After tag/source, required-CI and version checks, it creates a GitHub Release draft with GitHub-generated notes, uses the official Docker build-push action to publish the versioned Linux amd64 image directly to `ghcr.io/sewieland/shutterspool`, packages and attaches the Compose ZIP, verifies anonymous manifest retrieval and complete assets, then publishes the draft automatically. Stable qualification is complete before creating a stable tag.
 
-The Compose configuration pins the image by digest. The release manifest records the source commit, image digest, dependency identities and distributed-file inventory. The local image archive is not distributed in the Compose release archive. No private package, OCI bundle, moving alias or candidate promotion is used.
+The Compose configuration pins the image by digest. The Compose-only `tools/build-release.py` command takes version, revision and image digest inputs and does not build or export an image. No local image archive, private package, ORAS transfer, moving alias or candidate promotion is used.
 
-The maintainer reviews and edits the GitHub draft notes, then publishes the release. The initial notes inventory comes from GitHub's generated release notes; retries preserve an existing draft body. A draft is not an approved release. Experimental versions receive ordinary CI and package checks; stable releases also require qualification for their documented product and compatibility promises and truthful compatibility claims.
+GitHub's generated notes provide the initial release inventory. The tag authorizes the complete release; there is no separate manual publication gate. Experimental versions receive normal CI and basic package checks. Stable releases require qualification for their documented product and compatibility promises before tagging.
 
-The workflow verifies the public image and release assets before reporting the draft ready. GitHub and GHCR do not publish atomically: an image may be public while its GitHub release remains a draft. Re-run failed jobs to resume from the retained Actions artifact; never rebuild over an existing version or replace different content. If the artifact is missing or its identity differs, stop for maintainer inspection.
+The workflow verifies anonymous image-manifest retrieval and complete release assets before publishing the release. GitHub and GHCR do not publish atomically: a failure may leave a public image or draft release. Available package files remain in a seven-day Actions artifact. Use standard GitHub facilities to inspect recovery; never rebuild over an existing version or replace different content. If recovery inputs are missing or their identity differs, stop for manual inspection. No custom resume system is provided.
 
-GitHub defaults a newly created container package to private. If the first upload succeeds but anonymous verification fails, inspect the package's visibility. If it is private, the maintainer must [set it to public](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility), then rerun the failed publication job using its retained build. The workflow does not change package visibility.
+GitHub defaults a newly created container package to private. If anonymous verification fails after an image upload, stop for maintainer inspection. The maintainer may [set the package to public](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility), then recover the partial release manually from the retained workflow outputs. Do not rerun publication over the existing image version. The workflow does not change package visibility.
 
-Attach and verify both release assets before manually publishing the draft. This also supports [immutable releases](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository): when enabled, assets cannot be added, replaced or deleted after publication. This workflow does not change that repository setting.
+Attach and verify both release assets before publishing. This also supports [immutable releases](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository): when enabled, assets cannot be added, replaced or deleted after publication. This workflow does not change that repository setting.
 
-Operators download `shutterspool-compose.tar.gz` and its `.sha256` file from the GitHub Release, verify the checksum, and use Docker Compose to pull the digest-pinned image. They do not need ORAS or registry credentials. ORAS is used inside the publishing workflow to transfer the locally built OCI image.
+Operators download `shutterspool-compose.zip` and `shutterspool-compose.zip.sha256` from the GitHub Release, verify the checksum, extract the package, and use Docker Compose to pull the digest-pinned image. They do not need ORAS or registry credentials.
 
 ## Published notes
 
-The reviewed GitHub Release body is the canonical release-note text; future documentation consumes it without creating another editable copy.
+The published GitHub Release body is the canonical release-note text; future documentation consumes it without creating another editable copy.
 Each entry identifies version/date, useful highlights, important fixes, upgrade actions or breaking changes, known limitations and the complete technical change list.
 Omit empty sections and preserve security, media-loss and recovery consequences.
 Describe observable improvements instead of narrating commits or internal classes.
