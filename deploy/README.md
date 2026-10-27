@@ -1,13 +1,32 @@
-# Install a packaged candidate
+# Install a packaged version
+
+Use a retained local candidate until an approved version and its artifact digests appear in the public release notes. A generated image reference does not establish publication; do not substitute a guessed tag.
 
 This package targets one Server instance on one Linux amd64 Docker host.
 Inspect `release-manifest.json` for the version, source commit, immutable images and qualification status.
 A successful build is not a published or approved release; inspect the manifest and version-specific compatibility information.
 The observed test environment is Docker Desktop/WSL2 with Linux volumes. Native Linux storage, ARM and public FTPS require separate qualification.
 
+## Get a published release
+
+When an approved release is available, install the [prerequisites](#prerequisites-and-custody), then use its recorded Compose-bundle digest to retrieve the prepared package without source or build tools.
+Run these commands from a new private Linux working directory:
+
+```sh
+umask 077
+oras pull --output release 'ghcr.io/sewieland/shutterspool@sha256:REPLACE_WITH_RELEASE_BUNDLE_DIGEST'
+mkdir install
+tar -xzf release/shutterspool-release-bundle.tar.gz -C install
+cd install
+```
+
+Continue with [Configure and start](#configure-and-start) from the extracted `install` directory.
+The generated `.env` pins `SERVER_IMAGE` to the official image digest, which Docker Compose pulls anonymously from GHCR.
+This bundle contains configuration and operator instructions; its image is stored separately in GHCR, so there is no local image archive to load.
+
 ## TL;DR
 
-For the default bundled PostgreSQL, Valkey, Keycloak and Traefik installation:
+For a retained local candidate with bundled PostgreSQL, Valkey, Keycloak and Traefik:
 
 1. Extract the retained candidate into a private Linux directory and open a shell there. Load its image and prepare private file directories:
 
@@ -39,6 +58,7 @@ Use the [component choices](#choose-components) for external services or another
 ## Prerequisites and custody
 
 Operators need Docker Engine/Compose, Linux storage, standard PostgreSQL/archive tools for maintenance, and OpenSSL for supplied-certificate checks.
+Retrieving a published Compose bundle also needs ORAS 1.3.6 and `tar` with gzip support; follow the [official ORAS installation guide](https://oras.land/docs/installation/) for that version.
 They do not need source, Aspire, Node or the .NET SDK.
 Keep package/configuration on a private Linux filesystem, with a unique Compose project name.
 Do not use `docker compose down -v`, volume pruning or a new database with an old spool as troubleshooting.
@@ -74,8 +94,9 @@ Do not start overlapping Server instances with different file selections against
 
 ## Configure and start
 
-1. Extract the candidate into a new private Linux directory and retain its manifest.
-   Load the retained OCI image for a local candidate installation, or use the qualified registry digest for a published release.
+1. Open the extracted package in its private Linux directory and retain its manifest.
+   For a local candidate, load its retained image with `docker load --input server-image.oci.tar` if not already loaded.
+   A published release uses the exact public image digest supplied in its bundle; no source checkout, SDK or registry credentials are needed.
    Operators should not rebuild a qualified image.
 2. Edit the generated `.env`, preserving its candidate version and immutable `SERVER_IMAGE` reference; `.env.example` is an unpopulated reference template.
    Populate the configuration examples under `config` as directed by their filenames.

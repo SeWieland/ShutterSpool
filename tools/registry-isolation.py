@@ -75,7 +75,7 @@ def create_probe(output: Path, *, run_id: str, run_attempt: str) -> dict[str, st
 
 
 def is_registry_access_denial(returncode: int, output: str) -> bool:
-    registry_denial = r"\b(?:401|403)\b|(?:unauthorized|denied)\s*:\s*(?:authentication required|requested access to the resource is denied|insufficient_scope)"
+    registry_denial = r"\b(?:401|403)\b|(?:unauthorized|denied)\s*:\s*(?:authentication required|requested access to the resource is denied|insufficient_scope|permission_denied:\s*read_package)"
     return returncode != 0 and bool(re.search(registry_denial, output, re.IGNORECASE))
 
 

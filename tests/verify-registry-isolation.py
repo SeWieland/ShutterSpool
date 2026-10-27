@@ -58,6 +58,7 @@ class RegistryIsolationTests(unittest.TestCase):
             (1, "401 Unauthorized"),
             (1, "403 Forbidden: denied"),
             (1, "Error response from registry: denied: requested access to the resource is denied"),
+            (1, "Error response from registry: denied: permission_denied: read_package"),
         ):
             with self.subTest(status=status, output=output):
                 self.assertTrue(registry_isolation.is_registry_access_denial(status, output))
