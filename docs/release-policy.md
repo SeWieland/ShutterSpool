@@ -37,17 +37,25 @@ Do not infer physical-camera, provider, power-loss or restore-after-erasure guar
 
 The [private candidate workflow](../.github/workflows/candidate.yml) runs manually from `main`, with an explicit prerelease version and exact source commit on `main`.
 It builds the image once and stages it with a Compose bundle in the private `ghcr.io/sewieland/shutterspool-candidates` package.
-It requires `GHCR_CANDIDATE_STAGING_ENABLED=true` after the package access configuration has been reviewed and the required access checks have passed.
-Local candidate building remains available without registry access through the [AppHost guide](../src/ShutterSpool.AppHost/README.md#prepare-a-compose-candidate).
+Staging requires `GHCR_CANDIDATE_STAGING_ENABLED=true`; promotion separately requires `GHCR_PUBLISHING_ENABLED=true`.
+Both remain disabled while the workflow is being verified. Local building remains available through the [AppHost guide](../src/ShutterSpool.AppHost/README.md#prepare-a-compose-candidate).
 
-For the release destination, the [promotion workflow](../.github/workflows/promote-container.yml) takes the candidate run ID and attempt, version, source commit and reviewed notes SHA-256.
-It resolves the exact image and bundle digests before the protected `ghcr-publish` environment requests approval.
-The approval identifies those artifacts, the notes hash and destination; after approval, the workflow rechecks them and transfers the same bytes without rebuilding.
-Image tags use the shared version, such as `0.1.0-alpha.1`; bundle tags use `bundle-0.1.0-alpha.1`. Installation uses the recorded digests, with no moving aliases.
+Before enabling staging, confirm private package visibility, disabled repository-permission inheritance and explicit Actions access for this repository in the [personal package settings](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility#selecting-the-inheritance-setting-for-packages-scoped-to-your-personal-account).
+Inspect user and Codespaces grants too, and verify authorized retrieval and anonymous denial with harmless objects.
+GitHub [warns that public-repository Actions grants may permit fork access](https://docs.github.com/en/packages/managing-github-packages-using-github-actions-workflows/publishing-and-installing-a-package-with-github-actions#default-permissions-and-access-settings-for-packages-modified-through-workflows); these checks do not establish independent-account or fork isolation.
+Both workflows check private visibility before accessing candidates. Pull requests have no package permissions or publication trigger.
 
-Publication reuses matching remote objects and refuses a version that identifies different content.
-Completion requires retrieval of the image graph, SBOM/provenance and unchanged bundle without registry credentials; partial or unverified results remain incomplete.
-The workflow's separate test destination accepts only synthetic rehearsal objects, requires its own concrete approval and does not qualify an application release.
+The [promotion workflow](../.github/workflows/promote-container.yml) takes the qualified bundle digest and reviewed notes SHA-256.
+It reads the version, source commit and image digest from that immutable bundle's OCI annotations before requesting approval through the protected `ghcr-publish` environment.
+Configure that environment for the maintainer's required approval, permit self-approval, disable administrator bypass and restrict deployment branches to `main`.
+The approval identifies both artifact digests, the notes hash and exact destinations. After approval, ORAS copies the same artifacts without rebuilding; its image-index copy includes the build's SBOM and provenance manifests.
+Qualification of the selected candidate, including those attestations, happens before requesting promotion.
+
+Image tags use the shared version, such as `0.1.0-alpha.1`; bundle tags use `bundle-0.1.0-alpha.1`. Installation uses recorded digests, with no moving aliases.
+The serialized workflow checks both destination tags before copying either object. Matching digests are reused; conflicting content and lookup errors stop publication.
+On the first publication, the maintainer may need to set the new release package's visibility to public and retry the same run. The workflow does not change package visibility.
+A partial run remains incomplete until both digests match and the image and bundle have been retrieved without registry credentials.
+Package administrators can still change tags outside this workflow; its collision protection is not registry-enforced immutability.
 
 ## Published notes
 

@@ -23,6 +23,7 @@ cd install
 Continue with [Configure and start](#configure-and-start) from the extracted `install` directory.
 The generated `.env` pins `SERVER_IMAGE` to the official image digest, which Docker Compose pulls anonymously from GHCR.
 This bundle contains configuration and operator instructions; its image is stored separately in GHCR, so there is no local image archive to load.
+The unchanged `release-manifest.json` inventories the original build, including `server-image.oci.tar`; that archive is omitted from this download because its image is transported through GHCR.
 
 ## TL;DR
 

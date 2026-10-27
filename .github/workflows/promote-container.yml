@@ -1,150 +1,87 @@
-name: Promote container candidate
+name: Promote approved container candidate
 
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: Candidate SemVer prerelease for release destination; leave blank for synthetic test
-        required: false
-        type: string
-      commit:
-        description: Candidate source commit for release destination; leave blank for synthetic test
-        required: false
-        type: string
-      candidate_run_id:
-        description: Run ID of the private staging workflow
-        required: true
-        type: string
-      candidate_run_attempt:
-        description: Attempt number of the private staging workflow
+      bundle_digest:
+        description: Qualified private Compose bundle sha256 digest from the staging run
         required: true
         type: string
       notes_sha256:
-        description: Reviewed release notes SHA-256; leave blank for synthetic test
-        required: false
-        type: string
-      destination:
-        description: Publish the authorized rehearsal package, or the official release package
+        description: SHA-256 of the reviewed release notes
         required: true
-        type: choice
-        options: [test, release]
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: ghcr-promotion-${{ inputs.destination }}-${{ inputs.destination == 'release' && inputs.version || inputs.candidate_run_id }}
+  group: ghcr-publication
   cancel-in-progress: false
 
+env:
+  STAGING: ghcr.io/sewieland/shutterspool-candidates
+  PUBLIC: ghcr.io/sewieland/shutterspool
+  BUNDLE: ${{ inputs.bundle_digest }}
+  NOTES: ${{ inputs.notes_sha256 }}
+
 jobs:
-  resolve-candidate:
-    if: github.repository == 'SeWieland/ShutterSpool' && github.ref == 'refs/heads/main' && vars.GHCR_CANDIDATE_STAGING_ENABLED == 'true' && inputs.destination == 'release'
+  identify:
+    if: github.repository == 'SeWieland/ShutterSpool' && github.ref == 'refs/heads/main' && vars.GHCR_PUBLISHING_ENABLED == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
     permissions:
-      contents: read
       packages: read
     outputs:
-      image_tag: ${{ steps.resolve.outputs.image_tag }}
-      image_digest: ${{ steps.resolve.outputs.image_digest }}
-      bundle_tag: ${{ steps.resolve.outputs.bundle_tag }}
-      bundle_digest: ${{ steps.resolve.outputs.bundle_digest }}
-      bundle_sha256: ${{ steps.resolve.outputs.bundle_sha256 }}
-      target_package: ${{ steps.resolve.outputs.target_package }}
-      target_image_tag: ${{ steps.resolve.outputs.target_image_tag }}
-      target_bundle_tag: ${{ steps.resolve.outputs.target_bundle_tag }}
-    env:
-      CANDIDATE_PACKAGE: ghcr.io/sewieland/shutterspool-candidates
-      TARGET_PACKAGE: ${{ inputs.destination == 'test' && 'ghcr.io/sewieland/shutterspool-publish-test' || 'ghcr.io/sewieland/shutterspool' }}
-      CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
-      CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
-      BUILD_VERSION: ${{ inputs.version }}
-      BUILD_COMMIT: ${{ inputs.commit }}
-      NOTES_SHA256: ${{ inputs.notes_sha256 }}
+      version: ${{ steps.candidate.outputs.version }}
+      commit: ${{ steps.candidate.outputs.commit }}
+      image: ${{ steps.candidate.outputs.image }}
     steps:
-      - name: Check out publication verifier
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
       - name: Set up ORAS
         uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6 # v1
         with:
           url: https://github.com/oras-project/oras/releases/download/v1.3.6/oras_1.3.6_linux_amd64.tar.gz
           checksum: 66fb0ad7206f3f6fa77ed5b552049d364ccf4b50b1684554f731f76302b52ca0
-      - name: Confirm candidate package remains private
+      - name: Identify immutable candidate for approval
+        id: candidate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: test "$(gh api /user/packages/container/shutterspool-candidates --jq .visibility)" = private
-      - name: Validate inputs and select immutable source tags
-        id: tags
-        shell: bash
+          ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
-          [[ "$CANDIDATE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-          [[ "$CANDIDATE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
-          [[ "$BUILD_COMMIT" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$NOTES_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          [[ "$BUILD_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*$ ]]
-          printf 'image_tag=candidate-%s-%s-image\n' "$CANDIDATE_RUN_ID" "$CANDIDATE_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
-          printf 'bundle_tag=candidate-%s-%s-bundle\n' "$CANDIDATE_RUN_ID" "$CANDIDATE_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
-          python tools/ghcr-publication.py target-tags --version "$BUILD_VERSION" >> "$GITHUB_OUTPUT"
-      - name: Log in to private staging package
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_ACTOR: ${{ github.actor }}
-        run: printf '%s' "$GH_TOKEN" | oras login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-      - name: Resolve candidate, verify bundle and present approval identity
-        id: resolve
-        env:
-          IMAGE_TAG: ${{ steps.tags.outputs.image_tag }}
-          BUNDLE_TAG: ${{ steps.tags.outputs.bundle_tag }}
-          CANDIDATE_PACKAGE: ghcr.io/sewieland/shutterspool-candidates
-          TARGET_PACKAGE: ${{ env.TARGET_PACKAGE }}
-          TARGET_IMAGE_TAG: ${{ steps.tags.outputs.target_image_tag }}
-          TARGET_BUNDLE_TAG: ${{ steps.tags.outputs.target_bundle_tag }}
-          BUILD_VERSION: ${{ inputs.version }}
-          BUILD_COMMIT: ${{ inputs.commit }}
-          PULLED: ${{ runner.temp }}/ghcr-candidate-preflight
-          IMAGE_LAYOUT: ${{ runner.temp }}/candidate-image-preflight
-        shell: bash
-        run: |
-          set -euo pipefail
-          image_digest="$(oras resolve "$CANDIDATE_PACKAGE:$IMAGE_TAG")"
-          bundle_digest="$(oras resolve "$CANDIDATE_PACKAGE:$BUNDLE_TAG")"
-          [[ "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          [[ "$bundle_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          oras pull --output "$PULLED" "$CANDIDATE_PACKAGE@$bundle_digest"
-          bundle="$PULLED/shutterspool-release-bundle.tar.gz"
-          python tools/ghcr-publication.py verify --bundle "$bundle" --version "$BUILD_VERSION" --commit "$BUILD_COMMIT" --image-digest "$image_digest"
-          oras cp --to-oci-layout "$CANDIDATE_PACKAGE@$image_digest" "$IMAGE_LAYOUT:$BUILD_VERSION"
-          python tools/ghcr-publication.py verify-image --layout "$IMAGE_LAYOUT" --image-digest "$image_digest" --require-attestations
-          bundle_sha256="$(sha256sum "$bundle" | cut -d' ' -f1)"
+          [[ "$BUNDLE" =~ ^sha256:[0-9a-f]{64}$ && "$NOTES" =~ ^[0-9a-f]{64}$ ]]
+          test "$(gh api /user/packages/container/shutterspool-candidates --jq .visibility)" = private
+          printf '%s' "$GH_TOKEN" | oras login ghcr.io --username "$ACTOR" --password-stdin
+          manifest=$(oras manifest fetch "$STAGING@$BUNDLE")
+          test "$(jq -er '.artifactType' <<< "$manifest")" = application/vnd.shutterspool.release.bundle
+          version=$(jq -er '.annotations["org.opencontainers.image.version"]' <<< "$manifest")
+          commit=$(jq -er '.annotations["org.opencontainers.image.revision"]' <<< "$manifest")
+          image=$(jq -er '.annotations["io.shutterspool.image.digest"]' <<< "$manifest")
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]]
+          [[ "$commit" =~ ^[0-9a-f]{40}$ && "$image" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$(oras resolve "$STAGING@$image")" = "$image"
+          printf 'version=%s\ncommit=%s\nimage=%s\n' "$version" "$commit" "$image" >> "$GITHUB_OUTPUT"
           {
-            printf '### Approval identity\n\n'
-            printf 'Version: `%s`\n' "$BUILD_VERSION"
-            printf 'Source commit: `%s`\n' "$BUILD_COMMIT"
-            printf 'Image: `%s@%s`\n' "$CANDIDATE_PACKAGE" "$image_digest"
-            printf 'Bundle: `%s@%s` (SHA-256 `%s`)\n' "$CANDIDATE_PACKAGE" "$bundle_digest" "$bundle_sha256"
-            printf 'Reviewed notes SHA-256: `%s`\n' "$NOTES_SHA256"
-            printf 'Action: promote image and unchanged Compose bundle\nDestination: `%s`\n' "$TARGET_PACKAGE"
+            printf '### Approval required\n\nVersion: `%s`\nSource: `%s`\nNotes SHA-256: `%s`\n' "$version" "$commit" "$NOTES"
+            printf 'Copy image `%s` to `%s:%s`\n' "$image" "$PUBLIC" "$version"
+            printf 'Copy bundle `%s` to `%s:bundle-%s`\n' "$BUNDLE" "$PUBLIC" "$version"
           } >> "$GITHUB_STEP_SUMMARY"
-          printf 'image_tag=%s\nimage_digest=%s\nbundle_tag=%s\nbundle_digest=%s\nbundle_sha256=%s\ntarget_package=%s\ntarget_image_tag=%s\ntarget_bundle_tag=%s\n' \
-            "$IMAGE_TAG" "$image_digest" "$BUNDLE_TAG" "$bundle_digest" "$bundle_sha256" \
-            "$TARGET_PACKAGE" "$TARGET_IMAGE_TAG" "$TARGET_BUNDLE_TAG" >> "$GITHUB_OUTPUT"
 
   publish:
-    needs: [resolve-candidate]
-    if: github.repository == 'SeWieland/ShutterSpool' && github.ref == 'refs/heads/main' && vars.GHCR_CANDIDATE_STAGING_ENABLED == 'true' && inputs.destination == 'release'
-    name: Approve and publish ${{ inputs.version }} from ${{ inputs.commit }} image ${{ needs.resolve-candidate.outputs.image_digest }} bundle ${{ needs.resolve-candidate.outputs.bundle_digest }} notes ${{ inputs.notes_sha256 }} to ${{ needs.resolve-candidate.outputs.target_package }}
+    needs: identify
+    if: github.repository == 'SeWieland/ShutterSpool' && github.ref == 'refs/heads/main' && vars.GHCR_PUBLISHING_ENABLED == 'true'
+    name: Approve ${{ needs.identify.outputs.version }} from ${{ needs.identify.outputs.commit }} image ${{ needs.identify.outputs.image }} bundle ${{ inputs.bundle_digest }} notes ${{ inputs.notes_sha256 }}
+    environment: ghcr-publish
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    environment:
-      name: ghcr-publish
     permissions:
       contents: read
       packages: write
+    env:
+      VERSION: ${{ needs.identify.outputs.version }}
+      IMAGE: ${{ needs.identify.outputs.image }}
     steps:
-      - name: Check out publication verifier
+      - name: Check out publication command
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -153,340 +90,23 @@ jobs:
         with:
           url: https://github.com/oras-project/oras/releases/download/v1.3.6/oras_1.3.6_linux_amd64.tar.gz
           checksum: 66fb0ad7206f3f6fa77ed5b552049d364ccf4b50b1684554f731f76302b52ca0
-      - name: Confirm protected inputs are still the approved identity
+      - name: Copy the approved digests without replacing versions
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_ACTOR: ${{ github.actor }}
-          CANDIDATE_PACKAGE: ghcr.io/sewieland/shutterspool-candidates
-          IMAGE_TAG: ${{ needs.resolve-candidate.outputs.image_tag }}
-          IMAGE_DIGEST: ${{ needs.resolve-candidate.outputs.image_digest }}
-          BUNDLE_TAG: ${{ needs.resolve-candidate.outputs.bundle_tag }}
-          BUNDLE_DIGEST: ${{ needs.resolve-candidate.outputs.bundle_digest }}
-          BUNDLE_SHA256: ${{ needs.resolve-candidate.outputs.bundle_sha256 }}
-          TARGET_PACKAGE: ${{ needs.resolve-candidate.outputs.target_package }}
-          TARGET_IMAGE_TAG: ${{ needs.resolve-candidate.outputs.target_image_tag }}
-          TARGET_BUNDLE_TAG: ${{ needs.resolve-candidate.outputs.target_bundle_tag }}
-          BUILD_VERSION: ${{ inputs.version }}
-          BUILD_COMMIT: ${{ inputs.commit }}
-          NOTES_SHA256: ${{ inputs.notes_sha256 }}
-          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
-          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
-          PULLED: ${{ runner.temp }}/candidate-post-approval
-          IMAGE_LAYOUT: ${{ runner.temp }}/candidate-image-post-approval
-        shell: bash
+          ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
-          printf '%s' "$GH_TOKEN" | oras login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           test "$(gh api /user/packages/container/shutterspool-candidates --jq .visibility)" = private
-          test "$(oras resolve "$CANDIDATE_PACKAGE:$IMAGE_TAG")" = "$IMAGE_DIGEST"
-          test "$(oras resolve "$CANDIDATE_PACKAGE:$BUNDLE_TAG")" = "$BUNDLE_DIGEST"
-          oras pull --output "$PULLED" "$CANDIDATE_PACKAGE@$BUNDLE_DIGEST"
-          bundle="$PULLED/shutterspool-release-bundle.tar.gz"
-          test "$(sha256sum "$bundle" | cut -d' ' -f1)" = "$BUNDLE_SHA256"
-          python tools/ghcr-publication.py verify --bundle "$bundle" --version "$BUILD_VERSION" --commit "$BUILD_COMMIT" --image-digest "$IMAGE_DIGEST"
-          oras cp --to-oci-layout "$CANDIDATE_PACKAGE@$IMAGE_DIGEST" "$IMAGE_LAYOUT:$BUILD_VERSION"
-          python tools/ghcr-publication.py verify-image --layout "$IMAGE_LAYOUT" --image-digest "$IMAGE_DIGEST" --require-attestations
-          [[ "$NOTES_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          [[ "$CANDIDATE_RUN_ID" =~ ^[1-9][0-9]*$ && "$CANDIDATE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
-          echo "Resolved approved identity remains unchanged for $BUILD_VERSION at $BUILD_COMMIT; target is $TARGET_PACKAGE:$TARGET_IMAGE_TAG plus $TARGET_PACKAGE:$TARGET_BUNDLE_TAG."
-      - name: Promote image and unchanged bundle without overwriting a version
-        id: publish
-        env:
-          CANDIDATE_PACKAGE: ghcr.io/sewieland/shutterspool-candidates
-          IMAGE_DIGEST: ${{ needs.resolve-candidate.outputs.image_digest }}
-          BUNDLE_DIGEST: ${{ needs.resolve-candidate.outputs.bundle_digest }}
-          TARGET_PACKAGE: ${{ needs.resolve-candidate.outputs.target_package }}
-          TARGET_IMAGE_TAG: ${{ needs.resolve-candidate.outputs.target_image_tag }}
-          TARGET_BUNDLE_TAG: ${{ needs.resolve-candidate.outputs.target_bundle_tag }}
-        shell: bash
+          printf '%s' "$GH_TOKEN" | oras login ghcr.io --username "$ACTOR" --password-stdin
+          test "$(oras resolve "$STAGING@$IMAGE")" = "$IMAGE"
+          test "$(oras resolve "$STAGING@$BUNDLE")" = "$BUNDLE"
+          bash tools/promote-container.sh "$STAGING" "$PUBLIC" "$VERSION" "$IMAGE" "$BUNDLE"
+          # First publication may need the maintainer to set package visibility, then retry.
+          test "$(gh api /user/packages/container/shutterspool --jq .visibility)" = public
+      - name: Verify anonymous retrieval
         run: |
           set -euo pipefail
-          existing_image="$(python tools/ghcr-publication.py inspect-tag -- oras resolve "$TARGET_PACKAGE:$TARGET_IMAGE_TAG")"
-          existing_bundle="$(python tools/ghcr-publication.py inspect-tag -- oras resolve "$TARGET_PACKAGE:$TARGET_BUNDLE_TAG")"
-          image_plan="$(python tools/ghcr-publication.py plan-tag --existing "$existing_image" --approved-digest "$IMAGE_DIGEST")"
-          bundle_plan="$(python tools/ghcr-publication.py plan-tag --existing "$existing_bundle" --approved-digest "$BUNDLE_DIGEST")"
-          if [[ "$image_plan" == publish ]]; then oras cp "$CANDIDATE_PACKAGE@$IMAGE_DIGEST" "$TARGET_PACKAGE:$TARGET_IMAGE_TAG" >/dev/null; fi
-          if [[ "$bundle_plan" == publish ]]; then oras cp "$CANDIDATE_PACKAGE@$BUNDLE_DIGEST" "$TARGET_PACKAGE:$TARGET_BUNDLE_TAG" >/dev/null; fi
-          test "$(oras resolve "$TARGET_PACKAGE:$TARGET_IMAGE_TAG")" = "$IMAGE_DIGEST"
-          test "$(oras resolve "$TARGET_PACKAGE:$TARGET_BUNDLE_TAG")" = "$BUNDLE_DIGEST"
-          echo "image_digest=$IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
-          echo "bundle_digest=$BUNDLE_DIGEST" >> "$GITHUB_OUTPUT"
-          echo "image_tag=$TARGET_IMAGE_TAG" >> "$GITHUB_OUTPUT"
-          echo "bundle_tag=$TARGET_BUNDLE_TAG" >> "$GITHUB_OUTPUT"
-      - name: Confirm release package visibility is public
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          visibility="$(gh api /user/packages/container/shutterspool --jq .visibility)"
-          if [[ "$visibility" != public ]]; then
-            printf 'Release artifacts are present, but the package visibility is %s; set it to Public and rerun anonymous verification.\n' "$visibility" >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-      - name: Report completed registry mutations
-        env:
-          TARGET_PACKAGE: ${{ needs.resolve-candidate.outputs.target_package }}
-          IMAGE_TAG: ${{ needs.resolve-candidate.outputs.target_image_tag }}
-          IMAGE_DIGEST: ${{ needs.resolve-candidate.outputs.image_digest }}
-          BUNDLE_TAG: ${{ needs.resolve-candidate.outputs.target_bundle_tag }}
-          BUNDLE_DIGEST: ${{ needs.resolve-candidate.outputs.bundle_digest }}
-        run: |
-          {
-            printf 'Publication writes verified; the independent anonymous pull check is next.\n\n'
-            printf 'Image: `%s:%s@%s`\n' "$TARGET_PACKAGE" "$IMAGE_TAG" "$IMAGE_DIGEST"
-            printf 'Bundle: `%s:%s@%s`\n' "$TARGET_PACKAGE" "$BUNDLE_TAG" "$BUNDLE_DIGEST"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  verify-anonymous:
-    needs: [resolve-candidate, publish]
-    if: github.repository == 'SeWieland/ShutterSpool' && github.ref == 'refs/heads/main' && vars.GHCR_CANDIDATE_STAGING_ENABLED == 'true' && inputs.destination == 'release'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    env:
-      TARGET_PACKAGE: ${{ needs.resolve-candidate.outputs.target_package }}
-      IMAGE_TAG: ${{ needs.resolve-candidate.outputs.target_image_tag }}
-      IMAGE_DIGEST: ${{ needs.resolve-candidate.outputs.image_digest }}
-      BUNDLE_TAG: ${{ needs.resolve-candidate.outputs.target_bundle_tag }}
-      BUNDLE_DIGEST: ${{ needs.resolve-candidate.outputs.bundle_digest }}
-      BUNDLE_SHA256: ${{ needs.resolve-candidate.outputs.bundle_sha256 }}
-      BUILD_VERSION: ${{ inputs.version }}
-      BUILD_COMMIT: ${{ inputs.commit }}
-    steps:
-      - name: Check out publication verifier
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Set up ORAS
-        uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6 # v1
-        with:
-          url: https://github.com/oras-project/oras/releases/download/v1.3.6/oras_1.3.6_linux_amd64.tar.gz
-          checksum: 66fb0ad7206f3f6fa77ed5b552049d364ccf4b50b1684554f731f76302b52ca0
-      - name: Pull exact published objects without credentials
-        env:
-          OUTPUT_DIR: ${{ runner.temp }}/shutterspool-anonymous-pull
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(oras resolve "$TARGET_PACKAGE:$IMAGE_TAG")" = "$IMAGE_DIGEST"
-          test "$(oras resolve "$TARGET_PACKAGE:$BUNDLE_TAG")" = "$BUNDLE_DIGEST"
-          oras cp --to-oci-layout "$TARGET_PACKAGE@$IMAGE_DIGEST" "$OUTPUT_DIR/image:$BUILD_VERSION"
-          python tools/ghcr-publication.py verify-image --layout "$OUTPUT_DIR/image" --image-digest "$IMAGE_DIGEST" --require-attestations
-          oras pull --output "$OUTPUT_DIR/bundle" "$TARGET_PACKAGE@$BUNDLE_DIGEST"
-          test "$(sha256sum "$OUTPUT_DIR/bundle/shutterspool-release-bundle.tar.gz" | cut -d' ' -f1)" = "$BUNDLE_SHA256"
-          python tools/ghcr-publication.py verify \
-            --bundle "$OUTPUT_DIR/bundle/shutterspool-release-bundle.tar.gz" \
-            --version "$BUILD_VERSION" --commit "$BUILD_COMMIT" --image-digest "$IMAGE_DIGEST"
-          {
-            printf '### Anonymous pull verified\n\n'
-            printf 'Image: `%s@%s`\nBundle: `%s@%s`\n' "$TARGET_PACKAGE" "$IMAGE_DIGEST" "$TARGET_PACKAGE" "$BUNDLE_DIGEST"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  resolve-synthetic-probe:
-    if: github.repository == 'SeWieland/ShutterSpool' && github.ref == 'refs/heads/main' && vars.GHCR_CANDIDATE_STAGING_ENABLED == 'true' && inputs.destination == 'test'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      packages: read
-    outputs:
-      image_tag: ${{ steps.verify.outputs.image_tag }}
-      image_digest: ${{ steps.verify.outputs.image_digest }}
-      bundle_tag: ${{ steps.verify.outputs.bundle_tag }}
-      bundle_digest: ${{ steps.verify.outputs.bundle_digest }}
-      compose_sha256: ${{ steps.verify.outputs.compose_sha256 }}
-      manifest_sha256: ${{ steps.verify.outputs.manifest_sha256 }}
-      target_package: ${{ steps.verify.outputs.target_package }}
-      target_image_tag: ${{ steps.verify.outputs.target_image_tag }}
-      target_bundle_tag: ${{ steps.verify.outputs.target_bundle_tag }}
-    env:
-      CANDIDATE_PACKAGE: ghcr.io/sewieland/shutterspool-candidates
-      TARGET_PACKAGE: ghcr.io/sewieland/shutterspool-publish-test
-      PROBE_RUN_ID: ${{ inputs.candidate_run_id }}
-      PROBE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
-    steps:
-      - name: Check out synthetic probe verifier
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Set up ORAS
-        uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6 # v1
-        with:
-          url: https://github.com/oras-project/oras/releases/download/v1.3.6/oras_1.3.6_linux_amd64.tar.gz
-          checksum: 66fb0ad7206f3f6fa77ed5b552049d364ccf4b50b1684554f731f76302b52ca0
-      - name: Confirm candidate package remains private
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: test "$(gh api /user/packages/container/shutterspool-candidates --jq .visibility)" = private
-      - name: Recreate deterministic synthetic image and bundle
-        id: fixture
-        env:
-          OUTPUT_DIR: ${{ runner.temp }}/synthetic-probe
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ "$PROBE_RUN_ID" =~ ^[1-9][0-9]*$ && "$PROBE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
-          python tools/registry-isolation.py create --output "$OUTPUT_DIR" --run-id "$PROBE_RUN_ID" --run-attempt "$PROBE_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
-      - name: Log in to private staging package
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_ACTOR: ${{ github.actor }}
-        run: printf '%s' "$GH_TOKEN" | oras login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-      - name: Prove the exact private synthetic objects before approval
-        id: verify
-        env:
-          CANDIDATE_PACKAGE: ghcr.io/sewieland/shutterspool-candidates
-          TARGET_PACKAGE: ghcr.io/sewieland/shutterspool-publish-test
-          IMAGE_TAG: ${{ steps.fixture.outputs.image_tag }}
-          EXPECTED_IMAGE_DIGEST: ${{ steps.fixture.outputs.image_digest }}
-          BUNDLE_TAG: ${{ steps.fixture.outputs.bundle_tag }}
-          EXPECTED_COMPOSE_SHA256: ${{ steps.fixture.outputs.compose_sha256 }}
-          EXPECTED_MANIFEST_SHA256: ${{ steps.fixture.outputs.manifest_sha256 }}
-          IMAGE_LAYOUT: ${{ runner.temp }}/synthetic-image-layout
-          BUNDLE_MANIFEST: ${{ runner.temp }}/synthetic-bundle-manifest.json
-          PULLED: ${{ runner.temp }}/synthetic-bundle-pull
-          PROBE_RUN_ID: ${{ inputs.candidate_run_id }}
-          PROBE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          image_digest="$(oras resolve "$CANDIDATE_PACKAGE:$IMAGE_TAG")"
-          bundle_digest="$(oras resolve "$CANDIDATE_PACKAGE:$BUNDLE_TAG")"
-          test "$image_digest" = "$EXPECTED_IMAGE_DIGEST"
-          oras cp --to-oci-layout "$CANDIDATE_PACKAGE@$image_digest" "$IMAGE_LAYOUT:synthetic"
-          python tools/ghcr-publication.py verify-image --layout "$IMAGE_LAYOUT" --image-digest "$image_digest"
-          oras pull --output "$PULLED" "$CANDIDATE_PACKAGE@$bundle_digest"
-          oras manifest fetch --output "$BUNDLE_MANIFEST" "$CANDIDATE_PACKAGE@$bundle_digest"
-          python tools/ghcr-publication.py verify-synthetic-bundle --directory "$PULLED" --oci-manifest "$BUNDLE_MANIFEST" --compose-sha256 "$EXPECTED_COMPOSE_SHA256" --manifest-sha256 "$EXPECTED_MANIFEST_SHA256"
-          image_tag="synthetic-${PROBE_RUN_ID}-${PROBE_RUN_ATTEMPT}-image"
-          bundle_tag="synthetic-${PROBE_RUN_ID}-${PROBE_RUN_ATTEMPT}-bundle"
-          {
-            printf '### Synthetic-only public rehearsal approval identity\n\n'
-            printf 'Source private probe run: `%s` (attempt `%s`)\n' "$PROBE_RUN_ID" "$PROBE_RUN_ATTEMPT"
-            printf 'Image: `%s@%s`\n' "$CANDIDATE_PACKAGE" "$image_digest"
-            printf 'Bundle: `%s@%s`\n' "$CANDIDATE_PACKAGE" "$bundle_digest"
-            printf 'Destination: `%s` (synthetic tags only)\n' "$TARGET_PACKAGE"
-          } >> "$GITHUB_STEP_SUMMARY"
-          printf 'image_tag=%s\nimage_digest=%s\nbundle_tag=%s\nbundle_digest=%s\ncompose_sha256=%s\nmanifest_sha256=%s\ntarget_package=%s\ntarget_image_tag=%s\ntarget_bundle_tag=%s\n' \
-            "$IMAGE_TAG" "$image_digest" "$BUNDLE_TAG" "$bundle_digest" \
-            "$EXPECTED_COMPOSE_SHA256" "$EXPECTED_MANIFEST_SHA256" "$TARGET_PACKAGE" "$image_tag" "$bundle_tag" >> "$GITHUB_OUTPUT"
-
-  publish-synthetic-probe:
-    needs: [resolve-synthetic-probe]
-    if: github.repository == 'SeWieland/ShutterSpool' && github.ref == 'refs/heads/main' && vars.GHCR_CANDIDATE_STAGING_ENABLED == 'true' && inputs.destination == 'test'
-    name: Approve synthetic probe ${{ needs.resolve-synthetic-probe.outputs.image_digest }} and ${{ needs.resolve-synthetic-probe.outputs.bundle_digest }} for ${{ needs.resolve-synthetic-probe.outputs.target_package }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    environment:
-      name: ghcr-publish
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Check out synthetic probe verifier
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Set up ORAS
-        uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6 # v1
-        with:
-          url: https://github.com/oras-project/oras/releases/download/v1.3.6/oras_1.3.6_linux_amd64.tar.gz
-          checksum: 66fb0ad7206f3f6fa77ed5b552049d364ccf4b50b1684554f731f76302b52ca0
-      - name: Revalidate private source and synthetic bytes after approval
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_ACTOR: ${{ github.actor }}
-          CANDIDATE_PACKAGE: ghcr.io/sewieland/shutterspool-candidates
-          IMAGE_TAG: ${{ needs.resolve-synthetic-probe.outputs.image_tag }}
-          IMAGE_DIGEST: ${{ needs.resolve-synthetic-probe.outputs.image_digest }}
-          BUNDLE_TAG: ${{ needs.resolve-synthetic-probe.outputs.bundle_tag }}
-          BUNDLE_DIGEST: ${{ needs.resolve-synthetic-probe.outputs.bundle_digest }}
-          COMPOSE_SHA256: ${{ needs.resolve-synthetic-probe.outputs.compose_sha256 }}
-          MANIFEST_SHA256: ${{ needs.resolve-synthetic-probe.outputs.manifest_sha256 }}
-          PROBE_RUN_ID: ${{ inputs.candidate_run_id }}
-          PROBE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
-          OUTPUT_DIR: ${{ runner.temp }}/synthetic-post-approval
-          IMAGE_LAYOUT: ${{ runner.temp }}/synthetic-post-approval-image
-          BUNDLE_MANIFEST: ${{ runner.temp }}/synthetic-post-approval-bundle-manifest.json
-        shell: bash
-        run: |
-          set -euo pipefail
-          printf '%s' "$GH_TOKEN" | oras login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          test "$(gh api /user/packages/container/shutterspool-candidates --jq .visibility)" = private
-          test "$(oras resolve "$CANDIDATE_PACKAGE:$IMAGE_TAG")" = "$IMAGE_DIGEST"
-          test "$(oras resolve "$CANDIDATE_PACKAGE:$BUNDLE_TAG")" = "$BUNDLE_DIGEST"
-          oras cp --to-oci-layout "$CANDIDATE_PACKAGE@$IMAGE_DIGEST" "$IMAGE_LAYOUT:synthetic"
-          python tools/ghcr-publication.py verify-image --layout "$IMAGE_LAYOUT" --image-digest "$IMAGE_DIGEST"
-          oras pull --output "$OUTPUT_DIR" "$CANDIDATE_PACKAGE@$BUNDLE_DIGEST"
-          oras manifest fetch --output "$BUNDLE_MANIFEST" "$CANDIDATE_PACKAGE@$BUNDLE_DIGEST"
-          python tools/ghcr-publication.py verify-synthetic-bundle --directory "$OUTPUT_DIR" --oci-manifest "$BUNDLE_MANIFEST" --compose-sha256 "$COMPOSE_SHA256" --manifest-sha256 "$MANIFEST_SHA256"
-      - name: Publish only the approved synthetic fixture without overwriting
-        id: publish
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CANDIDATE_PACKAGE: ghcr.io/sewieland/shutterspool-candidates
-          IMAGE_DIGEST: ${{ needs.resolve-synthetic-probe.outputs.image_digest }}
-          BUNDLE_DIGEST: ${{ needs.resolve-synthetic-probe.outputs.bundle_digest }}
-          TARGET_PACKAGE: ${{ needs.resolve-synthetic-probe.outputs.target_package }}
-          TARGET_IMAGE_TAG: ${{ needs.resolve-synthetic-probe.outputs.target_image_tag }}
-          TARGET_BUNDLE_TAG: ${{ needs.resolve-synthetic-probe.outputs.target_bundle_tag }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          existing_image="$(python tools/ghcr-publication.py inspect-tag -- oras resolve "$TARGET_PACKAGE:$TARGET_IMAGE_TAG")"
-          existing_bundle="$(python tools/ghcr-publication.py inspect-tag -- oras resolve "$TARGET_PACKAGE:$TARGET_BUNDLE_TAG")"
-          image_plan="$(python tools/ghcr-publication.py plan-tag --existing "$existing_image" --approved-digest "$IMAGE_DIGEST")"
-          bundle_plan="$(python tools/ghcr-publication.py plan-tag --existing "$existing_bundle" --approved-digest "$BUNDLE_DIGEST")"
-          if [[ "$image_plan" == publish ]]; then oras cp "$CANDIDATE_PACKAGE@$IMAGE_DIGEST" "$TARGET_PACKAGE:$TARGET_IMAGE_TAG" >/dev/null; fi
-          if [[ "$bundle_plan" == publish ]]; then oras cp "$CANDIDATE_PACKAGE@$BUNDLE_DIGEST" "$TARGET_PACKAGE:$TARGET_BUNDLE_TAG" >/dev/null; fi
-          test "$(oras resolve "$TARGET_PACKAGE:$TARGET_IMAGE_TAG")" = "$IMAGE_DIGEST"
-          test "$(oras resolve "$TARGET_PACKAGE:$TARGET_BUNDLE_TAG")" = "$BUNDLE_DIGEST"
-          visibility="$(gh api /user/packages/container/shutterspool-publish-test --jq .visibility)"
-          if [[ "$visibility" != public ]]; then
-            printf 'Synthetic publication is present but the package is %s; set its visibility to Public and rerun anonymous verification.\n' "$visibility" >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-
-  verify-synthetic-anonymous:
-    needs: [resolve-synthetic-probe, publish-synthetic-probe]
-    if: github.repository == 'SeWieland/ShutterSpool' && github.ref == 'refs/heads/main' && vars.GHCR_CANDIDATE_STAGING_ENABLED == 'true' && inputs.destination == 'test'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    env:
-      TARGET_PACKAGE: ${{ needs.resolve-synthetic-probe.outputs.target_package }}
-      IMAGE_TAG: ${{ needs.resolve-synthetic-probe.outputs.target_image_tag }}
-      IMAGE_DIGEST: ${{ needs.resolve-synthetic-probe.outputs.image_digest }}
-      BUNDLE_TAG: ${{ needs.resolve-synthetic-probe.outputs.target_bundle_tag }}
-      BUNDLE_DIGEST: ${{ needs.resolve-synthetic-probe.outputs.bundle_digest }}
-      COMPOSE_SHA256: ${{ needs.resolve-synthetic-probe.outputs.compose_sha256 }}
-      MANIFEST_SHA256: ${{ needs.resolve-synthetic-probe.outputs.manifest_sha256 }}
-    steps:
-      - name: Check out synthetic probe verifier
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Set up ORAS
-        uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6 # v1
-        with:
-          url: https://github.com/oras-project/oras/releases/download/v1.3.6/oras_1.3.6_linux_amd64.tar.gz
-          checksum: 66fb0ad7206f3f6fa77ed5b552049d364ccf4b50b1684554f731f76302b52ca0
-      - name: Pull exact synthetic objects anonymously
-        env:
-          OUTPUT_DIR: ${{ runner.temp }}/synthetic-anonymous-pull
-          IMAGE_LAYOUT: ${{ runner.temp }}/synthetic-anonymous-image
-          BUNDLE_MANIFEST: ${{ runner.temp }}/synthetic-anonymous-bundle-manifest.json
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(oras resolve "$TARGET_PACKAGE:$IMAGE_TAG")" = "$IMAGE_DIGEST"
-          test "$(oras resolve "$TARGET_PACKAGE:$BUNDLE_TAG")" = "$BUNDLE_DIGEST"
-          oras cp --to-oci-layout "$TARGET_PACKAGE@$IMAGE_DIGEST" "$IMAGE_LAYOUT:synthetic"
-          python tools/ghcr-publication.py verify-image --layout "$IMAGE_LAYOUT" --image-digest "$IMAGE_DIGEST"
-          oras pull --output "$OUTPUT_DIR" "$TARGET_PACKAGE@$BUNDLE_DIGEST"
-          oras manifest fetch --output "$BUNDLE_MANIFEST" "$TARGET_PACKAGE@$BUNDLE_DIGEST"
-          python tools/ghcr-publication.py verify-synthetic-bundle --directory "$OUTPUT_DIR" --oci-manifest "$BUNDLE_MANIFEST" --compose-sha256 "$COMPOSE_SHA256" --manifest-sha256 "$MANIFEST_SHA256"
-          printf 'Anonymous synthetic image and both harmless bundle files matched the approved identities.\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '{}' > "$RUNNER_TEMP/anonymous.json"
+          oras cp --registry-config "$RUNNER_TEMP/anonymous.json" --to-oci-layout "$PUBLIC@$IMAGE" "$RUNNER_TEMP/public-image:verified"
+          oras pull --registry-config "$RUNNER_TEMP/anonymous.json" --output "$RUNNER_TEMP/public-bundle" "$PUBLIC@$BUNDLE"
+          printf 'Published and retrieved anonymously: `%s:%s@%s` and bundle `%s`.\n' "$PUBLIC" "$VERSION" "$IMAGE" "$BUNDLE" >> "$GITHUB_STEP_SUMMARY"
