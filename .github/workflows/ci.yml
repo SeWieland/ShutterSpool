@@ -79,7 +79,7 @@ jobs:
         working-directory: src/ShutterSpool.Web
       - name: Test camera FTP client security
         run: python tests/verify-camera-ftp-client.py
-      - name: Verify release builder
+      - name: Test Compose packaging
         run: python tests/verify-release-build.py
       - name: Test supplied camera certificate validation
         run: python tests/verify-edge-startup.py

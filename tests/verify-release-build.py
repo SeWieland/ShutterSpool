@@ -1,192 +1,109 @@
+import hashlib
 import importlib.util
 import json
-import hashlib
-import io
-import tarfile
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-
-MODULE_PATH = Path(__file__).resolve().parents[1] / "tools/build-release.py"
-SPEC = importlib.util.spec_from_file_location("build_release", MODULE_PATH)
+SPEC = importlib.util.spec_from_file_location("build_release", Path(__file__).resolve().parents[1] / "tools/build-release.py")
 build_release = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(build_release)
+COMMIT = "a" * 40
+DIGEST = "sha256:" + "b" * 64
 
 
-class ReleaseBuildTests(unittest.TestCase):
-    def test_requires_matching_explicit_prerelease_revision(self):
-        with self.assertRaises(build_release.BuildError):
-            build_release.validate_selection("0.1.0-alpha.1", "a" * 40, "b" * 40, False, False)
-        with self.assertRaises(build_release.BuildError):
-            build_release.validate_selection("0.1.0", "a" * 40, "a" * 40, False, False)
-        with self.assertRaises(build_release.BuildError):
-            build_release.validate_selection("0.1.0-alpha.01", "a" * 40, "a" * 40, False, False)
+class ReleasePackageTests(unittest.TestCase):
+    def test_versions_classify_experimental_and_stable_releases(self):
+        for version, experimental in (("0.1.0", True), ("0.1.0-alpha.1", True),
+                                      ("1.0.0-rc.1", True), ("1.0.0", False), ("2.3.4", False)):
+            with self.subTest(version=version):
+                self.assertEqual(experimental, build_release.is_prerelease(version))
+        for version in ("01.0.0", "1.0", "1.0.0-rc.01", "1.0.0+build.1", "v1.0.0", "1.0.0-" + "a" * 128):
+            with self.subTest(version=version), self.assertRaises(build_release.BuildError):
+                build_release.validate_version(version)
 
-    def test_package_declares_the_initial_migration_and_no_historical_upgrade(self):
-        compatibility = build_release.DATABASE_COMPATIBILITY
-        migration = build_release.ROOT / "src/ShutterSpool.Infrastructure/Persistence/Migrations" / (compatibility["initialMigration"] + ".cs")
-        self.assertTrue(migration.is_file())
-        self.assertEqual("initial-create", compatibility["baseline"])
-        self.assertFalse(compatibility["historicalUpgradeSupported"])
-        self.assertEqual("pending", compatibility["qualification"])
-        self.assertEqual({"kind": "fresh-install-only", "publishedRelease": None, "qualification": "not-supported"},
-                         build_release.UPGRADE_BASELINE)
+    def args(self, output, **changes):
+        return SimpleNamespace(**({"version": "0.1.0", "revision": COMMIT, "image_digest": DIGEST,
+                                   "output": output, "aspire": "aspire"} | changes))
 
-    def test_dirty_source_requires_rehearsal_override(self):
-        with self.assertRaises(build_release.BuildError):
-            build_release.validate_selection("0.1.0-alpha.1", "a" * 40, "a" * 40, True, False)
-        build_release.validate_selection("0.1.0-alpha.1", "a" * 40, "a" * 40, True, True)
+    def generate_compose(self, command, *, env=None, **kwargs):
+        if command == ["git", "rev-parse", "HEAD"]:
+            return COMMIT
+        self.assertEqual(["aspire", "publish"], command[:2])
+        output = Path(command[command.index("--output-path") + 1])
+        services = ["  server:\n    image: '${SERVER_IMAGE:?Select the qualified Server image}'"]
+        for profile, service in (("ModernFtps", "camera-edge"), ("LegacyFtps", "camera-edge-legacy"),
+                                 ("PlainFtpLan", "camera-edge-plain")):
+            if env[f"ShutterSpool__CameraIngress__Profiles__{profile}__Enabled"] == "true":
+                services.append(f"  {service}:\n    image: example/edge@{DIGEST}")
+        (output / "docker-compose.yaml").write_text("services:\n" + "\n".join(services) + "\n", encoding="utf-8")
+        return ""
 
-    def test_rejects_lfs_pointer(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            pointer = root / "theme.bin"
-            pointer.write_bytes(build_release.LFS_HEADER + b"oid sha256:" + b"0" * 64 + b"\nsize 42\n")
-            self.assertTrue(build_release.is_lfs_pointer(pointer))
-            pointer.write_bytes(b"hydrated theme bytes")
-            self.assertFalse(build_release.is_lfs_pointer(pointer))
+    def test_package_contains_profiles_support_files_inventory_and_pinned_image(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(build_release, "run", side_effect=self.generate_compose):
+            root = build_release.prepare(self.args(Path(temp) / "release"))
+            archive = root / "shutterspool-compose.zip"
+            with zipfile.ZipFile(archive) as bundle:
+                files = set(bundle.namelist())
+                manifest = json.loads(bundle.read("release-manifest.json"))
+                self.assertEqual(files, set(manifest["files"]))
+                self.assertTrue({".env", ".env.example", "compose.yaml", "profiles/all-camera-edges.yaml",
+                                 "README.md", "package/edge-entrypoint.sh", "package/identity-entrypoint.sh",
+                                 "package/postgres-init.sh", "certificates/README.md", "operations/README.md"} <= files)
+                for directory in ("config/", "package/realms/", "package/theme/", "package/traefik/", "components/", "proxies/"):
+                    self.assertTrue(any(name.startswith(directory) for name in files), directory)
+                env = bundle.read(".env").decode()
+                self.assertIn(f"SERVER_IMAGE=ghcr.io/sewieland/shutterspool:0.1.0@{DIGEST}", env)
+                self.assertIn("SHUTTERSPOOL_VERSION=0.1.0", env)
+                self.assertNotIn("REPLACE_WITH_IMAGE_DIGEST", env)
+                core = bundle.read("compose.yaml").decode()
+                all_edges = bundle.read("profiles/all-camera-edges.yaml").decode()
+                self.assertNotIn("camera-edge-plain:", core)
+                self.assertIn("camera-edge-plain:", all_edges)
+                self.assertIn("camera-edge-legacy:", all_edges)
+                self.assertEqual(COMMIT, manifest["commit"])
+                self.assertEqual(DIGEST, manifest["serverImage"]["digest"])
+                self.assertIn(f"example/edge@{DIGEST}", manifest["upstreamImages"])
+                self.assertFalse(manifest["databaseCompatibility"]["historicalUpgradeSupported"])
+                self.assertEqual({"kind": "fresh-install-only", "publishedRelease": None}, manifest["upgradeBaseline"])
+            self.assertEqual(f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n",
+                             archive.with_suffix(".zip.sha256").read_text())
 
-    def test_global_sdk_latest_patch_policy_accepts_patch_but_rejects_other_feature_bands(self):
-        required = build_release.required_sdk_version()
-        self.assertEqual("10.0.401", build_release.validate_sdk_version("10.0.401", required))
-        for incompatible in ("10.0.399", "10.0.500", "9.0.401"):
-            with self.subTest(incompatible=incompatible), self.assertRaises(build_release.BuildError):
-                build_release.validate_sdk_version(incompatible, required)
+    def test_invalid_identity_and_existing_output_are_refused(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(build_release, "run", return_value=COMMIT):
+            root = Path(temp) / "release"
+            for change in ({"revision": "b" * 40}, {"revision": "main"}, {"image_digest": "latest"}):
+                with self.subTest(change=change), self.assertRaises(build_release.BuildError):
+                    build_release.prepare(self.args(root, **change))
+                self.assertFalse(root.exists())
+            root.mkdir()
+            marker = root / "preserve.txt"
+            marker.write_text("keep")
+            with self.assertRaises(FileExistsError):
+                build_release.prepare(self.args(root))
+            self.assertEqual("keep", marker.read_text())
 
-    def test_candidate_requires_ci_pinned_aspire_cli_version(self):
-        self.assertEqual("13.6.0+hash", build_release.validate_aspire_cli_version("13.6.0+hash"))
-        with self.assertRaises(build_release.BuildError):
-            build_release.validate_aspire_cli_version("13.6.1+hash")
-
-    def test_base_manifest_resolves_build_arguments_and_rejects_unpinned_images(self):
-        with tempfile.TemporaryDirectory() as temp:
-            dockerfile = Path(temp) / "Dockerfile"
-            dockerfile.write_text(
-                "ARG SDK_VERSION=10.0.400\nARG SDK_DIGEST=sha256:synthetic\n"
-                "FROM sdk:${SDK_VERSION}@${SDK_DIGEST} AS build\n"
-                "FROM runtime@sha256:runtime\n", encoding="utf-8")
-            self.assertEqual(["runtime@sha256:runtime", "sdk:10.0.401@sha256:synthetic"],
-                             build_release.base_images(dockerfile, {"SDK_VERSION": "10.0.401"}))
-            dockerfile.write_text("FROM runtime:latest\n", encoding="utf-8")
+    def test_generation_failure_leaves_inspectable_output_without_archive(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(build_release, "run", return_value=COMMIT), \
+                patch.object(build_release, "publish_compose", side_effect=build_release.BuildError("failed")):
+            root = Path(temp) / "release"
             with self.assertRaises(build_release.BuildError):
-                build_release.base_images(dockerfile)
+                build_release.prepare(self.args(root))
+            self.assertTrue(root.is_dir())
+            self.assertFalse((root / "shutterspool-compose.zip").exists())
 
-    def test_candidate_includes_the_deployment_operator_guide(self):
+    def test_compose_rejects_unpinned_images_source_mounts_and_unknown_parameters(self):
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            source = root / "deploy/README.md"
-            destination = root / "candidate"
-            source.parent.mkdir()
-            source.write_text("# Standalone install guide\n", encoding="utf-8")
-
-            packaged = build_release.copy_operator_guide(source, destination)
-
-            self.assertEqual(destination / "README.md", packaged)
-            self.assertEqual(source.read_bytes(), packaged.read_bytes())
-
-    def test_source_fingerprint_detects_mid_build_edits(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            source = root / "Program.cs"
-            source.write_text("before", encoding="utf-8")
-            snapshot = build_release.source_snapshot(root, ["Program.cs"])
-            before = build_release.fingerprint_snapshot(snapshot)
-            source.write_text("after", encoding="utf-8")
-            self.assertNotEqual(before, build_release.fingerprint_files(root, ["Program.cs"]))
-            self.assertEqual(before, build_release.fingerprint_snapshot(snapshot))
-
-    def test_manifest_hashes_match_staged_artifacts(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            (root / "docker-compose.yaml").write_text("services: {}\n", encoding="utf-8")
-            artifacts = build_release.file_manifest(root)
-            manifest = {"artifacts": artifacts}
-            (root / "release-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-            for relative, expected in artifacts.items():
-                path = root / relative
-                self.assertEqual(expected["size"], path.stat().st_size)
-                self.assertEqual(expected["sha256"], build_release.sha256_file(path))
-
-    def test_compose_rejects_unpinned_or_source_tree_inputs(self):
-        with tempfile.TemporaryDirectory() as temp:
-            compose = Path(temp) / "docker-compose.yaml"
-            compose.write_text("services:\n  db:\n    image: postgres:17\n", encoding="utf-8")
-            with self.assertRaises(build_release.BuildError):
-                build_release.validate_compose(compose)
-            compose.write_text('services:\n  app:\n    volumes:\n      - "./src:/src"\n', encoding="utf-8")
-            with self.assertRaises(build_release.BuildError):
-                build_release.validate_compose(compose)
-
-    def test_publish_variants_enable_only_selected_camera_edges(self):
-        env = build_release.publish_environment({"ModernFtps"})
-        self.assertEqual("true", env["ShutterSpool__CameraIngress__Profiles__ModernFtps__Enabled"])
-        self.assertEqual("false", env["ShutterSpool__CameraIngress__Profiles__LegacyFtps__Enabled"])
-        self.assertEqual("false", env["ShutterSpool__CameraIngress__Profiles__PlainFtpLan__Enabled"])
-
-    def test_compose_rejects_unknown_generator_parameters(self):
-        with tempfile.TemporaryDirectory() as temp:
-            compose = Path(temp) / "docker-compose.yaml"
-            compose.write_text('services:\n  app:\n    expose: ["${SERVER_PORT}"]\n', encoding="utf-8")
-            with self.assertRaises(build_release.BuildError):
-                build_release.validate_compose(compose)
-
-    def test_packaged_component_and_proxy_overlays_have_pinned_images(self):
-        package = MODULE_PATH.parents[1] / "deploy/package"
-        overlays = [*sorted((package / "components").glob("*.yaml")),
-                    *sorted((package / "proxies").glob("*.yaml"))]
-        self.assertTrue(overlays)
-        for overlay in overlays:
-            with self.subTest(overlay=overlay.name):
-                build_release.validate_compose(overlay)
-
-    def test_manifest_docker_version_identity_requires_both_sides(self):
-        self.assertEqual(("29.8.1", "29.8.1"),
-                         build_release.parse_docker_versions("29.8.1|29.8.1\n"))
-        with self.assertRaises(build_release.BuildError):
-            build_release.parse_docker_versions("29.8.1|")
-
-    def test_manifest_records_cli_sdk_docker_and_buildx_versions(self):
-        versions = ["29.8.1|29.8.1", "10.0.401", "13.6.0+cli-hash", "buildx v0.37.1"]
-        with patch.object(build_release, "run", side_effect=versions):
-            recorded = build_release.build_environment(SimpleNamespace(aspire="aspire", docker="docker"))
-        self.assertEqual({"aspireCli": versions[2], "dotnetSdk": versions[1],
-                          "dockerClient": "29.8.1", "dockerServer": "29.8.1", "buildx": versions[3]}, recorded)
-
-    def test_oci_requires_sbom_and_provenance_attestations(self):
-        with tempfile.TemporaryDirectory() as temp:
-            archive_path = Path(temp) / "candidate.oci.tar"
-            blobs = {}
-
-            def add_blob(data):
-                digest = hashlib.sha256(data).hexdigest()
-                blobs[digest] = data
-                return "sha256:" + digest
-
-            sbom = json.dumps({"predicateType": "https://spdx.dev/Document"}).encode()
-            provenance = json.dumps({"predicateType": "https://slsa.dev/provenance/v1"}).encode()
-            layers = []
-            for predicate, payload in (("https://spdx.dev/Document", sbom),
-                                       ("https://slsa.dev/provenance/v1", provenance)):
-                layers.append({"digest": add_blob(payload), "annotations": {"in-toto.io/predicate-type": predicate}})
-            attestation = {"layers": layers}
-            attestation_digest = add_blob(json.dumps(attestation).encode())
-            nested_digest = add_blob(json.dumps({"manifests": [
-                {"digest": attestation_digest, "annotations": {"vnd.docker.reference.type": "attestation-manifest"}}
-            ]}).encode())
-            with tarfile.open(archive_path, "w") as bundle:
-                index = json.dumps({"manifests": [{"digest": nested_digest}]}).encode()
-                item = tarfile.TarInfo("index.json")
-                item.size = len(index)
-                bundle.addfile(item, io.BytesIO(index))
-                for digest, payload in blobs.items():
-                    item = tarfile.TarInfo("blobs/sha256/" + digest)
-                    item.size = len(payload)
-                    bundle.addfile(item, io.BytesIO(payload))
-            self.assertEqual({"https://spdx.dev/Document", "https://slsa.dev/provenance/v1"},
-                             set(build_release.verify_oci_attestations(archive_path, nested_digest)))
+            compose = Path(temp) / "compose.yaml"
+            for invalid in ("services:\n  db:\n    image: postgres:17\n",
+                            'services:\n  app:\n    volumes: ["./src:/src"]\n',
+                            'services:\n  app:\n    expose: ["${SERVER_PORT}"]\n'):
+                with self.subTest(compose=invalid), self.assertRaises(build_release.BuildError):
+                    compose.write_text(invalid, encoding="utf-8")
+                    build_release.validate_compose(compose)
 
 
 if __name__ == "__main__":

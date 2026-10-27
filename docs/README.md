@@ -17,7 +17,7 @@ Choose the guide for the task you are doing. These pages describe the implemente
 - [Maintenance and recovery](../deploy/operations/README.md): stop writers, preserve matching state, restore, upgrade and roll back.
 - [Storage policy](retention.md#settings-and-safe-activation): capacity, admission, safe activation and privacy-erasure limits.
 
-A generated candidate is not a published release. Inspect its manifest and version-specific compatibility information before installation.
+A locally built package is not a published release. Inspect its manifest and version-specific compatibility information before installation.
 
 ## Developing ShutterSpool
 

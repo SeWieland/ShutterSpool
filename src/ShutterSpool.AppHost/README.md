@@ -3,36 +3,34 @@
 Aspire resource graph: Server, PostgreSQL, Valkey, Imaginary, identity and selected protocol edges, plus Nuxt for development.
 
 AppHost keeps the local resource graph and its private connections together so developers can run the product as a whole.
-Development runs use local settings. Publish mode generates the Compose candidate described in the [operator package guide](../../deploy/README.md).
+Development runs use local settings. Publish mode generates the Compose package described in the [operator package guide](../../deploy/README.md).
 Generating a package does not establish release or deployment compatibility; inspect its manifest and declared platform limits.
 For the design behind these resources, read [system boundaries](../../docs/architecture/system-boundaries.md).
 
-## Prepare a Compose candidate
+## Build a Compose package
 
 The pinned `Aspire.Hosting.Docker` integration generates the core service graph; `ComposePackage` supplies file secrets, persistent volumes and private callbacks.
 Small additive Compose components provide bundled dependencies and the selected proxy without duplicating the application graph.
 Publish mode omits Nuxt development and the Dashboard; the Server image contains generated static assets.
-The [candidate builder](../../tools/build-release.py) supplies explicit version/commit inputs, pins upstream images and retains OCI SBOM/provenance without publication.
+The [release package builder](../../tools/build-release.py) supplies explicit version, source revision and image digest inputs and packages Compose files; the release workflow builds and pushes the image directly.
 It generates modern-FTPS and all-camera-edge cores; operators select independent PostgreSQL, Valkey, Keycloak and Traefik/nginx/existing-proxy components.
-AppHost restore selects `packages.win-x64.lock.json` or `packages.linux-x64.lock.json` on the supported build hosts; candidate builds preserve tracked sources and locked production dependencies.
+AppHost restore selects `packages.win-x64.lock.json` or `packages.linux-x64.lock.json` on supported build hosts; release builds preserve tracked sources and locked production dependencies.
 Publish mode does not require local ingest certificates or export local parameter secrets.
 
-From the repository root, select an exact commit and shared candidate version:
+From the repository root, select an exact commit and shared release version.
+Hydrate checkout assets with `git lfs pull` and obtain the registry manifest digest of an already built Linux amd64 Server image matching that version and commit before packaging.
+The package builder uses the supplied digest; it does not build the image or verify its source identity.
 
-Install Aspire CLI 13.6.0, matching the candidate workflow. Pass `--aspire <executable-path>` when it is not the default CLI; the builder rejects another version.
+Install Aspire CLI 13.6.0, matching the release workflow. Pass `--aspire <executable-path>` when it is not the default CLI.
 
 ```sh
-python3 tools/build-release.py --version 0.1.0-alpha.1 --revision <exact-commit-sha> --output <new-output-directory>
+python3 tools/build-release.py --version 0.1.0-alpha.1 --revision <exact-commit-sha> --image-digest sha256:<image-digest> --output <new-output-directory>
 ```
 
-The builder rejects source/version mismatch and unhydrated LFS pointers, retains a Linux amd64 OCI image with SPDX SBOM/SLSA provenance, and hashes package contents.
-It includes artifact-local operator instructions; operators need neither Aspire nor the source tree.
-Use `--allow-dirty` only for an explicitly labelled development build; it cannot establish a commit-qualified release.
-The candidate workflow runs manually through GitHub Actions with an explicit prerelease version and exact commit SHA; pull requests and pushes do not create candidate bundles.
-It runs with read-only repository permissions and uploads retained bundles only for private repositories.
-It never tags, pushes images or publishes a release.
+The package builder validates version syntax and requires the selected revision to match checkout HEAD. It pins the supplied image digest, inventories distributed files and includes operator instructions.
+The [`release.yml` workflow](../../.github/workflows/release.yml) uses the official Docker build-push action and publishes the matching GitHub Release after required CI and package checks. It retains available package files as a seven-day Actions artifact and attaches the ZIP and checksum before release publication.
 See [package checks](../../tests/README.md#public-python-and-shell-checks) for synthetic verification and its limits.
-Follow the [release policy](../../docs/release-policy.md) for exact-artifact approval, one reviewed notes source and separately authorized publication.
+Follow the [release policy](../../docs/release-policy.md) for version stability, compatibility claims and release notes.
 
 ## Start the development environment
 
