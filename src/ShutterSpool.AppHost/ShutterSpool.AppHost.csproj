@@ -7,13 +7,16 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Aspire.Hosting.Docker" Version="13.6.0" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.UserSecrets" Version="10.0.12" />
-    <PackageReference Include="Aspire.Hosting.JavaScript" Version="13.6.0" />
-    <PackageReference Include="Aspire.Hosting.PostgreSQL" Version="13.6.0" />
-    <PackageReference Include="Aspire.Hosting.Valkey" Version="13.6.0" />
+    <PackageReference Include="Aspire.Hosting.Docker" Version="13.6.4" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.UserSecrets" Version="10.0.14" />
+    <PackageReference Include="Aspire.Hosting.JavaScript" Version="13.6.4" />
+    <PackageReference Include="Aspire.Hosting.PostgreSQL" Version="13.6.4" />
+    <PackageReference Include="Aspire.Hosting.Valkey" Version="13.6.4" />
     <!-- Pin the patched transitive dependency until Aspire raises its minimum (GHSA-qhrr-8q5h-9q3h). -->
-    <PackageReference Include="MessagePack" Version="2.5.303" />
+    <PackageReference Include="MessagePack" Version="2.5.307" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.14" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.20.1" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.20.1" />
   </ItemGroup>
 
   <ItemGroup>
