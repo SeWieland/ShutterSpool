@@ -26,7 +26,7 @@ RUN test -n "$VERSION" && test -n "$COMMIT" && \
 RUN mkdir -p /runtime/var/lib/shutterspool/spool /runtime/var/cache/shutterspool && \
     chown -R 1654:1654 /runtime/var/lib/shutterspool /runtime/var/cache/shutterspool
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:9e3919aff68057f3e45125c5255a71d3b5f40364e45ede883348688851b9f0df
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:9b755ea799ae649141a073e30d8b62d8095a5465af2b7694d17866e8c05131d8
 WORKDIR /app
 COPY --from=build --chown=1654:1654 /out/ ./
 COPY LICENSE ./
