@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using ShutterSpool.AppHost;
 
+var imagePins = ImagePins.Load();
 var builder = DistributedApplication.CreateBuilder(args);
 if (!builder.ExecutionContext.IsPublishMode) builder.Configuration.AddUserSecrets<Program>(optional: true);
 builder.Configuration.AddEnvironmentVariables();
@@ -53,7 +54,9 @@ var keycloakReconciler = builder.AddContainer("keycloak-reconciler", "quay.io/ke
     .WithBindMount("./Themes/shutterspool", "/opt/keycloak/themes/shutterspool", isReadOnly: true)
     .WaitFor(keycloak);
 var keycloakAuthority = ReferenceExpression.Create($"{keycloak.GetEndpoint("http").Property(EndpointProperty.Url)}/realms/shutterspool");
-var imaginary = builder.AddContainer("imaginary", "h2non/imaginary", "1.2.4")
+var imaginaryPin = imagePins["imaginary"];
+var imaginary = builder.AddContainer("imaginary", imaginaryPin.Image, imaginaryPin.Tag)
+    .WithImageSHA256(imaginaryPin.Sha256)
     .WithHttpEndpoint(targetPort: 9000)
     .WithArgs("-p", "9000", "-concurrency", "20", "-cpus", "2",
         "-http-read-timeout", "120", "-http-write-timeout", "120", "-log-level", "error")
@@ -172,8 +175,9 @@ if (profiles.Length > 0)
     void AddCameraEdge(string name, string profile, int edgeControlPort, int edgePassiveStart, int edgePassiveEnd,
         string authPath, bool secure, bool allowLegacyCiphers)
     {
-        var edge = builder.AddContainer(name, "drakkan/sftpgo")
-            .WithImageSHA256("9011fe608d336d3daf6ed6224b16fd40443aab8f3335e0b20853d6a539c58738")
+        var edgePin = imagePins["camera-edge"];
+        var edge = builder.AddContainer(name, edgePin.Image, edgePin.Tag)
+            .WithImageSHA256(edgePin.Sha256)
             .WithContainerRuntimeArgs(context =>
             {
                 context.Args.Add($"--tmpfs=/tmp:rw,noexec,nosuid,size={edgeBufferBytes}");
