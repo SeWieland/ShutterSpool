@@ -101,6 +101,22 @@ def publish_environment(enabled_profiles: set[str]) -> dict[str, str]:
     return env
 
 
+def validate_attribution(compose_file: Path, attribution: dict) -> None:
+    expected = attribution.get("image", "")
+    if not re.fullmatch(r"drakkan/sftpgo:[\w.-]+@sha256:[0-9a-f]{64}", expected):
+        raise BuildError("Generated SFTPGo attribution must identify a pinned upstream image.")
+    expected_digest = expected.split("@", 1)[1]
+    services = re.findall(r"(?ms)^  (camera-edge(?:-legacy|-plain)?):\s*\n(.*?)(?=^  \S|\Z)",
+                          compose_file.read_text(encoding="utf-8"))
+    if not services:
+        raise BuildError("Generated Compose is missing camera-edge attribution targets.")
+    for name, body in services:
+        image = re.search(r"(?m)^\s+image:\s*([^\r\n]+)", body)
+        reference = image.group(1).strip().strip("'\"") if image else ""
+        if not re.fullmatch(r"drakkan/sftpgo(?::[\w.-]+)?@" + re.escape(expected_digest), reference):
+            raise BuildError(f"{name} image does not match generated SFTPGo attribution.")
+
+
 def publish_compose(args: argparse.Namespace, output: Path, enabled_profiles: set[str]) -> Path:
     output.mkdir(parents=True)
     run([args.aspire, "publish", "--apphost", str(APPHOST), "--output-path", str(output), "--non-interactive"],
@@ -128,6 +144,11 @@ def prepare(args: argparse.Namespace) -> Path:
         raise BuildError("Image digest must be a SHA-256 registry manifest digest.")
     stage = args.output.resolve()
     stage.mkdir(parents=True)  # Refuse existing output; failed packages remain available for inspection.
+    run(["node", str(ROOT / "tools/generate-attribution.mjs"), "--output", str(stage)])
+    try:
+        attribution = json.loads((stage / "sftpgo.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise BuildError("Attribution generation did not produce valid SFTPGo metadata.") from exc
     with tempfile.TemporaryDirectory(prefix="shutterspool-compose-") as temp:
         (stage / "profiles").mkdir()
         variants = [
@@ -138,6 +159,7 @@ def prepare(args: argparse.Namespace) -> Path:
         for relative, enabled_profiles in variants:
             compose = publish_compose(args, Path(temp) / ("aspire-" + Path(relative).stem), enabled_profiles)
             upstream_images.update(ref for ref in validate_compose(compose) if "${" not in ref)
+            validate_attribution(compose, attribution)
             shutil.copy2(compose, stage / relative)
         (stage / "package").mkdir()
         for helper in ("edge-entrypoint.sh", "identity-entrypoint.sh", "postgres-init.sh"):
@@ -157,6 +179,7 @@ def prepare(args: argparse.Namespace) -> Path:
             shutil.copy2(example, stage / "config" / example.name)
             shutil.copy2(example, stage / "config" / example.name.removesuffix(".example"))
         shutil.copy2(ROOT / "deploy/README.md", stage / "README.md")
+        shutil.copy2(ROOT / "LICENSE", stage / "LICENSE")
         shutil.copy2(ROOT / "deploy/.env.example", stage / ".env.example")
 
     image = f"{IMAGE_REPOSITORY}:{args.version}"
@@ -171,6 +194,7 @@ def prepare(args: argparse.Namespace) -> Path:
         "prerelease": is_prerelease(args.version), "platform": "linux/amd64",
         "serverImage": {"reference": image, "digest": args.image_digest},
         "upstreamImages": sorted(upstream_images),
+        "sftpgo": attribution,
         "databaseCompatibility": DATABASE_COMPATIBILITY,
         "upgradeBaseline": UPGRADE_BASELINE,
         "files": files,

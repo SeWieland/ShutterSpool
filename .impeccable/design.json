@@ -278,6 +278,7 @@
     "overview": "Use a neutral dark photo workspace in Impeccable's Operate mode.\nSources, Curation, Gallery and Delivery form the implemented workspace. Curation autosaves shared Capture\nmetadata; Gallery supports viewing and explicit loaded-photo selection; Delivery exposes rules and per-Asset evidence.\nKeep accepted ingest, preview availability, release and confirmed delivery separately readable.\nThe supplied full-color shutter artwork anchors the header and sign-in; reusable controls use Nuxt UI with native inputs where sufficient.\nThe initial slice is dark only, including on an operating system that prefers light.\n",
     "keyCharacteristics": [],
     "rules": [
+      "About & licenses is available from the shared header before and after sign-in. Its native dialog preserves workspace drafts, contains keyboard focus, supports Escape and a labeled Close action, and returns focus to its trigger. Underlined source and license links open separately.",
       "Gallery and Curation fullscreen controls hide after three idle seconds without animation. Pointer movement, touch or keyboard interaction reveals them; keyboard focus and actionable recovery feedback keep them visible. The first touch wakes hidden controls without activating an action.",
       "Semantic CSS tokens have one owner in main.css; workspace and Nuxt UI surfaces, text and borders consume the same palette.",
       "The workspace header is 80px on desktop and 68px at widths of 760px or less.",

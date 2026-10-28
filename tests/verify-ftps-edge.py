@@ -19,8 +19,9 @@ import tempfile
 import threading
 import time
 import urllib.parse
+from image_pins import load_image_pins
 
-IMAGE = 'drakkan/sftpgo@sha256:9011fe608d336d3daf6ed6224b16fd40443aab8f3335e0b20853d6a539c58738'
+IMAGE = load_image_pins()['camera-edge']
 KEY = secrets.token_hex(32)
 PASSWORD = secrets.token_hex(16)
 files = {}

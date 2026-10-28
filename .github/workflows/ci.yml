@@ -81,6 +81,8 @@ jobs:
         run: python tests/verify-camera-ftp-client.py
       - name: Test Compose packaging
         run: python tests/verify-release-build.py
+      - name: Test shared container image pins
+        run: python tests/verify-image-pins.py
       - name: Test supplied camera certificate validation
         run: python tests/verify-edge-startup.py
       - name: Restore core tests

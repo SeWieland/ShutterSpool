@@ -98,6 +98,9 @@ Borders provide separation on the dark surfaces; avoid decorative depth.
 
 ## Components
 
+The shared header provides About & licenses before and after sign-in. Open attribution in a native dialog without navigating away or disturbing workspace drafts.
+Keep a labeled Close action, keyboard focus within the dialog while open, Escape dismissal and focus return to its trigger. Source and license links are underlined and open separately from the workspace.
+
 Collapsible sections use native `details`/`summary` controls with a highlighted summary row at least 44px high.
 Use one decorative chevron: right when closed, down when open. Keep the label and keyboard focus visible.
 Raised neutral backgrounds distinguish summaries inside panels and nested disclosures from their surrounding surface.
