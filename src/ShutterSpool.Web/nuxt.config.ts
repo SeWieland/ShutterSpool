@@ -1,9 +1,12 @@
+import sftpgo from '../../artifacts/attribution/sftpgo.json'
+
 export default defineNuxtConfig({
   ssr: false,
   modules: ['@nuxt/ui'],
   css: ['~/assets/main.css', '~/assets/workspace.css'],
   colorMode: { preference: 'dark', fallback: 'dark' },
   ui: { fonts: false },
+  appConfig: { sftpgo },
   hooks: {
     'build:manifest': manifest => {
       // Keep authenticated and inactive sections on demand, including on the static sign-in page.

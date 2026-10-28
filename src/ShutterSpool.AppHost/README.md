@@ -21,7 +21,7 @@ From the repository root, select an exact commit and shared release version.
 Hydrate checkout assets with `git lfs pull` and obtain the registry manifest digest of an already built Linux amd64 Server image matching that version and commit before packaging.
 The package builder uses the supplied digest; it does not build the image or verify its source identity.
 
-Install Aspire CLI 13.6.0, matching the release workflow. Pass `--aspire <executable-path>` when it is not the default CLI.
+Install Aspire CLI 13.6.0 and the Node.js version selected by [the Web package](../ShutterSpool.Web/package.json), matching the release workflow. Node generates image attribution before packaging. Pass `--aspire <executable-path>` when it is not the default CLI.
 
 ```sh
 python3 tools/build-release.py --version 0.1.0-alpha.1 --revision <exact-commit-sha> --image-digest sha256:<image-digest> --output <new-output-directory>
@@ -95,7 +95,7 @@ When changing the graph, stop/restart through Aspire, then `aspire wait server -
 and wait for each enabled edge. Source edits require no graph restart.
 Build before setting ingress environment variables, then use `aspire start --no-build --non-interactive` so build-time OpenAPI discovery does not inherit incomplete callback settings.
 
-The edge uses the Community SFTPGo image pinned in [Program.cs](Program.cs). The [third-party notices](../../THIRD-PARTY-NOTICES.md#sftpgo-camera-ingress) identify its matching source and license terms. It has no spool mount or exposed administration, SSH/SFTP or WebDAV listener. Its private HTTPFs endpoint streams into ShutterSpool's spool-owned receive operation; a synchronous upload hook establishes successful completion before Asset publication and FTP success. Its account store is disposable; every login and upload admission checks PostgreSQL.
+The edge and Imaginary use the tag and digest pins in [the canonical Compose image file](../../deploy/images/compose.yaml), shared by development, publish and the protocol checks. The [third-party notices](../../THIRD-PARTY-NOTICES.md#sftpgo-camera-ingress) identify its matching source and license terms. It has no spool mount or exposed administration, SSH/SFTP or WebDAV listener. Its private HTTPFs endpoint streams into ShutterSpool's spool-owned receive operation; a synchronous upload hook establishes successful completion before Asset publication and FTP success. Its account store is disposable; every login and upload admission checks PostgreSQL.
 
 Map and allow exactly the configured profile TCP ports in the host firewall; passive host and container port numbers match and are not proxied.
 Control/data peer checks stay enabled; active FTP and SITE are disabled.

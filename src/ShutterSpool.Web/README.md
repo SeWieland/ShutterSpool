@@ -8,11 +8,13 @@ For UI design, implementation and review, use [PRODUCT.md](../../PRODUCT.md) and
 [Impeccable UI workflow](../../docs/ui.md). The workspace uses tailored Nuxt UI/native controls, shared
 dark-neutral tokens, the approved shutter artwork and locally served Manrope with its license.
 Read the [core workflow](../../docs/core-workflow.md) for behavior and [system boundaries](../../docs/architecture/system-boundaries.md) for ownership.
-The shared **About & licenses** control in the app header exposes ShutterSpool licensing and pinned SFTPGo attribution, with matching source, license and notice links.
+The shared **About & licenses** control in the app header exposes ShutterSpool licensing and pinned SFTPGo attribution, with matching source, license and notice links generated from the camera-edge image metadata.
 
 ## Build and check
 
 From a clean checkout, run `dotnet tool restore` in the repository root, then `npm ci`, `npm run typecheck`, `npm test`, and `npm run build` here to generate Server `wwwroot`.
+The build, dev server and typecheck first run the source-root `tools/generate-attribution.mjs`. It reads the `camera-edge` digest pin from `deploy/images/compose.yaml`, resolves its linux/amd64 OCI labels, and writes source-root `artifacts/attribution/sftpgo.json` and the packaged `THIRD-PARTY-NOTICES.md` with matching source and terms links.
+Image updates generate new version/source links automatically. Generation needs Docker Hub access and rejects missing or mismatched metadata; reviewing upstream terms remains part of dependency review.
 The build checks generated bundle budgets before copying static output to Server.
 The [bundle check](scripts/check-bundle.mjs) bounds initial JavaScript/CSS bytes and gzip sizes, limits the largest JavaScript chunk,
 and verifies that the five workspace sections remain dynamic without static-HTML prefetches.

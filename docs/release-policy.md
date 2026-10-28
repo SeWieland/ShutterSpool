@@ -21,7 +21,7 @@ Do not create separate frontend, .NET project or package release sequences.
 ## Artifact identity and compatibility
 
 Derive artifact versions from one selected version and commit.
-The compact release manifest records version, source commit, platform, server image reference/digest, upstream images, database compatibility, upgrade baseline and distributed file inventory.
+The compact release manifest records version, source commit, platform, server image reference/digest, upstream images, generated SFTPGo attribution, database compatibility, upgrade baseline and distributed file inventory.
 The current database baseline is `initial-create` (`20261025211318_InitialCreate`). Packages declare `fresh-install-only` with no historical upgrade support. Do not claim an upgrade path until that baseline is qualified.
 Never move a published tag or replace its artifacts with different bytes; packaging fixes receive a new shared version.
 Development builds identify their commit and unreleased status.
@@ -39,6 +39,9 @@ Do not infer physical-camera, provider, power-loss or restore-after-erasure guar
 The [`release.yml` workflow](../.github/workflows/release.yml) runs for `vX.Y.Z` and `vX.Y.Z-suffix` tags on commits in `main`. After tag/source, required-CI and version checks, it creates a GitHub Release draft with GitHub-generated notes, uses the official Docker build-push action to publish the versioned Linux amd64 image directly to `ghcr.io/sewieland/shutterspool`, packages and attaches the Compose ZIP, verifies anonymous manifest retrieval and complete assets, then publishes the draft automatically. Stable qualification is complete before creating a stable tag.
 
 The Compose configuration pins the image by digest. The Compose-only `tools/build-release.py` command takes version, revision and image digest inputs and does not build or export an image. No local image archive, private package, ORAS transfer, moving alias or candidate promotion is used.
+
+SFTPGo attribution is generated at build time from the image selected in `deploy/images/compose.yaml`. The generator reads the Linux amd64 image metadata, then produces the app metadata and packaged notices with matching source and terms links. The package builder uses Node.js to run the same generator and checks every camera-edge profile against the resulting image digest. Builds need Docker Hub access; the running app makes no registry request for attribution.
+Image updates require no manual version/source-link edits. Missing metadata or mismatched images fail the build; upstream LICENSE/NOTICE changes remain part of dependency review, without a separate hash-approval mechanism. Independently replacing an operator's SFTPGo image requires rebuilding matching attribution.
 
 GitHub's generated notes provide the initial release inventory. The tag authorizes the complete release; there is no separate manual publication gate. Experimental versions receive normal CI and basic package checks. Stable releases require qualification for their documented product and compatibility promises before tagging.
 

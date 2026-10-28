@@ -50,9 +50,7 @@ internal static class ComposePackage
             service.Logging = new Logging { Driver = "local", Options = new() { ["max-size"] = "10m", ["max-file"] = "3" } };
         }
 
-        var imaginary = file.Services["imaginary"];
-        imaginary.Image = "h2non/imaginary@sha256:7facb4221047a5e79b9e902f380247f4e5bf4376400d0badbeb738d3e1c2f654";
-        imaginary.Command = ["-p", "9000", "-concurrency", "20", "-cpus", "2", "-http-read-timeout", "120", "-http-write-timeout", "120", "-log-level", "error"];
+        file.Services["imaginary"].Command = ["-p", "9000", "-concurrency", "20", "-cpus", "2", "-http-read-timeout", "120", "-http-write-timeout", "120", "-log-level", "error"];
 
         var server = file.Services["server"];
         var ingressPorts = server.Environment.Where(item => item.Key.EndsWith("__ControlPort", StringComparison.Ordinal))

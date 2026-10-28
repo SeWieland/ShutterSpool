@@ -13,6 +13,10 @@ build_release = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(build_release)
 COMMIT = "a" * 40
 DIGEST = "sha256:" + "b" * 64
+EDGE_IMAGE = "drakkan/sftpgo:v9.8.7@sha256:" + "c" * 64
+ATTRIBUTION = {"image": EDGE_IMAGE, "version": "v9.8.7", "revision": "d" * 40,
+               "source": "https://github.com/drakkan/sftpgo/tree/" + "d" * 40}
+NOTICES = "Synthetic notices for SFTPGo v9.8.7\n" + ATTRIBUTION["source"] + "\n"
 
 
 class ReleasePackageTests(unittest.TestCase):
@@ -32,13 +36,18 @@ class ReleasePackageTests(unittest.TestCase):
     def generate_compose(self, command, *, env=None, **kwargs):
         if command == ["git", "rev-parse", "HEAD"]:
             return COMMIT
+        if command[0] == "node":
+            output = Path(command[command.index("--output") + 1])
+            (output / "sftpgo.json").write_text(json.dumps(ATTRIBUTION), encoding="utf-8")
+            (output / "THIRD-PARTY-NOTICES.md").write_bytes(NOTICES.encode())
+            return ""
         self.assertEqual(["aspire", "publish"], command[:2])
         output = Path(command[command.index("--output-path") + 1])
         services = ["  server:\n    image: '${SERVER_IMAGE:?Select the qualified Server image}'"]
         for profile, service in (("ModernFtps", "camera-edge"), ("LegacyFtps", "camera-edge-legacy"),
                                  ("PlainFtpLan", "camera-edge-plain")):
             if env[f"ShutterSpool__CameraIngress__Profiles__{profile}__Enabled"] == "true":
-                services.append(f"  {service}:\n    image: example/edge@{DIGEST}")
+                services.append(f"  {service}:\n    image: {EDGE_IMAGE}")
         (output / "docker-compose.yaml").write_text("services:\n" + "\n".join(services) + "\n", encoding="utf-8")
         return ""
 
@@ -55,8 +64,10 @@ class ReleasePackageTests(unittest.TestCase):
                                  "package/postgres-init.sh", "certificates/README.md", "operations/README.md"} <= files)
                 for directory in ("config/", "package/realms/", "package/theme/", "package/traefik/", "components/", "proxies/"):
                     self.assertTrue(any(name.startswith(directory) for name in files), directory)
-                for notice in ("LICENSE", "THIRD-PARTY-NOTICES.md"):
-                    self.assertEqual((build_release.ROOT / notice).read_bytes(), bundle.read(notice))
+                self.assertEqual((build_release.ROOT / "LICENSE").read_bytes(), bundle.read("LICENSE"))
+                self.assertEqual(NOTICES, bundle.read("THIRD-PARTY-NOTICES.md").decode())
+                self.assertEqual(ATTRIBUTION, json.loads(bundle.read("sftpgo.json")))
+                self.assertEqual(ATTRIBUTION, manifest["sftpgo"])
                 self.assertEqual(
                     (build_release.ROOT / "src/ShutterSpool.AppHost/Themes/shutterspool/login/resources/fonts/Manrope-OFL.txt").read_bytes(),
                     bundle.read("package/theme/login/resources/fonts/Manrope-OFL.txt"))
@@ -71,7 +82,7 @@ class ReleasePackageTests(unittest.TestCase):
                 self.assertIn("camera-edge-legacy:", all_edges)
                 self.assertEqual(COMMIT, manifest["commit"])
                 self.assertEqual(DIGEST, manifest["serverImage"]["digest"])
-                self.assertIn(f"example/edge@{DIGEST}", manifest["upstreamImages"])
+                self.assertIn(EDGE_IMAGE, manifest["upstreamImages"])
                 self.assertFalse(manifest["databaseCompatibility"]["historicalUpgradeSupported"])
                 self.assertEqual({"kind": "fresh-install-only", "publishedRelease": None}, manifest["upgradeBaseline"])
             self.assertEqual(f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n",
@@ -92,7 +103,7 @@ class ReleasePackageTests(unittest.TestCase):
             self.assertEqual("keep", marker.read_text())
 
     def test_generation_failure_leaves_inspectable_output_without_archive(self):
-        with tempfile.TemporaryDirectory() as temp, patch.object(build_release, "run", return_value=COMMIT), \
+        with tempfile.TemporaryDirectory() as temp, patch.object(build_release, "run", side_effect=self.generate_compose), \
                 patch.object(build_release, "publish_compose", side_effect=build_release.BuildError("failed")):
             root = Path(temp) / "release"
             with self.assertRaises(build_release.BuildError):
@@ -109,6 +120,38 @@ class ReleasePackageTests(unittest.TestCase):
                 with self.subTest(compose=invalid), self.assertRaises(build_release.BuildError):
                     compose.write_text(invalid, encoding="utf-8")
                     build_release.validate_compose(compose)
+
+    def test_package_refuses_attribution_that_does_not_match_each_compose_profile(self):
+        for service in ("camera-edge", "camera-edge-legacy", "camera-edge-plain"):
+            def mismatched(command, **kwargs):
+                result = self.generate_compose(command, **kwargs)
+                if command[:2] == ["aspire", "publish"]:
+                    output = Path(command[command.index("--output-path") + 1]) / "docker-compose.yaml"
+                    if "all-camera-edges" in str(output):
+                        text = output.read_text().replace(
+                            f"  {service}:\n    image: {EDGE_IMAGE}",
+                            f"  {service}:\n    image: drakkan/sftpgo:v9.8.6@sha256:" + "e" * 64)
+                        output.write_text(text, encoding="utf-8")
+                return result
+
+            with self.subTest(service=service), tempfile.TemporaryDirectory() as temp, \
+                    patch.object(build_release, "run", side_effect=mismatched):
+                root = Path(temp) / "release"
+                with self.assertRaises(build_release.BuildError):
+                    build_release.prepare(self.args(root))
+                self.assertFalse((root / "shutterspool-compose.zip").exists())
+
+    def test_attribution_generation_failure_cannot_produce_a_package(self):
+        def failed(command, **kwargs):
+            if command[0] == "node":
+                raise build_release.BuildError("Metadata unavailable")
+            return self.generate_compose(command, **kwargs)
+
+        with tempfile.TemporaryDirectory() as temp, patch.object(build_release, "run", side_effect=failed):
+            root = Path(temp) / "release"
+            with self.assertRaises(build_release.BuildError):
+                build_release.prepare(self.args(root))
+            self.assertFalse((root / "shutterspool-compose.zip").exists())
 
 
 if __name__ == "__main__":

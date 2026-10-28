@@ -1,5 +1,10 @@
 version: 2
 updates:
+  - package-ecosystem: docker
+    directories: ['/deploy', '/deploy/images', '/deploy/package/components', '/deploy/package/proxies']
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
   - package-ecosystem: github-actions
     directory: /
     schedule:

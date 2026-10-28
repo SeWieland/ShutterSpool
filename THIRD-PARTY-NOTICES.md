@@ -17,19 +17,20 @@ See the [asset guide](https://github.com/SeWieland/ShutterSpool/blob/main/assets
 ## SFTPGo camera ingress
 
 ShutterSpool uses the separate, unmodified SFTPGo Community container for camera FTP/FTPS ingress.
-SFTPGo is developed by the SFTPGo authors; this project is not endorsed by or affiliated with them.
-The [AppHost image pin](https://github.com/SeWieland/ShutterSpool/blob/main/src/ShutterSpool.AppHost/Program.cs) selects the configured container; a released package records its exact reference in `release-manifest.json`.
-The links below identify its matching source and terms.
+SFTPGo is developed by Nicola Murino and contributors. ShutterSpool is not endorsed by or affiliated with them.
+The [canonical image pin](https://github.com/SeWieland/ShutterSpool/blob/main/deploy/images/compose.yaml) selects the container.
 
-- [Matching SFTPGo source](https://github.com/drakkan/sftpgo/tree/9888a3d169aed9011ae6e4f7a97ae735c1643068)
-- [GNU AGPL version 3 license](https://github.com/drakkan/sftpgo/blob/9888a3d169aed9011ae6e4f7a97ae735c1643068/LICENSE), identified by upstream as `AGPL-3.0-only`
-- [Additional attribution and source-access terms](https://github.com/drakkan/sftpgo/blob/9888a3d169aed9011ae6e4f7a97ae735c1643068/NOTICE)
-- [Upstream licensing and trademark policy](https://sftpgo.com/licensing)
+<!-- BEGIN GENERATED SFTPGo ATTRIBUTION -->
+Builds replace this paragraph with the selected image's version and matching source, LICENSE and NOTICE links.
+Run `node tools/generate-attribution.mjs` from the source root to inspect `artifacts/attribution/sftpgo.json` and the generated notices.
+<!-- END GENERATED SFTPGo ATTRIBUTION -->
+
+For upstream's current development sources and terms, see the [SFTPGo repository](https://github.com/drakkan/sftpgo),
+[AGPL license](https://github.com/drakkan/sftpgo/blob/main/LICENSE), [additional terms](https://github.com/drakkan/sftpgo/blob/main/NOTICE)
+and [licensing/trademark policy](https://sftpgo.com/licensing). Released artifacts provide revision-specific links in the section above and in the app's **About & licenses** dialog.
 
 The repository configures this image; it does not vendor SFTPGo or its proprietary WebAdmin/WebClient theme.
 The configured HTTP administration interface is disabled. See the [camera-edge guide](https://github.com/SeWieland/ShutterSpool/blob/main/src/ShutterSpool.AppHost/README.md#camera-ingress) for integration details.
-The app's **About & licenses** control is available before and after sign-in and identifies the packaged camera edge, its authors and its matching source, license and additional terms.
 Use, distribution and hosting must satisfy SFTPGo's applicable license, notice and trademark terms, including attribution and access to matching source.
-When updating the image pin, verify its version and source revision from the image metadata and update these source/license links and the app attribution to match.
 The MIT grant for ShutterSpool does not establish that the integrated deployment is an independent aggregate, waive any applicable AGPL obligations, or grant commercial rights to SFTPGo's trademarks.
 Review those conditions before distributing the integrated product or offering it as a paid service; this source repository is not a compliance certification for either use.

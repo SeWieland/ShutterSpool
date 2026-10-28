@@ -8,6 +8,7 @@ import {
     restoring,
 } from "./lib/session";
 const route = useRoute();
+const { sftpgo } = useAppConfig();
 const workspace = ref<{ requestDeparture: () => boolean } | null>(null);
 const signInVisible = ref(true);
 const aboutDialog = ref<HTMLDialogElement>();
@@ -56,8 +57,8 @@ onUnmounted(() => document.removeEventListener('visibilitychange', updateSignInV
                 <div class="about-heading"><h2 id="about-title">About &amp; licenses</h2><button type="button" @click="aboutDialog?.close()">Close</button></div>
                 <p>ShutterSpool is licensed under the MIT License. <a href="https://github.com/SeWieland/ShutterSpool/blob/778eb89e41cb148081a0a50fd49203cd2a9a2602/LICENSE" target="_blank" rel="noopener noreferrer">Read the license</a>.</p>
                 <p>SFTPGo® is a registered trademark of Nicola Murino. Copyright Nicola Murino and contributors. ShutterSpool is not affiliated with or endorsed by Nicola Murino or the SFTPGo project.</p>
-                <p>The packaged camera FTP/FTPS edge uses SFTPGo v2.7.5, licensed under GNU AGPL-3.0-only with additional terms. Read the <a href="https://github.com/drakkan/sftpgo/blob/9888a3d169aed9011ae6e4f7a97ae735c1643068/LICENSE" target="_blank" rel="noopener noreferrer">license</a> and <a href="https://github.com/drakkan/sftpgo/blob/9888a3d169aed9011ae6e4f7a97ae735c1643068/NOTICE" target="_blank" rel="noopener noreferrer">notice</a>.</p>
-                <p><a href="https://github.com/drakkan/sftpgo/tree/9888a3d169aed9011ae6e4f7a97ae735c1643068" target="_blank" rel="noopener noreferrer">Source code for SFTPGo v2.7.5</a></p>
+                <p>The packaged camera FTP/FTPS edge uses SFTPGo v{{ sftpgo.version.replace(/^v/, '') }}, licensed under GNU AGPL-3.0-only with additional terms. Read the <a :href="sftpgo.license" target="_blank" rel="noopener noreferrer">license</a> and <a :href="sftpgo.notice" target="_blank" rel="noopener noreferrer">notice</a>.</p>
+                <p><a :href="sftpgo.source" target="_blank" rel="noopener noreferrer">Source code for SFTPGo v{{ sftpgo.version.replace(/^v/, '') }}</a></p>
             </dialog>
             <NuxtPage v-if="route.path.startsWith('/auth/')" />
             <Suspense v-else-if="session">

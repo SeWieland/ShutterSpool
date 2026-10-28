@@ -23,7 +23,8 @@ Continue with [Configure and start](#configure-and-start) from the extracted `in
 The generated `.env` pins `SERVER_IMAGE` to the official image digest, which Docker Compose pulls anonymously from GHCR.
 This archive contains configuration and operator instructions; its image is stored separately in GHCR, so there is no local image archive to load.
 The manifest inventories the distributed package files and records the source commit and image digest. The Compose file pins that public image by digest.
-The ZIP root includes `LICENSE` and `THIRD-PARTY-NOTICES.md`; the Server image carries the same files under `/app`.
+The ZIP root includes `LICENSE`, generated `THIRD-PARTY-NOTICES.md` and `sftpgo.json`; the Server image carries these under `/app`.
+The SFTPGo version and source links come from the pinned image metadata during the build. The package manifest records that attribution, and packaging rejects camera-edge images that do not match it.
 Read and preserve these notices when redistributing artifacts. Separately pulled service images retain their own terms; including these files does not establish compliance for an integrated deployment or hosted service.
 
 ## TL;DR
