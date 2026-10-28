@@ -30,6 +30,7 @@ async function fixture({ platform = { os: 'linux', architecture: 'amd64' }, vers
   let redirectedAuth;
   const fetchImpl = async (url, init) => {
     const value = String(url);
+    const parsed = new URL(value);
     if (value.startsWith('https://auth.docker.io/')) return oversizedResponse
       ? new Response('x'.repeat(2 * 1024 * 1024 + 1)) : Response.json({ token: 'test-token' });
     if (value.includes('/manifests/sha256:')) {
@@ -41,7 +42,7 @@ async function fixture({ platform = { os: 'linux', architecture: 'amd64' }, vers
       if (redirectHost) return new Response(null, { status: 307, headers: { location: `https://${redirectHost}/signed/blob?secret=redacted` } });
       return response(configBytes);
     }
-    if (value.includes('production.cloudfront.docker.com')) {
+    if (parsed.hostname === 'production.cloudfront.docker.com') {
       redirectedAuth = init.headers.authorization;
       return response(configBytes);
     }
