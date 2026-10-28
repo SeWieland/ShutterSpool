@@ -8,6 +8,7 @@ For UI design, implementation and review, use [PRODUCT.md](../../PRODUCT.md) and
 [Impeccable UI workflow](../../docs/ui.md). The workspace uses tailored Nuxt UI/native controls, shared
 dark-neutral tokens, the approved shutter artwork and locally served Manrope with its license.
 Read the [core workflow](../../docs/core-workflow.md) for behavior and [system boundaries](../../docs/architecture/system-boundaries.md) for ownership.
+The shared **About & licenses** control in the app header exposes ShutterSpool licensing and pinned SFTPGo attribution, with matching source, license and notice links.
 
 ## Build and check
 

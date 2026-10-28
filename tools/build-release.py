@@ -157,6 +157,8 @@ def prepare(args: argparse.Namespace) -> Path:
             shutil.copy2(example, stage / "config" / example.name)
             shutil.copy2(example, stage / "config" / example.name.removesuffix(".example"))
         shutil.copy2(ROOT / "deploy/README.md", stage / "README.md")
+        for notice in ("LICENSE", "THIRD-PARTY-NOTICES.md"):
+            shutil.copy2(ROOT / notice, stage / notice)
         shutil.copy2(ROOT / "deploy/.env.example", stage / ".env.example")
 
     image = f"{IMAGE_REPOSITORY}:{args.version}"

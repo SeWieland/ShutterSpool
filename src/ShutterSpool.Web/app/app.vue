@@ -10,6 +10,12 @@ import {
 const route = useRoute();
 const workspace = ref<{ requestDeparture: () => boolean } | null>(null);
 const signInVisible = ref(true);
+const aboutDialog = ref<HTMLDialogElement>();
+const aboutTrigger = ref<HTMLButtonElement>();
+function openAbout() {
+    aboutDialog.value?.showModal();
+}
+function restoreAboutFocus() { aboutTrigger.value?.focus({ preventScroll: true }); }
 function leaveSession() {
     if (workspace.value?.requestDeparture() === false) return;
     void signOut();
@@ -34,8 +40,9 @@ onUnmounted(() => document.removeEventListener('visibilitychange', updateSignInV
                         alt=""
                         width="56"
                         height="56"
-                    />ShutterSpool<span id="brand-live-status" /></NuxtLink
-                ><div v-if="session" id="workspace-header-actions"><UButton
+                    /><span class="brand-name">ShutterSpool</span><span id="brand-live-status" /></NuxtLink
+                ><div id="workspace-header-actions"><button ref="aboutTrigger" class="about-access" type="button" aria-label="About & licenses" title="About & licenses" @click="openAbout"><UIcon name="i-lucide-info" /><span class="about-label">About &amp; licenses</span></button><UButton
+                    v-if="session"
                     class="signout-button"
                     aria-label="Sign out"
                     title="Sign out"
@@ -45,6 +52,13 @@ onUnmounted(() => document.removeEventListener('visibilitychange', updateSignInV
                     ><UIcon class="signout-icon" name="i-lucide-log-out" /><span class="signout-label">Sign out</span></UButton
                 ></div>
             </header>
+            <dialog ref="aboutDialog" class="discard-dialog about-dialog" aria-labelledby="about-title" @close="restoreAboutFocus">
+                <div class="about-heading"><h2 id="about-title">About &amp; licenses</h2><button type="button" @click="aboutDialog?.close()">Close</button></div>
+                <p>ShutterSpool is licensed under the MIT License. <a href="https://github.com/SeWieland/ShutterSpool/blob/778eb89e41cb148081a0a50fd49203cd2a9a2602/LICENSE" target="_blank" rel="noopener noreferrer">Read the license</a>.</p>
+                <p>SFTPGo® is a registered trademark of Nicola Murino. Copyright Nicola Murino and contributors. ShutterSpool is not affiliated with or endorsed by Nicola Murino or the SFTPGo project.</p>
+                <p>The packaged camera FTP/FTPS edge uses SFTPGo v2.7.5, licensed under GNU AGPL-3.0-only with additional terms. Read the <a href="https://github.com/drakkan/sftpgo/blob/9888a3d169aed9011ae6e4f7a97ae735c1643068/LICENSE" target="_blank" rel="noopener noreferrer">license</a> and <a href="https://github.com/drakkan/sftpgo/blob/9888a3d169aed9011ae6e4f7a97ae735c1643068/NOTICE" target="_blank" rel="noopener noreferrer">notice</a>.</p>
+                <p><a href="https://github.com/drakkan/sftpgo/tree/9888a3d169aed9011ae6e4f7a97ae735c1643068" target="_blank" rel="noopener noreferrer">Source code for SFTPGo v2.7.5</a></p>
+            </dialog>
             <NuxtPage v-if="route.path.startsWith('/auth/')" />
             <Suspense v-else-if="session">
                 <LazyOperationalWorkspace

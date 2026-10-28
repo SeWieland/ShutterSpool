@@ -55,6 +55,11 @@ class ReleasePackageTests(unittest.TestCase):
                                  "package/postgres-init.sh", "certificates/README.md", "operations/README.md"} <= files)
                 for directory in ("config/", "package/realms/", "package/theme/", "package/traefik/", "components/", "proxies/"):
                     self.assertTrue(any(name.startswith(directory) for name in files), directory)
+                for notice in ("LICENSE", "THIRD-PARTY-NOTICES.md"):
+                    self.assertEqual((build_release.ROOT / notice).read_bytes(), bundle.read(notice))
+                self.assertEqual(
+                    (build_release.ROOT / "src/ShutterSpool.AppHost/Themes/shutterspool/login/resources/fonts/Manrope-OFL.txt").read_bytes(),
+                    bundle.read("package/theme/login/resources/fonts/Manrope-OFL.txt"))
                 env = bundle.read(".env").decode()
                 self.assertIn(f"SERVER_IMAGE=ghcr.io/sewieland/shutterspool:0.1.0@{DIGEST}", env)
                 self.assertIn("SHUTTERSPOOL_VERSION=0.1.0", env)

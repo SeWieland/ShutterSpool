@@ -32,6 +32,7 @@ RUN mkdir -p /runtime/var/lib/shutterspool/spool /runtime/var/cache/shutterspool
 FROM ${RUNTIME_IMAGE}
 WORKDIR /app
 COPY --from=build --chown=1654:1654 /out/ ./
+COPY LICENSE THIRD-PARTY-NOTICES.md ./
 COPY --from=build --chown=1654:1654 /runtime/var/lib/shutterspool/ /var/lib/shutterspool/
 COPY --from=build --chown=1654:1654 /runtime/var/cache/shutterspool/ /var/cache/shutterspool/
 ARG VERSION
