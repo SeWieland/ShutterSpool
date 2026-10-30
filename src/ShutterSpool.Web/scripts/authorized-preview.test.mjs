@@ -113,6 +113,18 @@ test('explicit invalidation drops cached private bytes before revalidation and 4
   } finally { view.close() }
 })
 
+test('a forbidden derivative reread clears previously authorized private bytes without relying on global sign-out', async () => {
+    const view = preview();
+    try {
+        view.requests[0].resolve(new Response('synthetic preview', { headers: { 'X-Preview-State': 'ready', ETag: 'previous' } }));
+        await settle(); assert.match(view.read('url.value'), /^blob:/);
+        view.props.generation++; await settle();
+        view.requests[1].resolve(new Response(null, { status: 403 })); await settle();
+        assert.equal(view.read('url.value'), '');
+        assert.equal(view.read('etag'), undefined);
+    } finally { view.close(); }
+});
+
 test('dimension replacement keeps the displayed derivative through loading and failure', async () => {
     const view=preview();
     try {

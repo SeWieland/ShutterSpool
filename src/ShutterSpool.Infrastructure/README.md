@@ -30,6 +30,13 @@ It restores saved preview settings and quota accounting and completes camera rec
 `WorkspaceInventoryValidator` is shared with maintenance so allocation and database-target checks have one owner.
 Changing database or storage targets requires stopped writers and a restart; initialization is not repeated on each request.
 
+## Workspace authority
+
+`EfAccessGrantStore` owns tenant-local memberships, fixed roles, Viewer visibility and access-operation results/audit. Ordinary requests and each bulk item read current authority at admission; an admitted workflow keeps its existing transaction and lifecycle guards and may finish after access changes.
+Membership, Owner and Viewer-policy changes instead acquire the tenant access-change lock before checking current actor/target roles and revisions. They commit the change, last-Owner safeguard and audit/result together; this lock does not span media streaming or ordinary workflow transactions.
+Media query adapters apply the current Viewer predicate before projection, filters, counts and paging. Personal filters cannot broaden it; caches are not permission sources.
+The [authorization guide](../../docs/architecture/authentication-and-authorization.md) owns the request boundary and the [packaged operator procedure](../../deploy/operations/README.md#protected-owner-recovery) owns exceptional recovery. Operator evidence remains in the protected external record; tenant audit retains its reference and the bounded grant transition.
+
 ## Retention persistence and cleanup
 
 Automatic cleanup holds a dedicated PostgreSQL session advisory lease for the full bounded pass. A competing replica skips that pass; per-Asset original-use fences still protect physical removal. Pressure episodes continue to the recovery target, and only finite pending reclamation reduces further selection; protected occupancy remains in admission accounting.
