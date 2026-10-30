@@ -64,7 +64,7 @@ async function load(force = false) {
             response.headers.get("X-Preview-State")?.toLowerCase() ??
             (response.ok ? "ready" : "unavailable");
         if (!blob) {
-            if (response.status === 404 || response.status === 410) clear();
+            if ([401, 403, 404, 410].includes(response.status)) clear();
             emit('display', state.value === 'pending' ? 'pending' : 'unavailable');
             return;
         }

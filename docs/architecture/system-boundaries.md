@@ -115,6 +115,10 @@ Requests and worker passes bind an immutable workspace context before resolving 
 Missing, invalid or unavailable context fails closed; it never selects a default tenant.
 The browser's workspace URL is a selection request, and the Server still checks current membership.
 Private previews, caches and live fanout carry the same workspace identity.
+Fixed membership roles govern actions; the workspace Viewer policy separately governs readable media before filters and paging.
+Ordinary requests and each bulk item receive fresh permission checks, while admitted work may finish after revocation.
+Membership, Owner and policy changes recheck current authority and commit their audit atomically inside the tenant database.
+See [roles and access changes](authentication-and-authorization.md#roles-and-access-changes); no shared authorization lock spans ordinary workflow transactions.
 
 Workers retain their distinct responsibilities and cycle through tenants with bounded work per turn.
 Slow delivery and preview work use bounded shared slots; no permanent worker stack or service provider is created per tenant.

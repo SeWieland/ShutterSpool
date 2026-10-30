@@ -71,7 +71,9 @@ public sealed class ArchitectureDatabaseTests
         await using var fixture = await ArchitectureTestDatabase.CreateAsync();
         await using var database = new ShutterSpoolDbContext(fixture.Options);
         await new DatabaseInitializer(database).InitializeAsync(fixture.SpoolRoot, TestContext.Current.CancellationToken);
-        Assert.Equal("20261025211318_InitialCreate", Assert.Single(database.Database.GetMigrations()));
+        Assert.Equal("20261025211318_InitialCreate", database.Database.GetMigrations().First());
+        Assert.EndsWith("_WorkspaceRoles", database.Database.GetMigrations().Last(), StringComparison.Ordinal);
+        Assert.Equal(2, database.Database.GetMigrations().Count());
         Assert.Equal(database.Database.GetMigrations(), await database.Database.GetAppliedMigrationsAsync(TestContext.Current.CancellationToken));
         Assert.False(database.Database.HasPendingModelChanges());
         Directory.CreateDirectory(fixture.SpoolRoot);
@@ -82,16 +84,51 @@ public sealed class ArchitectureDatabaseTests
     }
 
     [Fact]
-    public async Task Concurrent_fresh_provisioning_uses_the_provider_migration_lock()
+    public async Task Workspace_role_upgrade_preserves_existing_grants_media_and_originals_with_released_only_default()
     {
         await using var fixture = await ArchitectureTestDatabase.CreateAsync();
-        await using var first = new ShutterSpoolDbContext(fixture.Options);
-        await using var second = new ShutterSpoolDbContext(fixture.Options);
-        await Task.WhenAll(
-            new DatabaseInitializer(first).InitializeAsync(fixture.SpoolRoot, TestContext.Current.CancellationToken),
-            new DatabaseInitializer(second).InitializeAsync(fixture.SpoolRoot, TestContext.Current.CancellationToken));
-        Assert.Equal(first.Database.GetMigrations(), await second.Database.GetAppliedMigrationsAsync(TestContext.Current.CancellationToken));
-        Assert.Single(await first.Collections.ToArrayAsync(TestContext.Current.CancellationToken));
+        await using var database = new ShutterSpoolDbContext(fixture.Options);
+        CancellationToken token = TestContext.Current.CancellationToken;
+        await database.GetService<IMigrator>().MigrateAsync("20261025211318_InitialCreate", token);
+        Guid active = Guid.NewGuid(), inactive = Guid.NewGuid(), capture = Guid.NewGuid();
+        await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO authorization_grants (\"Id\",\"Issuer\",\"Subject\",\"IsActive\",\"IsBootstrap\") VALUES ({active},'https://issuer.test','existing',true,true),({inactive},'https://issuer.test','removed',false,false)", token);
+        database.Captures.Add(new() { Id = capture, SourceId = Guid.NewGuid(), NormalizedStem = "existing-synthetic" });
+        await database.SaveChangesAsync(token);
+        Directory.CreateDirectory(fixture.SpoolRoot);
+        string original = Path.Combine(fixture.SpoolRoot, "existing-synthetic-original");
+        await File.WriteAllBytesAsync(original, [5, 8, 13], token);
+        await new DatabaseInitializer(database).InitializeAsync(fixture.SpoolRoot, token);
+        AuthorizationGrant[] grants = await database.AuthorizationGrants.AsNoTracking().ToArrayAsync(token);
+        Assert.All(grants, item => Assert.Equal(ShutterSpool.Application.Security.WorkspaceRole.Owner, item.Role));
+        Assert.True(Assert.Single(grants, item => item.Id == active).IsActive);
+        Assert.False(Assert.Single(grants, item => item.Id == inactive).IsActive);
+        Assert.Equal("existing-synthetic", (await database.Captures.SingleAsync(item => item.Id == capture, token)).NormalizedStem);
+        Assert.Equal(new byte[] { 5, 8, 13 }, await File.ReadAllBytesAsync(original, token));
+        var policy = await database.Set<WorkspaceViewerPolicyEntity>().SingleAsync(token);
+        Assert.False(policy.IncludeUnreleased);
+        Assert.Equal(0, policy.Revision);
+        Assert.Equal(database.Database.GetMigrations(), await database.Database.GetAppliedMigrationsAsync(token));
+    }
+
+    [Fact]
+    public async Task Concurrent_operator_provisioning_preserves_one_identity_owner_and_setup_audit()
+    {
+        await using var fixture = await WorkspaceTenancyPostgresTests.WorkspaceFixture.CreateAsync(workspaceCount: 1);
+        CancellationToken token = TestContext.Current.CancellationToken;
+        await WorkspaceOperator.RunAsync(["--workspace-control-init"], fixture.Configuration, token);
+        await Task.WhenAll(fixture.ProvisionWorkspaceAsync(0), fixture.ProvisionWorkspaceAsync(0));
+        var workspace = Assert.Single(await fixture.RegistryAsync());
+        await using var database = fixture.MigrationDatabase(0);
+        WorkspaceIdentityEntity identity = Assert.Single(await database.WorkspaceIdentities.ToArrayAsync(token));
+        AuthorizationGrant owner = Assert.Single(await database.AuthorizationGrants.ToArrayAsync(token));
+        WorkspaceAccessOperationEntity audit = Assert.Single(await database.Set<WorkspaceAccessOperationEntity>().ToArrayAsync(token));
+        Assert.Equal(workspace.Id, identity.Id);
+        Assert.True(identity.BootstrapComplete);
+        Assert.Equal(identity.OperationId, audit.Id);
+        Assert.Equal(owner.Id, audit.TargetId);
+        Assert.Equal("operator-setup", audit.Kind);
+        Assert.True((await database.SpoolQuotaSettings.SingleAsync(token)).IsActive);
+        Assert.Equal(database.Database.GetMigrations(), await database.Database.GetAppliedMigrationsAsync(token));
     }
 
     [Fact]
@@ -195,7 +232,7 @@ public sealed class ArchitectureDatabaseTests
         await using var fixture = await ArchitectureTestDatabase.CreateAsync();
         await using var database = new ShutterSpoolDbContext(fixture.Options);
         CancellationToken token = TestContext.Current.CancellationToken;
-        await new DatabaseInitializer(database).InitializeAsync(fixture.SpoolRoot, token);
+        await database.GetService<IMigrator>().MigrateAsync("20261025211318_InitialCreate", token);
         await database.Database.ExecuteSqlRawAsync("UPDATE \"__EFMigrationsHistory\" SET \"MigrationId\" = '20261023010000_M212Collections'", token);
 
         PostgresException rejection = await Assert.ThrowsAsync<PostgresException>(() => database.Database.MigrateAsync(token));

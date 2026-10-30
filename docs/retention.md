@@ -8,8 +8,9 @@ The design balances two needs: originals should not fill the spool forever, and 
 Eligibility, protection, recovery and physical removal are therefore separate facts.
 Read the [core workflow](core-workflow.md) for how originals reach this point.
 
-Settings → Storage contains shared policy and capacity controls; Curation and the owner Gallery show Favorites and retention information, while Trash contains recoverable Captures.
-Gallery-only viewers cannot change Favorites, Trash or storage policy.
+Settings → Storage contains shared policy and capacity controls for Owners and Administrators.
+Curation and Gallery show Favorites and retention information, while Trash contains recoverable Captures.
+Viewers cannot change Favorites or storage policy, or browse Trash. See [workspace roles](workspaces.md#understand-your-role) for permitted actions.
 
 ## What makes a Capture eligible?
 
@@ -262,7 +263,7 @@ Compact identity/matching, frozen routing/curation, final outcomes and removal t
 The server supplies one authoritative retention summary with deadlines, protections, pause reasons and per-variant byte/removal state.
 Time bars show observed intervals; they do not promise exact purge times or advance warning of unscheduled pressure selection.
 Stale status keeps dated last-known evidence instead of an apparently live countdown.
-SignalR provides change hints, authorized reads establish truth, and 60-second reconciliation catches missed hints.
+SignalR provides change hints, authorized reads establish truth, and periodic foreground reconciliation catches missed hints.
 
 For endpoint details, use the [Server retention API reference](../src/ShutterSpool.Server/README.md#retention-api).
 For implementation ownership and removal fences, see the [persistence reference](architecture/persistence.md#privacy-erasure-and-restore-evidence) and the [Infrastructure cleanup guide](../src/ShutterSpool.Infrastructure/README.md#retention-persistence-and-cleanup).
