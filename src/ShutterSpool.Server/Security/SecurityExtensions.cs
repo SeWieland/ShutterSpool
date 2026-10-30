@@ -85,7 +85,12 @@ public static class SecurityExtensions
                 }
             });
         services.AddScoped<IAuthorizationHandler, LocalGrantAuthorizationHandler>();
-        services.AddAuthorizationBuilder().AddPolicy(ManagementAccessPolicy, policy => policy.RequireRole(options.AdministratorRole).AddRequirements(new LocalGrantRequirement()));
+        services.AddAuthorizationBuilder().AddPolicy(ManagementAccessPolicy, policy =>
+        {
+            policy.RequireAuthenticatedUser();
+            if (!configuration.GetValue<bool>("ShutterSpool:Workspaces:Enabled")) policy.RequireRole(options.AdministratorRole);
+            policy.AddRequirements(new LocalGrantRequirement());
+        });
         services.AddCors(cors => cors.AddPolicy("live-hub", policy =>
         {
             if (options.AllowedOrigins.Length > 0)

@@ -17,6 +17,46 @@
         }
       }
     },
+    "/workspaces": {
+      "get": {
+        "tags": [
+          "WorkspaceEndpoints"
+        ],
+        "summary": "Discover memberships for the verified identity",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/media/previews/{id}": {
       "get": {
         "tags": [
@@ -1671,6 +1711,56 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/HttpValidationProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/management/destinations/capabilities": {
+      "get": {
+        "tags": [
+          "ShutterSpool.Server"
+        ],
+        "summary": "Read destination deployment capabilities",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DestinationCapabilitiesResponse"
                 }
               }
             }
@@ -9056,6 +9146,21 @@
         },
         "additionalProperties": false
       },
+      "DestinationCapabilitiesResponse": {
+        "required": [
+          "enabledKinds"
+        ],
+        "type": "object",
+        "properties": {
+          "enabledKinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "DestinationConfigurationConflictProblemDetails": {
         "required": [
           "current"
@@ -10651,6 +10756,15 @@
           },
           "restartRequired": {
             "type": "boolean"
+          },
+          "workspaceAllocatedBytes": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int64"
           }
         },
         "additionalProperties": false
@@ -12670,12 +12784,55 @@
           }
         },
         "additionalProperties": false
+      },
+      "WorkspaceListResponse": {
+        "required": [
+          "items",
+          "incomplete",
+          "selectionRequired"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceSummaryResponse"
+            }
+          },
+          "incomplete": {
+            "type": "boolean"
+          },
+          "selectionRequired": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkspaceSummaryResponse": {
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
       }
     }
   },
   "tags": [
     {
       "name": "ShutterSpool.Server"
+    },
+    {
+      "name": "WorkspaceEndpoints"
     },
     {
       "name": "LiveStatusEndpoint"

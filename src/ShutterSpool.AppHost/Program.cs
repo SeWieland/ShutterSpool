@@ -76,15 +76,12 @@ if (!builder.ExecutionContext.IsPublishMode)
             context.Args.Add(argument);
     });
 var server = builder.AddProject<Projects.ShutterSpool_Server>("server")
-    .WithReference(shutterspoolDatabase)
     .WithReference(valkey)
     .WaitFor(postgres)
     .WaitFor(valkey)
     .WaitForCompletion(keycloakReconciler)
     .WithEnvironment("ShutterSpool__Security__Authority", keycloakAuthority)
     .WithEnvironment("ShutterSpool__Security__Audience", "shutterspool-server")
-    .WithEnvironment("ShutterSpool__Security__BootstrapIssuer", keycloakAuthority)
-    .WithEnvironment("ShutterSpool__Security__BootstrapSubject", shutterspoolAdministratorSubject)
     .WithEnvironment("ShutterSpool__Security__EncryptionKey", securityEncryptionKey)
     .WithEnvironment("ShutterSpool__CameraCredentials__MinimumPasswordLength",
         builder.Configuration["ShutterSpool:CameraCredentials:MinimumPasswordLength"] ?? "12")
@@ -96,6 +93,12 @@ var server = builder.AddProject<Projects.ShutterSpool_Server>("server")
     .WithEnvironment("ShutterSpool__Preview__GenerationTimeoutSeconds", previewGenerationTimeout)
     .WithEnvironment("ShutterSpool__Preview__PrewarmMode", previewPrewarmMode)
     .WithEnvironment("ShutterSpool__Preview__CacheRootPath", Path.GetFullPath("../../.data/previews"));
+if (!builder.Configuration.GetValue<bool>("ShutterSpool:Workspaces:Enabled"))
+    server.WithReference(shutterspoolDatabase)
+        .WithEnvironment("ShutterSpool__Security__BootstrapIssuer", keycloakAuthority)
+        .WithEnvironment("ShutterSpool__Security__BootstrapSubject", shutterspoolAdministratorSubject);
+foreach ((string key, string value) in WorkspaceRuntimeConfiguration.ForServer(builder.Configuration))
+    server.WithEnvironment(key, value);
 if (!builder.ExecutionContext.IsPublishMode) builder.AddJavaScriptApp("web", "../ShutterSpool.Web")
     .WithReference(server)
     .WithHttpEndpoint(env: "PORT")

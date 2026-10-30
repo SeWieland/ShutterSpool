@@ -1075,6 +1075,15 @@ export function createCreateSourceRequestFromDiscriminatorValue(parseNode: Parse
 /**
  * Creates a new instance of the appropriate class based on discriminator value
  * @param parseNode The parse node to use to read the discriminator value and create the object
+ * @returns {DestinationCapabilitiesResponse}
+ */
+// @ts-ignore
+export function createDestinationCapabilitiesResponseFromDiscriminatorValue(parseNode: ParseNode | undefined) : ((instance?: Parsable) => Record<string, (node: ParseNode) => void>) {
+    return deserializeIntoDestinationCapabilitiesResponse;
+}
+/**
+ * Creates a new instance of the appropriate class based on discriminator value
+ * @param parseNode The parse node to use to read the discriminator value and create the object
  * @returns {DestinationConfigurationConflictProblemDetails}
  */
 // @ts-ignore
@@ -2012,6 +2021,24 @@ export function createWebDavDestinationTestResponseFromDiscriminatorValue(parseN
     return deserializeIntoWebDavDestinationTestResponse;
 }
 /**
+ * Creates a new instance of the appropriate class based on discriminator value
+ * @param parseNode The parse node to use to read the discriminator value and create the object
+ * @returns {WorkspaceListResponse}
+ */
+// @ts-ignore
+export function createWorkspaceListResponseFromDiscriminatorValue(parseNode: ParseNode | undefined) : ((instance?: Parsable) => Record<string, (node: ParseNode) => void>) {
+    return deserializeIntoWorkspaceListResponse;
+}
+/**
+ * Creates a new instance of the appropriate class based on discriminator value
+ * @param parseNode The parse node to use to read the discriminator value and create the object
+ * @returns {WorkspaceSummaryResponse}
+ */
+// @ts-ignore
+export function createWorkspaceSummaryResponseFromDiscriminatorValue(parseNode: ParseNode | undefined) : ((instance?: Parsable) => Record<string, (node: ParseNode) => void>) {
+    return deserializeIntoWorkspaceSummaryResponse;
+}
+/**
  * The deserialization information for the current model
  * @param BulkMoveCaptureCollectionRequest The instance to deserialize into.
  * @returns {Record<string, (node: ParseNode) => void>}
@@ -2548,6 +2575,17 @@ export function deserializeIntoCreateSourceRequest(createSourceRequest: Partial<
         "passwordMode": n => { createSourceRequest.passwordMode = n.getStringValue(); },
         "sourceType": n => { createSourceRequest.sourceType = n.getStringValue(); },
         "username": n => { createSourceRequest.username = n.getStringValue(); },
+    }
+}
+/**
+ * The deserialization information for the current model
+ * @param DestinationCapabilitiesResponse The instance to deserialize into.
+ * @returns {Record<string, (node: ParseNode) => void>}
+ */
+// @ts-ignore
+export function deserializeIntoDestinationCapabilitiesResponse(destinationCapabilitiesResponse: Partial<DestinationCapabilitiesResponse> | undefined = {}) : Record<string, (node: ParseNode) => void> {
+    return {
+        "enabledKinds": n => { destinationCapabilitiesResponse.enabledKinds = n.getCollectionOfPrimitiveValues<string>("string"); },
     }
 }
 /**
@@ -3174,6 +3212,7 @@ export function deserializeIntoRetentionSettingsDocumentResponse(retentionSettin
         "quota": n => { retentionSettingsDocumentResponse.quota = n.getObjectValue<SpoolQuotaSettingsDto>(createSpoolQuotaSettingsDtoFromDiscriminatorValue); },
         "restartRequired": n => { retentionSettingsDocumentResponse.restartRequired = n.getBooleanValue(); },
         "settings": n => { retentionSettingsDocumentResponse.settings = n.getObjectValue<RetentionPolicyDto>(createRetentionPolicyDtoFromDiscriminatorValue); },
+        "workspaceAllocatedBytes": n => { retentionSettingsDocumentResponse.workspaceAllocatedBytes = n.getNumberValue(); },
     }
 }
 /**
@@ -3937,6 +3976,37 @@ export function deserializeIntoWebDavDestinationTestResponse(webDavDestinationTe
         "testedConfigurationRevision": n => { webDavDestinationTestResponse.testedConfigurationRevision = n.getNumberValue(); },
         "writable": n => { webDavDestinationTestResponse.writable = n.getBooleanValue(); },
     }
+}
+/**
+ * The deserialization information for the current model
+ * @param WorkspaceListResponse The instance to deserialize into.
+ * @returns {Record<string, (node: ParseNode) => void>}
+ */
+// @ts-ignore
+export function deserializeIntoWorkspaceListResponse(workspaceListResponse: Partial<WorkspaceListResponse> | undefined = {}) : Record<string, (node: ParseNode) => void> {
+    return {
+        "incomplete": n => { workspaceListResponse.incomplete = n.getBooleanValue(); },
+        "items": n => { workspaceListResponse.items = n.getCollectionOfObjectValues<WorkspaceSummaryResponse>(createWorkspaceSummaryResponseFromDiscriminatorValue); },
+        "selectionRequired": n => { workspaceListResponse.selectionRequired = n.getBooleanValue(); },
+    }
+}
+/**
+ * The deserialization information for the current model
+ * @param WorkspaceSummaryResponse The instance to deserialize into.
+ * @returns {Record<string, (node: ParseNode) => void>}
+ */
+// @ts-ignore
+export function deserializeIntoWorkspaceSummaryResponse(workspaceSummaryResponse: Partial<WorkspaceSummaryResponse> | undefined = {}) : Record<string, (node: ParseNode) => void> {
+    return {
+        "id": n => { workspaceSummaryResponse.id = n.getGuidValue(); },
+        "name": n => { workspaceSummaryResponse.name = n.getStringValue(); },
+    }
+}
+export interface DestinationCapabilitiesResponse extends Parsable {
+    /**
+     * The enabledKinds property
+     */
+    enabledKinds?: string[] | null;
 }
 export interface DestinationConfigurationConflictProblemDetails extends ApiError, Parsable {
     /**
@@ -4807,6 +4877,10 @@ export interface RetentionSettingsDocumentResponse extends Parsable {
      * The settings property
      */
     settings?: RetentionPolicyDto | null;
+    /**
+     * The workspaceAllocatedBytes property
+     */
+    workspaceAllocatedBytes?: number | null;
 }
 export interface RetentionSettingsImpactResponse extends Parsable {
     /**
@@ -5883,6 +5957,17 @@ export function serializeCreateSourceRequest(writer: SerializationWriter, create
 }
 /**
  * Serializes information the current object
+ * @param DestinationCapabilitiesResponse The instance to serialize from.
+ * @param isSerializingDerivedType A boolean indicating whether the serialization is for a derived type.
+ * @param writer Serialization writer to use to serialize this model
+ */
+// @ts-ignore
+export function serializeDestinationCapabilitiesResponse(writer: SerializationWriter, destinationCapabilitiesResponse: Partial<DestinationCapabilitiesResponse> | undefined | null = {}, isSerializingDerivedType: boolean = false) : void {
+    if (!destinationCapabilitiesResponse || isSerializingDerivedType) { return; }
+    writer.writeCollectionOfPrimitiveValues<string>("enabledKinds", destinationCapabilitiesResponse.enabledKinds);
+}
+/**
+ * Serializes information the current object
  * @param DestinationConfigurationConflictProblemDetails The instance to serialize from.
  * @param isSerializingDerivedType A boolean indicating whether the serialization is for a derived type.
  * @param writer Serialization writer to use to serialize this model
@@ -6507,6 +6592,7 @@ export function serializeRetentionSettingsDocumentResponse(writer: Serialization
     writer.writeObjectValue<SpoolQuotaSettingsDto>("quota", retentionSettingsDocumentResponse.quota, serializeSpoolQuotaSettingsDto);
     writer.writeBooleanValue("restartRequired", retentionSettingsDocumentResponse.restartRequired);
     writer.writeObjectValue<RetentionPolicyDto>("settings", retentionSettingsDocumentResponse.settings, serializeRetentionPolicyDto);
+    writer.writeNumberValue("workspaceAllocatedBytes", retentionSettingsDocumentResponse.workspaceAllocatedBytes);
 }
 /**
  * Serializes information the current object
@@ -7270,6 +7356,31 @@ export function serializeWebDavDestinationTestResponse(writer: SerializationWrit
     writer.writeNumberValue("testedConfigurationRevision", webDavDestinationTestResponse.testedConfigurationRevision);
     writer.writeBooleanValue("writable", webDavDestinationTestResponse.writable);
 }
+/**
+ * Serializes information the current object
+ * @param isSerializingDerivedType A boolean indicating whether the serialization is for a derived type.
+ * @param WorkspaceListResponse The instance to serialize from.
+ * @param writer Serialization writer to use to serialize this model
+ */
+// @ts-ignore
+export function serializeWorkspaceListResponse(writer: SerializationWriter, workspaceListResponse: Partial<WorkspaceListResponse> | undefined | null = {}, isSerializingDerivedType: boolean = false) : void {
+    if (!workspaceListResponse || isSerializingDerivedType) { return; }
+    writer.writeBooleanValue("incomplete", workspaceListResponse.incomplete);
+    writer.writeCollectionOfObjectValues<WorkspaceSummaryResponse>("items", workspaceListResponse.items, serializeWorkspaceSummaryResponse);
+    writer.writeBooleanValue("selectionRequired", workspaceListResponse.selectionRequired);
+}
+/**
+ * Serializes information the current object
+ * @param isSerializingDerivedType A boolean indicating whether the serialization is for a derived type.
+ * @param WorkspaceSummaryResponse The instance to serialize from.
+ * @param writer Serialization writer to use to serialize this model
+ */
+// @ts-ignore
+export function serializeWorkspaceSummaryResponse(writer: SerializationWriter, workspaceSummaryResponse: Partial<WorkspaceSummaryResponse> | undefined | null = {}, isSerializingDerivedType: boolean = false) : void {
+    if (!workspaceSummaryResponse || isSerializingDerivedType) { return; }
+    writer.writeGuidValue("id", workspaceSummaryResponse.id);
+    writer.writeStringValue("name", workspaceSummaryResponse.name);
+}
 export interface SetSourceIngressRequest extends Parsable {
     /**
      * The enabled property
@@ -7883,6 +7994,30 @@ export interface WebDavDestinationTestResponse extends Parsable {
      * The writable property
      */
     writable?: boolean | null;
+}
+export interface WorkspaceListResponse extends Parsable {
+    /**
+     * The incomplete property
+     */
+    incomplete?: boolean | null;
+    /**
+     * The items property
+     */
+    items?: WorkspaceSummaryResponse[] | null;
+    /**
+     * The selectionRequired property
+     */
+    selectionRequired?: boolean | null;
+}
+export interface WorkspaceSummaryResponse extends Parsable {
+    /**
+     * The id property
+     */
+    id?: Guid | null;
+    /**
+     * The name property
+     */
+    name?: string | null;
 }
 /* tslint:enable */
 /* eslint-enable */

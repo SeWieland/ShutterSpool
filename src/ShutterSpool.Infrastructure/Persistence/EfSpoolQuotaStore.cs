@@ -1,13 +1,14 @@
 using Microsoft.EntityFrameworkCore;
 using ShutterSpool.Application.Retention;
 using System.Diagnostics.Metrics;
+using ShutterSpool.Application.Workspaces;
 
 namespace ShutterSpool.Infrastructure.Persistence;
 
 internal sealed class EfSpoolQuotaStore(
     ShutterSpoolDbContext database,
     ISpoolAccounting accounting,
-    TimeProvider timeProvider) : ISpoolQuotaStore, IQuotaReservationCommitter
+    TimeProvider timeProvider, WorkspaceContext? workspace = null) : ISpoolQuotaStore, IQuotaReservationCommitter
 {
     private const int MaximumReconciledRows = 100_000;
     private static readonly TimeSpan MaximumObservationAge = TimeSpan.FromSeconds(60);
@@ -90,6 +91,9 @@ internal sealed class EfSpoolQuotaStore(
         bool authorizeStorageMarkerAdoption, CancellationToken cancellationToken)
     {
         settings.Validate();
+        if (workspace?.Enabled == true && (!settings.IsActive || settings.QuotaBytes is not long quota
+            || quota > workspace.Required.AllocatedBytes))
+            throw new ArgumentException("Workspace quota admission must remain enabled within its operator allocation.");
         if (database.Database.CurrentTransaction is null)
             throw new InvalidOperationException("Quota settings must be staged inside the combined retention settings transaction.");
         await LockSettingsAsync(cancellationToken);
@@ -632,8 +636,13 @@ internal sealed class EfSpoolQuotaStore(
         && entity.WrittenBytes == reservation.WrittenBytes && entity.FilesystemReservedBytes == reservation.FilesystemReservedBytes
         && entity.Category == reservation.Category.ToString() && entity.SpoolKeys.SequenceEqual(reservation.SpoolKeys, KeyComparer);
 
-    private static SpoolQuotaSettings ToContract(SpoolQuotaSettingsEntity entity) =>
-        new(entity.Revision, entity.IsActive, entity.QuotaBytes, entity.HighWatermarkBytes, entity.RecoveryTargetBytes);
+    private SpoolQuotaSettings ToContract(SpoolQuotaSettingsEntity entity)
+    {
+        if (workspace?.Enabled == true && (!entity.IsActive || entity.QuotaBytes is not long quota
+            || quota > workspace.Required.AllocatedBytes))
+            throw new InvalidOperationException("Saved workspace quota settings exceed or disable the operator allocation.");
+        return new(entity.Revision, entity.IsActive, entity.QuotaBytes, entity.HighWatermarkBytes, entity.RecoveryTargetBytes);
+    }
 
     private static SpoolQuotaSnapshot UnknownSnapshot(SpoolQuotaSettings settings, string reason, DateTimeOffset? observedAt = null,
         long reservedBytes = 0) =>

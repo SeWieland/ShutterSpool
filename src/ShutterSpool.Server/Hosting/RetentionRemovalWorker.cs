@@ -3,12 +3,13 @@ using ShutterSpool.Server.Api.Live;
 
 namespace ShutterSpool.Server.Hosting;
 
-internal sealed class RetentionRemovalWorker(IServiceScopeFactory scopes, RetentionTelemetry telemetry, LiveChangeNotifier changes,
-    ILogger<RetentionRemovalWorker> logger) : BackgroundService
+internal sealed class RetentionRemovalWorker(IServiceScopeFactory scopes, RetentionTelemetry telemetry, ILogger<RetentionRemovalWorker> logger) : BackgroundService
 {
+    private readonly WorkspaceWorkerCursor tenants = new(scopes);
+
     private static readonly TimeSpan CapacityRefresh = TimeSpan.FromSeconds(45);
-    private DateTimeOffset _lastCapacitySample = DateTimeOffset.MinValue;
-    private DateTimeOffset _lastAutomaticPass = DateTimeOffset.MinValue;
+    private readonly Dictionary<Guid, DateTimeOffset> capacitySamples = [];
+    private readonly Dictionary<Guid, DateTimeOffset> automaticPasses = [];
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -35,31 +36,33 @@ internal sealed class RetentionRemovalWorker(IServiceScopeFactory scopes, Retent
 
     private async Task RunPassAsync(DateTimeOffset startedAt, CancellationToken cancellationToken)
     {
-        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        await using WorkspaceWorkerScope scope = await tenants.NextAsync(cancellationToken);
+        LiveChangeNotifier changes = scope.ServiceProvider.GetRequiredService<LiveChangeNotifier>();
         RetentionRemovalService service = scope.ServiceProvider.GetRequiredService<RetentionRemovalService>();
         int erasuresExamined = await scope.ServiceProvider.GetRequiredService<PrivacyErasureService>()
             .ProcessPendingAsync(10, cancellationToken);
         _ = await service.PruneCompletedAttemptHistoryAsync(cancellationToken);
         _ = await service.RefreshRetentionFactsAsync(20, cancellationToken);
-        RetentionRemovalPassResult result = await ProcessDueWorkAsync(service, cancellationToken);
-        ReportProgress(result, erasuresExamined);
-        await SampleCapacityAsync(scope.ServiceProvider, result, cancellationToken);
+        Guid tenantId = scope.ServiceProvider.GetRequiredService<ShutterSpool.Application.Workspaces.WorkspaceContext>().Id ?? Guid.Empty;
+        RetentionRemovalPassResult result = await ProcessDueWorkAsync(service, tenantId, cancellationToken);
+        ReportProgress(result, erasuresExamined, changes);
+        await SampleCapacityAsync(scope.ServiceProvider, result, tenantId, cancellationToken);
         if (result.Examined > 0 || DateTimeOffset.UtcNow - startedAt >= TimeSpan.FromSeconds(1))
             telemetry.RecordPass(DateTimeOffset.UtcNow - startedAt, failed: false);
         await Task.Delay(result.Examined == 0 ? TimeSpan.FromSeconds(5) : TimeSpan.FromMilliseconds(100), cancellationToken);
     }
 
-    private async Task<RetentionRemovalPassResult> ProcessDueWorkAsync(RetentionRemovalService service,
+    private async Task<RetentionRemovalPassResult> ProcessDueWorkAsync(RetentionRemovalService service, Guid tenantId,
         CancellationToken cancellationToken)
     {
-        if (DateTimeOffset.UtcNow - _lastAutomaticPass < CapacityRefresh)
+        if (DateTimeOffset.UtcNow - automaticPasses.GetValueOrDefault(tenantId) < CapacityRefresh)
             return await service.ProcessPendingAsync(20, cancellationToken);
         RetentionRemovalPassResult result = await service.ProcessAutomaticTrashAsync(20, cancellationToken);
-        _lastAutomaticPass = DateTimeOffset.UtcNow;
+        automaticPasses[tenantId] = DateTimeOffset.UtcNow;
         return result;
     }
 
-    private void ReportProgress(RetentionRemovalPassResult result, int erasuresExamined)
+    private void ReportProgress(RetentionRemovalPassResult result, int erasuresExamined, LiveChangeNotifier changes)
     {
         if (result.Completed > 0)
             telemetry.RecordOperation(RetentionOperation.Purge, result.RemovedBytes, result.Completed);
@@ -73,12 +76,12 @@ internal sealed class RetentionRemovalWorker(IServiceScopeFactory scopes, Retent
             changes.RetentionChanged();
     }
 
-    private async Task SampleCapacityAsync(IServiceProvider services, RetentionRemovalPassResult result,
+    private async Task SampleCapacityAsync(IServiceProvider services, RetentionRemovalPassResult result, Guid tenantId,
         CancellationToken cancellationToken)
     {
-        if (result.Examined == 0 && DateTimeOffset.UtcNow - _lastCapacitySample < CapacityRefresh) return;
+        if (result.Examined == 0 && DateTimeOffset.UtcNow - capacitySamples.GetValueOrDefault(tenantId) < CapacityRefresh) return;
         ISpoolQuotaStore quota = services.GetRequiredService<ISpoolQuotaStore>();
         telemetry.RecordCapacity(await quota.GetSnapshotAsync(cancellationToken));
-        _lastCapacitySample = DateTimeOffset.UtcNow;
+        capacitySamples[tenantId] = DateTimeOffset.UtcNow;
     }
 }

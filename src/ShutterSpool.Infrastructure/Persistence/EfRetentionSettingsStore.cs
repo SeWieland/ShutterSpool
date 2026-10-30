@@ -9,7 +9,8 @@ namespace ShutterSpool.Infrastructure.Persistence;
 
 internal sealed class EfRetentionSettingsStore(ShutterSpoolDbContext database, ISpoolQuotaStore quotaStore,
     IRetentionRemovalStore removalStore,
-    TimeProvider clock, PreviewSettings effectivePreviewSettings) : IRetentionSettingsStore
+    TimeProvider clock, PreviewSettings effectivePreviewSettings,
+    ShutterSpool.Application.Workspaces.WorkspaceContext? workspace = null) : IRetentionSettingsStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -28,6 +29,8 @@ internal sealed class EfRetentionSettingsStore(ShutterSpoolDbContext database, I
         PreviewCacheSettings previewCache, CancellationToken cancellationToken)
     {
         // Existing Assets retain their acceptance-time policy; this preview is prospective.
+        if (workspace?.Enabled == true && (!quota.IsActive || quota.QuotaBytes is not long bytes || bytes > workspace.Required.AllocatedBytes))
+            throw new ArgumentException("Workspace quota admission must remain enabled within its operator allocation.");
         DateTimeOffset now = clock.GetUtcNow();
         SpoolQuotaSnapshot snapshot = await quotaStore.GetSnapshotAsync(cancellationToken);
         long protectedBytes = await ReadProtectedBytesAsync(now, cancellationToken);

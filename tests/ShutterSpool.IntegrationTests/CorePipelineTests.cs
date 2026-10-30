@@ -90,7 +90,8 @@ public sealed class CorePipelineTests
             Assert.Equal("Delivered", Assert.Single(history.Items).State);
         }
         Assert.Equal(bytes, await File.ReadAllBytesAsync(Path.Combine(targetRoot, "delivered", "synthetic.jpg"), token));
-        await using Stream original = await restarted.GetRequiredService<ICommittedOriginalReader>().OpenReadAsync(accepted.Asset.SpoolKey, token);
+        await using AsyncServiceScope readScope = restarted.CreateAsyncScope();
+        await using Stream original = await readScope.ServiceProvider.GetRequiredService<ICommittedOriginalReader>().OpenReadAsync(accepted.Asset.SpoolKey, token);
         using var copy = new MemoryStream();
         await original.CopyToAsync(copy, token);
         Assert.Equal(bytes, copy.ToArray());

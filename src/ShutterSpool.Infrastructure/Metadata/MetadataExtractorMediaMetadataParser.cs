@@ -7,7 +7,8 @@ using System.Globalization;
 
 namespace ShutterSpool.Infrastructure.Metadata;
 
-internal sealed class MetadataExtractorMediaMetadataParser : IMediaMetadataParser
+internal sealed class MetadataExtractorMediaMetadataParser(ShutterSpool.Application.Workspaces.WorkspaceContext? workspace = null,
+    ShutterSpool.Application.Retention.ISpoolQuotaStore? quota = null) : IMediaMetadataParser
 {
     private const long MaximumFileSize = 512L * 1024 * 1024;
     private const int TagOffsetTimeOriginal = 0x9011;
@@ -27,7 +28,7 @@ internal sealed class MetadataExtractorMediaMetadataParser : IMediaMetadataParse
         SeekableMedia seekable;
         try
         {
-            seekable = await SeekableMediaStream.OpenAsync(original, size, MaximumFileSize, cancellationToken);
+            seekable = await SeekableMediaStream.OpenAsync(original, size, MaximumFileSize, cancellationToken, workspace, quota);
         }
         catch (MediaSizeLimitException)
         {

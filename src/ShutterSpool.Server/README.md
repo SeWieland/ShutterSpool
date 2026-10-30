@@ -15,10 +15,13 @@ The build emits `openapi/ShutterSpool_Server.json` for the generated TypeScript 
 
 ## Local security configuration
 
-Management endpoints require a verified OIDC bearer token with the `shutterspool-admin` role and an active PostgreSQL-backed local grant.
+Management endpoints require a verified OIDC bearer token and an active PostgreSQL-backed local grant.
+Single-workspace mode also requires the `shutterspool-admin` token role; shared-workspace mode checks the selected tenant's grant without requiring that provider role.
 Set `ShutterSpool__Security__Authority`, `ShutterSpool__Security__Audience`, `ShutterSpool__Security__BootstrapIssuer`, and `ShutterSpool__Security__BootstrapSubject` through deployment configuration.
 Set `ShutterSpool__Security__EncryptionKey` to a persistent base64-encoded 32-byte deployment secret outside PostgreSQL; it must accompany backups and is never committed, logged, or stored in Valkey. Packaged deployments can provide it through `ShutterSpool__Security__EncryptionKeyFile`; the file contents override the inline value.
-Packaged deployments set `ShutterSpool__Deployment__Packaged=true` and must supply `ConnectionStrings__shutterspool` (or `ConnectionStrings__shutterspoolFile` containing the full connection string), explicit HTTPS OIDC authority and issuer/audience/bootstrap identity, the encryption key and spool root.
+Packaged deployments set `ShutterSpool__Deployment__Packaged=true` and supply explicit HTTPS OIDC authority/audience, the encryption key and trusted proxy configuration.
+Single-workspace mode additionally requires `ConnectionStrings__shutterspool` (or `ConnectionStrings__shutterspoolFile` containing the full connection string), bootstrap issuer/subject and spool root.
+Shared-workspace mode uses the control and tenant connections and storage identities described below instead of the single-workspace database/root/bootstrap settings.
 Optional external Valkey uses `ConnectionStrings__valkeyFile` containing its connection string.
 Startup records a protected key-check marker and rejects a changed key before recovery or traffic; existing destination credentials are checked before marker enrollment.
 
@@ -32,11 +35,31 @@ When camera ingress is enabled, `ShutterSpool__CameraIngress__CallbackKeyFile` c
 File paths must be readable by the Server container user and files should be restricted by the host; they are not encrypted stores.
 For HTTPS proxy deployments, configure `ShutterSpool__ForwardedHeaders__KnownNetworks__0` with the proxy's private CIDR. Only those networks may supply forwarded host, scheme and client address headers.
 The host shutdown deadline is configurable with `ShutterSpool__ShutdownTimeoutSeconds` (default 120 seconds); a clean process exit within the operator's deadline remains the shutdown evidence.
-Changing the bootstrap issuer or subject and restarting the Server revokes the preceding bootstrap grant.
+In single-workspace mode, changing the bootstrap issuer or subject and restarting the Server revokes the preceding bootstrap grant.
+Shared-workspace mode provisions its initial grant once and never replays it on ordinary restart.
 
 Management HTTP DTOs are finite and endpoint-local. The management group caps request bodies at 2 MiB and rejects unknown JSON properties; list endpoints use validated keyset cursors (30 by default, 100 maximum). Configuration writes carry an expected revision and return the authorized current redacted representation on conflict. Capture curation accepts rating -1 through 5, optional fixed-vocabulary label and tags; selection is response-only and derived. Batch actions require 1–100 distinct Capture IDs and recheck the active management grant before each item.
 
-### Camera credentials
+## Shared workspace provisioning
+
+Shared-workspace mode serves up to 32 workspaces from one Server, with a separate PostgreSQL database, restricted runtime role and fixed filesystem allocation for each.
+The [packaged operator procedure](../../deploy/operations/README.md#shared-workspace-provisioning) owns configuration, provisioning, upgrades and allocation changes, including stopped-writer and recovery requirements.
+Existing single-workspace data is not adopted or reset; normal shared-workspace startup validates compatible state without migrations or initial-grant replay.
+
+### Request and worker scope
+
+`GET /workspaces` requires authenticated OIDC and returns only the caller's current grants as `items: [{ id, name }]`, plus `incomplete` and `selectionRequired`.
+An incomplete result means discovery could not establish every eligible workspace; it is not proof that an omitted membership does not exist.
+Shared-workspace requests require `X-ShutterSpool-Workspace` with the selected workspace GUID. Only the live transport endpoints accept the equivalent `workspace` query parameter.
+Live negotiation tokens are bound to that workspace; reusing one with a different selector is denied even when the caller belongs to both workspaces.
+Missing, conflicting or unavailable scope fails closed. The Server never substitutes another workspace or stores a mutable workspace selection in the login session.
+The Web client keeps selection in its page URL and reloads on switching; fetched private preview blobs use the same authenticated scope.
+
+Each worker pass has a fresh immutable tenant context. Workers rotate across eligible tenants with bounded work per turn and skip unavailable/idle tenants.
+Delivery and preview have two shared slots per work type; the other workflow loops have one. A tenant has at most one active pass per work type.
+Tenant connection pools have a maximum of four and no minimum idle connections. These bounds do not promise a per-tenant throughput or availability level.
+
+## Camera credentials
 
 Set `ShutterSpool:CameraCredentials:MinimumPasswordLength` (environment `ShutterSpool__CameraCredentials__MinimumPasswordLength`)
 through administrator-controlled deployment configuration. The default is 12; allowed minimums are 1–128 and the fixed maximum is 128.
@@ -65,9 +88,9 @@ Successful FTP authentication initializes/checks the guarded virtual root before
 
 Previews support browsing; the [workflow guide](../../docs/core-workflow.md#3-let-the-photograph-lead-curation) explains why they never gate acceptance or release. The values below are the runtime reference.
 
-`GET /media/previews/{captureId}/grid` and `/detail` require the same per-request administrator token and active local grant as other private media. The one-segment route uses `grid`. Ready WebP responses use `Cache-Control: private, no-cache` and an ETag: the browser may store the bytes but must revalidate, and an authorized unchanged request receives `304`. Pending, unavailable and missing responses use `private, no-store`; `X-Preview-State` describes the state. RAW-only Captures return a static SVG with `pending`; failed or inaccessible JPEG generation returns the SVG with `unavailable`.
+`GET /media/previews/{captureId}/grid` and `/detail` require the same verified OIDC token and active local grant as other private media, including the selected workspace in shared mode. Single-workspace mode additionally requires the `shutterspool-admin` token role. The one-segment route uses `grid`. Ready WebP responses use `Cache-Control: private, no-cache` and an ETag: the browser may store the bytes but must revalidate, and an authorized unchanged request receives `304`. Pending, unavailable and missing responses use `private, no-store`; `X-Preview-State` describes the state. RAW-only Captures return a static SVG with `pending`; failed or inaccessible JPEG generation returns the SVG with `unavailable`.
 
-The Server resolves the current primary JPEG from PostgreSQL and sends only its committed bytes to a private Imaginary `/fit` request on a cache miss. Set `ShutterSpool:Preview:ImaginaryUrl` to the private service URL and `ShutterSpool:Preview:CacheRootPath` to a private writable directory separate from originals. Cache files are disposable; deleting them regenerates derivatives while the JPEG original remains. Keep the cache root writable only by the Server. Imaginary needs neither a spool mount nor remote URL fetching.
+The Server resolves the current primary JPEG from PostgreSQL and sends only its committed bytes to a private Imaginary `/fit` request on a cache miss. Set `ShutterSpool:Preview:ImaginaryUrl` to the private service URL. In single-workspace mode, set `ShutterSpool:Preview:CacheRootPath` to a private writable directory separate from originals. Shared-workspace mode instead fixes each cache at `<workspace-storage-root>/previews` inside its assigned allocation; a deployment-level cache path does not override that boundary. Cache files are disposable; deleting them regenerates derivatives while the JPEG original remains. Keep the cache root writable only by the Server. Imaginary needs neither a spool mount nor remote URL fetching.
 
 `ShutterSpool:Preview:PrewarmMode` defaults to `GridOnly`. `Off` leaves generation to authorized requests; `GridOnly` prepares the grid after a primary JPEG is grouped; `Full` prepares grid and detail. PostgreSQL holds pending work and retry leases so Server restarts and Imaginary outages do not lose prewarming. Invalid JPEG input stops background retries; temporary failures back off. An authorized request still generates a missing derivative on demand.
 
@@ -158,9 +181,17 @@ The retention summary carries policy revision, tier, deadlines, protection and p
 PostgreSQL holds due deliveries, attempts and renewable claims. The worker scans it even when a Valkey wakeup is missed or Valkey is unavailable. `ShutterSpool:DeliveryWorker:LeaseDurationSeconds`, `LeaseRenewalSeconds` and `ScanIntervalSeconds` default to 60, 15 and 2. The renewal interval must be shorter than the lease. Delivery history is grouped in the authorized Capture routing endpoint.
 The [delivery boundary guide](../ShutterSpool.Infrastructure/README.md#destination-delivery-boundaries) maps the worker, adapter, filesystem operation and configuration service to their owners.
 
+`ShutterSpool:Destinations:EnabledKinds` is the operator's list of available kinds (`local`, `webdav`).
+Single-workspace mode defaults to both; shared-workspace mode defaults to none unless explicitly configured.
+`GET /management/destinations/capabilities` returns `enabledKinds` for the current workspace UI.
+Disabling a kind retains saved configuration and history, but blocks creation, configuration, probes, delivery and reconciliation; it does not delete media or confirm uncertain work.
+Apply deployment capability changes during stopped-writer maintenance.
+
 Local and WebDAV adapters implement the same Application delivery port. Create a destination with `POST /management/destinations`, supplying `name` and `kind: "local"` (no secret is needed for local storage), then set `rootPath` with `PUT /management/destinations/{id}/local`. `GET` on that path reads the configured root; `POST /management/destinations/{id}/local/test` checks reachability, write permission and no-replace publication without changing delivery work. These endpoints require the management authorization above. A root is absolute and visible to the Server, must already exist and remain writable, and cannot change after that destination has delivery work.
 
-`GET /management/destinations/local-folders?path=...` browses directories visible to the Server under the same management authorization; omitting `path` lists drives/filesystem roots.
+`GET /management/destinations/local-folders?path=...` browses directories under the same management authorization.
+In shared-workspace mode, browsing and delivery stay within the pre-existing `<workspace-storage-root>/destinations` directory and its descendants; omitting `path` selects that directory, and traversal or symbolic-link/reparse-point escapes are rejected.
+In single-workspace mode, omitting `path` lists drives/filesystem roots.
 Paths are trimmed and accept surrounding double quotes. A child-directory listing contains at most 200 entries, omits hidden/system directories and symbolic links/reparse points, and reports `truncated` when more directories exist; enter a full path to browse another folder.
 The response includes the current path, parent path and directory names/paths, never file listings or contents. Browsing is read-only: selecting a folder does not create it, save destination configuration or test writability.
 The web interface uses **Save and test folder** to save the selected root and then test it; **Test saved settings** requires a saved folder with no unsaved folder edits.
@@ -170,6 +201,11 @@ For WebDAV, use `kind: "webdav"`. Configure it with `PUT /management/destination
 Use a host-managed root with no untrusted concurrent writers and no nested mounts below it. Configuration places a small `.shutterspool-{destinationId}.root` marker in the root; retain it with the mount. If the marker disappears, writes and reconciliation stay ambiguous until the same mounted contents return or an operator resolves the mount. The adapter stages each attempt beside its final target, verifies the original's size and SHA-256, requires a tested no-replace hard link on the target filesystem, and confirms by read-back. It never overwrites an occupied target. A matching occupied file confirms; a different or unverifiable file requires correction and an explicit Retry. Hard-link support is checked on the actual target directory, so a mount that cannot provide it is unsupported. Local read-back proves bytes visible through the mount at verification time, subject to the mount's own power-loss guarantees.
 
 Controlled checks exercised local Windows NTFS, Windows loopback SMB (`\\localhost\C$`), Linux ext4 and a 4 MiB Linux tmpfs. The tmpfs check covered full capacity and moving the mount away and back; a Unix permission check covered an unwritable root. These observations do not establish compatibility with an external NAS. Verify the no-replace and recovery behavior on each deployment mount before using it for originals.
+
+Private WebDAV targets require an explicit operator CIDR exception in `ShutterSpool:Destinations:WebDavEgress:AllowedPrivateNetworks`.
+The default blocks private/local and special-use addresses. DNS is resolved and checked for every new connection; the socket connects to an approved address while TLS validates the original hostname.
+Connection tests and delivery share these restrictions. HTTP redirects, environment proxies and cookies are disabled.
+For a self-hosted internal Nextcloud server, allow only its required network/address; a tenant cannot add this exception.
 
 ## Camera ingress
 

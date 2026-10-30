@@ -4,10 +4,11 @@ using ShutterSpool.Application.Security;
 
 namespace ShutterSpool.Infrastructure.Persistence;
 
-internal sealed class DatabaseInitializer(ShutterSpoolDbContext database)
+internal sealed class DatabaseInitializer(ShutterSpoolDbContext database, ShutterSpool.Application.Workspaces.WorkspaceContext? workspace = null)
 {
     private const string KeyCheckValue = "ShutterSpool deployment key check v1";
-    public async Task InitializeAsync(string spoolRoot, CancellationToken cancellationToken, Func<CancellationToken, Task>? recover = null)
+    public async Task InitializeAsync(string spoolRoot, CancellationToken cancellationToken, Func<CancellationToken, Task>? recover = null,
+        bool validateOnly = false)
     {
         if (!database.Database.IsRelational())
         {
@@ -20,7 +21,12 @@ internal sealed class DatabaseInitializer(ShutterSpoolDbContext database)
             await command.ExecuteNonQueryAsync(cancellationToken);
         try
         {
-            await InitializeLockedAsync(spoolRoot, cancellationToken, recover);
+            if (validateOnly)
+            {
+                await Workspaces.WorkspaceRuntime.ValidateDatabaseAsync(database, cancellationToken, workspace?.Selected);
+                if (recover is not null) await recover(cancellationToken);
+            }
+            else await InitializeLockedAsync(spoolRoot, cancellationToken, recover);
         }
         finally
         {

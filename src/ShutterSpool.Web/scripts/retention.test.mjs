@@ -364,6 +364,17 @@ test('Settings validation identifies the invalid field group without blaming val
     fixture.run('quotaActive.value = true; lifetimes.waiting.pressureHours = 180'); assert.match(fixture.run('validationErrors.value.lifetimes.waiting'), /Space-saving cleanup.*no later than regular cleanup/);
     fixture.run('lifetimes.waiting.pressureHours = 24; memoryMiB.value = 1025'); assert.match(fixture.run('validationErrors.value.memory'), /1.*1024/);
 });
+test('a workspace storage limit stays active and cannot exceed its assigned allocation', () => {
+    const fixture = component('RetentionSettings', { online: true, generation: 0 }, {});
+    fixture.run("settings.value = { workspaceAllocatedBytes: 10 * 1024 ** 3 }; quotaActive.value = true; quotaGiB.value = 11; highGiB.value = 9; recoveryGiB.value = 8; trashHours.value = 24; restoreHours.value = 24; galleryDays.value = 1; for(const key of lifetimeKeys){lifetimes[key].pressureHours=24;lifetimes[key].ordinaryDays=7;}");
+    assert.match(fixture.run('validationErrors.value.quota'), /assigned allocation/);
+    assert.equal(fixture.run('valid.value'), false);
+    fixture.run('quotaGiB.value = 10');
+    assert.equal(fixture.run('validationErrors.value.quota'), '');
+    assert.equal(fixture.run('body().quota.quotaBytes'), 10 * 1024 ** 3);
+    fixture.run('quotaActive.value = false');
+    assert.match(fixture.run('validationErrors.value.quota'), /required for this workspace/);
+});
 test('privacy erasure freezes exact identities, checks an uncertain request without replay, and retains blocked surfaces', async () => {
     let written = 0, continued = 0, previewed;
     const props = { captureId: 'synthetic', displayName: 'SYNTHETIC.JPG', online: true, generation: 0, evidence: { captureRevision: 7, asOf: new Date(), availableOriginals: [{ assetId: 'selected', variant: 'JPEG', byteLength: 1024, state: 'available' }, { assetId: 'history', variant: 'RAW', byteLength: 2048, state: 'removed' }] } };

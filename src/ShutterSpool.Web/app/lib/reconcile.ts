@@ -1,5 +1,6 @@
 import { HubConnectionBuilder, LogLevel } from "@microsoft/signalr";
 import { token, onAccessLost } from "./session";
+import { pageWorkspaceId, withWorkspace } from './workspace-context';
 import type { SourceActivity } from './source-activity';
 
 export interface PreviewInvalidation {
@@ -33,7 +34,7 @@ export function useReconciliation(
     let allPreviews = false;
     let debounce: ReturnType<typeof setTimeout> | undefined;
     const hub = new HubConnectionBuilder()
-        .withUrl("/live/changes", { accessTokenFactory: token })
+        .withUrl(withWorkspace('/live/changes', pageWorkspaceId), { accessTokenFactory: token })
         .configureLogging(LogLevel.None)
         .withAutomaticReconnect()
         .build();

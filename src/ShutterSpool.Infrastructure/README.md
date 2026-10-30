@@ -18,7 +18,8 @@ Cleanup closes same-process preview use, takes the exact Asset/storage-key Postg
 
 ## Durable ingest
 
-`DatabaseInitializer` holds a PostgreSQL session advisory lock while checking schema compatibility, applying migrations and completing startup recovery, so concurrent Server processes cannot race startup changes or recovery. It explicitly releases the advisory lock before returning the pooled connection.
+`DatabaseInitializer` holds a PostgreSQL session advisory lock while checking schema compatibility and completing startup recovery, so concurrent startup operations cannot race those changes. It explicitly releases the advisory lock before returning the pooled connection; this is not a lifetime multi-Server ownership guarantee.
+Single-workspace initialization may apply compatible migrations. Shared-workspace runtime initialization validates only; the explicit operator command performs migrations before normal startup.
 
 `IngestService` creates an operation before streaming. Camera ingress, the currently wired transport, writes once under a journaled, generated `spool/` key with a 64 KiB buffer and incremental SHA-256/size. It preserves asynchronous write-through and disk flush before recording the receipt. Finalization publishes the Asset in PostgreSQL after the caller establishes the matching successful source event; it does not copy or reread the payload.
 
@@ -100,7 +101,13 @@ The [workflow guide](../../docs/core-workflow.md#4-route-a-decision-then-deliver
 
 Composition binds internal implementations and rejects duplicate Destination-kind registrations at startup.
 Unsupported configuration produces visible failed/uncertain work rather than disappearing from the scan.
-WebDAV uses HTTPS Basic with normal TLS validation and no redirects; its collection/account identity locks once work exists, and replacement credentials remain write-only and encrypted.
+Deployment capabilities gate destination creation, configuration, probes, writes and reconciliation; disabled kinds retain their saved configuration and delivery history.
+WebDAV uses HTTPS Basic with normal TLS validation and no redirects, proxy or shared cookie state; its collection/account identity locks once work exists, and replacement credentials remain write-only and encrypted.
+`WebDavEgressPolicy` validates all resolved addresses at each new socket connection and connects to an approved address while TLS authenticates the original hostname.
+Private/local and special-use addresses are denied by default; only deployment-controlled CIDR exceptions can permit internal targets.
+Probes and deliveries use this same client policy, including reconnects.
+In shared-workspace mode, local destinations and folder browsing are confined to the pre-existing `destinations` directory inside that workspace's allocated storage root; traversal and symbolic-link/reparse-point escapes are rejected.
+See the [Server destination configuration](../ShutterSpool.Server/README.md#delivery-work) for capability and network settings.
 Provider response bodies never cross the adapter boundary.
 WebDAV ambiguity stays blocked until final-target receipt or read-back evidence can be verified; a missing target alone never permits another write.
 
@@ -128,11 +135,11 @@ See the [controlled Nextcloud checks](../../tests/README.md#controlled-nextcloud
 
 ## Persistence and bounded reads
 
-The single internal `ShutterSpoolDbContext` owns configuration, grants and workflow state. `DatabaseInitializer` applies known pending migrations before recovery/exposure; historical or unknown migration histories, nonempty unversioned databases and nonempty spools for fresh databases remain rejected. See [atomic operations](../../docs/architecture/persistence.md#persistence-and-atomic-operations) and [extension recipes](../../docs/architecture/system-boundaries.md#extension-recipes). Provider guarantees depend on the actual storage/mount semantics; test each deployment mount before using it for originals.
+The internal `ShutterSpoolDbContext` owns configuration, grants and workflow state, with one copy of its schema per tenant in shared-workspace mode. Historical or unknown migration histories, nonempty unversioned databases and nonempty spools for fresh databases remain rejected. Shared-workspace startup requires the exact schema supported by the build and never performs request-time migration. See [atomic operations](../../docs/architecture/persistence.md#persistence-and-atomic-operations), [workspace operations](../ShutterSpool.Server/README.md#shared-workspace-provisioning) and [extension recipes](../../docs/architecture/system-boundaries.md#extension-recipes). Provider guarantees depend on the actual storage/mount semantics; qualify each deployment mount before using it for originals.
 
 The initial migration `20261025211318_InitialCreate` creates the current schema and seeds the fixed built-in Collection once. Source/Capture Collection defaults and restrictive foreign keys preserve that identity. Nullable release/decision Collection fields represent unrecorded context; initialization does not inspect originals or enqueue deliveries.
 The SQL-owned `deployment_key_checks` singleton and the one-time Collection, quota and retention seeds are intentionally outside the EF entity snapshot. Database defaults and physical index names are mapped explicitly, including partial uniqueness for RAW/JPEG primaries and retention-selection indexes.
-Direct EF migration tooling also refuses existing schema/history and downgrade, but it cannot validate spool custody. Use Server startup for installations; the runtime checks database/spool compatibility under the startup lock before migration and recovery.
+Direct EF migration tooling also refuses existing schema/history and downgrade, but it cannot validate spool custody. Use Server initialization for single-workspace installations and the explicit operator commands for shared workspaces; preserve the database/spool compatibility and recovery checks in either path.
 See the [older-installation transition](../../deploy/operations/README.md#moving-from-an-older-pre-alpha-installation) for separate fresh storage and retained keys/identity. No historical chain is a supported upgrade predecessor.
 `EfCollectionManagementStore` owns bounded search and guarded rename/delete; `EfCaptureCollectionAssignmentStore` commits versioned moves independently per Capture.
 Source defaults, grouping, moves, release, Reevaluate and erasure share the [Collection-assignment fence](../../docs/architecture/persistence.md#persistence-and-atomic-operations).

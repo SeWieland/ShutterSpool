@@ -225,7 +225,7 @@ internal static class CameraIngressEndpoints
         return Uri.UnescapeDataString(raw[(pathIndex + prefix.Length)..]);
     }
 
-    private static bool TryLoginId(string? endpoint, CameraIngressSettings settings, out Guid loginId)
+    internal static bool TryLoginId(string? endpoint, CameraIngressSettings settings, out Guid loginId)
     {
         loginId = default;
         if (!Uri.TryCreate(endpoint, UriKind.Absolute, out Uri? actual)

@@ -16,11 +16,13 @@ import { useCaptureCurationActions } from '../composables/useCaptureCurationActi
 import { useWorkspacePreferences } from '../composables/useWorkspacePreferences';
 import { useCaptureBrowser } from '../composables/useCaptureBrowser';
 import { effectiveMotion, reconcileCaptures, curationTiming } from '../lib/workspace-interactions';
+import { pageWorkspaceId, readWorkspaceId, withWorkspace } from '../lib/workspace-context';
 import type { CaptureInboxItemResponse as Capture, CaptureDetailResponse, CaptureCurationResponse, SourceConfigurationResponse } from '../api/models';
 const props = defineProps<{
     captureId?: string;
 }>();
 const router = useRouter();
+const workspaceRoute = (path: string) => withWorkspace(path, pageWorkspaceId);
 type View = 'Sources' | 'Curation' | 'Gallery' | 'Delivery' | 'Settings';
 const view = ref<View>('Gallery');
 const settingsDirty = ref(false);
@@ -93,7 +95,7 @@ const playback = new GallerySlideshow(slideshow, {
     show: id => {
         if (id !== activeId.value) { slideshowPreview.value = 'pending'; void openCapture(id); }
         else playback.preview(slideshowPreview.value);
-        void router.replace(`/captures/${encodeURIComponent(id)}`);
+        void router.replace(workspaceRoute(`/captures/${encodeURIComponent(id)}`));
     },
 });
 function slideshowDisplayed(state: DisplayState) {
@@ -167,7 +169,7 @@ const viewerSession = useViewerSession({
         endSlideshow();
         viewerFavoriteFeedback.value = false;
         resetZoom();
-        if (activeId.value) void router.replace(`/captures/${encodeURIComponent(activeId.value)}`);
+        if (activeId.value) void router.replace(workspaceRoute(`/captures/${encodeURIComponent(activeId.value)}`));
     },
     onClose: (updateUrl, wasActive) => {
         viewerFavoriteFeedback.value = false;
@@ -175,7 +177,7 @@ const viewerSession = useViewerSession({
         if (!wasActive) return;
         detailController?.abort();
         detailSequence.value++;
-        if (updateUrl && session.value) void router.replace('/');
+        if (updateUrl && session.value) void router.replace(workspaceRoute('/'));
     },
     onNavigate: direction => navigate(direction),
     onCurationKey: curationKey,
@@ -820,6 +822,12 @@ function requestDeparture() {
 }
 defineExpose({ requestDeparture });
 const removeRouteGuard = router.beforeEach(to => {
+    const targetWorkspaceId = readWorkspaceId(`?workspace=${encodeURIComponent(String(to.query.workspace ?? ''))}`);
+    if (targetWorkspaceId !== pageWorkspaceId) {
+        if (!requestDeparture()) return false;
+        window.location.assign(to.fullPath);
+        return false;
+    }
     const allowed = to.path === '/' || to.path.startsWith('/captures/') || requestDeparture();
     if (allowed && full.value && to.path !== `/captures/${encodeURIComponent(activeId.value)}`) closeFull(false);
     return allowed;
@@ -1084,7 +1092,7 @@ function navigate(delta: number) {
         resetZoom();
         void openCapture(String(next.id));
         if (full.value)
-            void router.replace(`/captures/${encodeURIComponent(String(next.id))}`);
+            void router.replace(workspaceRoute(`/captures/${encodeURIComponent(String(next.id))}`));
     }
 }
 function curationKey(event: KeyboardEvent) {
