@@ -45,6 +45,7 @@ internal sealed partial class ShutterSpoolDbContext(DbContextOptions<ShutterSpoo
             entity.HasKey(item => item.Id);
         });
         ConfigureConfiguration(modelBuilder);
+        ConfigureInvitations(modelBuilder);
         ConfigureQuota(modelBuilder);
         ConfigureProtections(modelBuilder);
         ConfigureErasure(modelBuilder);

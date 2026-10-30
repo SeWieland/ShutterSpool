@@ -36,5 +36,12 @@ export function workspaceChangeError(error: unknown) {
         case 'membership-conflict': return 'Membership or Viewer visibility changed elsewhere. Review the refreshed values before trying again.';
         case 'permission-denied': return 'Your current role does not permit this change. Review current workspace access.';
         case 'membership-not-found': return 'This membership is no longer available. Review the refreshed member list.';
+        case 'invitation-conflict': return 'This invitation changed elsewhere. Review its refreshed status before choosing another action.';
+        case 'invitation-expired': return 'This invitation has expired. Ask a workspace administrator for a new invitation.';
+        case 'invitation-cancelled': return 'This invitation was cancelled. Ask a workspace administrator for a new invitation.';
+        case 'invitation-invalidated': return 'This invitation is no longer valid. Ask a workspace administrator for a new invitation.';
+        case 'invitation-accepted': return 'This invitation was already accepted. Check the current workspace membership; invitations do not change an existing role.';
+        case 'invitation-not-found': return 'This invitation is no longer available. Refresh invitations or contact the workspace administrator.';
+        case 'email-verification-required': return 'Complete email verification with your sign-in service, then sign out and sign in again before joining.';
     }
 }

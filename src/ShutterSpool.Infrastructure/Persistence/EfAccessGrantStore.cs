@@ -5,7 +5,7 @@ using System.Text.Json;
 
 namespace ShutterSpool.Infrastructure.Persistence;
 
-internal sealed class EfAccessGrantStore(ShutterSpoolDbContext database) : IAccessGrantStore
+internal sealed partial class EfAccessGrantStore(ShutterSpoolDbContext database) : IAccessGrantStore
 {
     public async Task<WorkspaceMembership?> GetAsync(string issuer, string subject, CancellationToken token)
     {
@@ -56,7 +56,9 @@ internal sealed class EfAccessGrantStore(ShutterSpoolDbContext database) : IAcce
         string beforeState = JsonSerializer.Serialize(new { Actor = actor is null ? null : Membership(actor),
             Target = target is null ? null : Membership(target), Policy = new WorkspaceViewerPolicy(policy.IncludeUnreleased, policy.Revision) });
         AccessChangeResult result = await ApplyChangeAsync(change, actor, target, policy, token);
-        RecordChange(change, request, result, target, policy, beforeState);
+        Guid[] invalidatedOffers = result.Status == "applied" && change.Kind != AccessChangeKind.ViewerPolicy
+            ? await InvalidateInvitationsAsync(target!, token) : [];
+        RecordChange(change, request, result, target, policy, beforeState, invalidatedOffers);
         await database.SaveChangesAsync(token);
         await transaction.CommitAsync(token);
         return result;
@@ -123,13 +125,13 @@ internal sealed class EfAccessGrantStore(ShutterSpoolDbContext database) : IAcce
         .AnyAsync(item => item.IsActive && item.Role == WorkspaceRole.Owner && item.Id != target, token);
 
     private void RecordChange(AccessChange change, string request, AccessChangeResult result, AuthorizationGrant? target,
-        WorkspaceViewerPolicyEntity policy, string beforeState) => database.Set<WorkspaceAccessOperationEntity>().Add(new()
+        WorkspaceViewerPolicyEntity policy, string beforeState, Guid[] invalidatedOffers) => database.Set<WorkspaceAccessOperationEntity>().Add(new()
         {
             Id = change.OperationId, Request = request, Result = JsonSerializer.Serialize(result),
             ActorIssuer = change.ActorIssuer, ActorSubject = change.ActorSubject, Kind = change.Kind.ToString(),
             TargetId = target?.Id ?? change.TargetId, RecordedAt = DateTimeOffset.UtcNow,
             BeforeState = beforeState, AfterState = JsonSerializer.Serialize(new { Target = target is null ? null : Membership(target),
-                Policy = new WorkspaceViewerPolicy(policy.IncludeUnreleased, policy.Revision) }),
+                Policy = new WorkspaceViewerPolicy(policy.IncludeUnreleased, policy.Revision), InvalidatedOffers = invalidatedOffers }),
         });
 
     private Task<int> LockAsync(CancellationToken token) => database.Database.ExecuteSqlRawAsync(

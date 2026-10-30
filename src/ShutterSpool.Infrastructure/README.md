@@ -38,6 +38,7 @@ Media query adapters apply the current Viewer predicate before projection, filte
 New grants require an explicit role. Display names are optional cached authenticated claims, never an identity or permission source.
 Domain owns pure access/visibility predicates; query adapters apply those predicates to authoritative facts.
 The [authorization guide](../../docs/architecture/authentication-and-authorization.md) owns the request boundary and the [operator guide](../../deploy/operations/README.md#owner-login-recovery) explains native Owner login recovery and exceptional manual maintenance.
+The same store implements `IWorkspaceInvitationStore` for recipient handoffs and local offer transitions. It reads database time after taking the access-change lock and writes membership, offer state and audit/result together. Membership removal and loss of invitation authority invalidate affected pending offers within their own transaction; native identity setup and email remain outside this adapter.
 
 ## Retention persistence and cleanup
 
