@@ -20,7 +20,8 @@ function reconciliation(refresh) {
         setTimeout: callback => { timers.set(++next, callback); return next; }, clearTimeout: id => timers.delete(id),
         setInterval: callback => { handlers.set('safety', callback); return 1; }, clearInterval() {},
         require: name => name === '@microsoft/signalr' ? { HubConnectionBuilder: Builder, LogLevel: { None: 0 } }
-            : { token: async () => '', onAccessLost: callback => { lost = callback; return () => {}; } },
+            : name.endsWith('/workspace-context') ? { pageWorkspaceId: null, withWorkspace: path => path }
+                : { token: async () => '', onAccessLost: callback => { lost = callback; return () => {}; } },
     });
     vm.runInContext(ts.transpileModule(readFileSync(new URL('../app/lib/reconcile.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
     const live = context.exports.useReconciliation(refresh);

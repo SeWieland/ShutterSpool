@@ -105,6 +105,29 @@ Read [retention](../retention.md) for the policies and [authentication](authenti
 
 ## Persistence and atomic operations
 
+### Shared workspaces
+
+Shared-workspace mode keeps one Server and a separate PostgreSQL database and allocated storage root for each workspace.
+The control database resolves workspace identities, provisioning state, fixed allocations and opaque camera routing handles; it contains no media or authoritative membership grants.
+Each tenant database retains the existing workflow schema, local grants, reservations and recovery state under its own restricted runtime credentials.
+
+Requests and worker passes bind an immutable workspace context before resolving database, filesystem or authorization services.
+Missing, invalid or unavailable context fails closed; it never selects a default tenant.
+The browser's workspace URL is a selection request, and the Server still checks current membership.
+Private previews, caches and live fanout carry the same workspace identity.
+
+Workers retain their distinct responsibilities and cycle through tenants with bounded work per turn.
+Slow delivery and preview work use bounded shared slots; no permanent worker stack or service provider is created per tenant.
+The current limits are 32 registered workspaces and four pooled connections per workspace, with no minimum idle pool.
+These are resource bounds, not throughput or availability guarantees.
+
+The operator provisions fixed filesystem-enforced allocations whose total fits usable capacity after reserves and other host data.
+Tenant-local durable reservations enforce the workspace quota within that allocation; unused capacity cannot be borrowed from another workspace.
+There is no shared host-reservation ledger or automatic storage allocator.
+See [workspace configuration and provisioning](../../src/ShutterSpool.Server/README.md#shared-workspace-provisioning) and the [maintenance guide](../../deploy/operations/README.md).
+
+### Workflow transactions
+
 Operations often cross a database/filesystem boundary that cannot be one transaction.
 The implementation keeps exact identity and recovery evidence across those steps, then rechecks authority when concurrent operations compete.
 Use the [persistence and recovery reference](persistence.md) before changing locks, save points, original-use fencing or startup recovery.
@@ -128,4 +151,6 @@ Use the request, source and relevant tests together when reviewing behavior.
 Original streams remain behind Application ports with opaque references; consumers cannot assume a local path or a seekable stream.
 That replacement boundary matters even though object storage and multi-node placement are not implemented.
 A worker claim or preview-ready hint does not establish access to another node's disk.
-The current package uses one Server and a local spool; it does not implement object storage, multi-node placement, tenancy or mobile offline synchronization.
+The runtime uses one Server and filesystem storage, with optional shared-workspace isolation.
+It does not implement object storage, multi-node placement or mobile offline synchronization.
+Database separation does not isolate tenants from a compromised shared application or privileged host, and local checks do not qualify a hosted service.

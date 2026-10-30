@@ -7,6 +7,7 @@ using ShutterSpool.Application.Security;
 using ShutterSpool.Server.Security;
 using System.Security.Claims;
 using System.Threading.Channels;
+using ShutterSpool.Application.Workspaces;
 
 namespace ShutterSpool.Server.Api.Live;
 
@@ -20,12 +21,21 @@ public sealed record ResyncRequiredHint(string Epoch);
 public sealed record PreviewPreparationObservation(DateTimeOffset ObservedAt, long Version);
 
 [Authorize(Policy = SecurityExtensions.ManagementAccessPolicy)]
-public sealed class LiveChangesHub(IServiceScopeFactory scopes, IOptions<SecurityOptions> security) : Hub
+public sealed class LiveChangesHub(IServiceScopeFactory scopes, IOptions<SecurityOptions> security, WorkspaceContext workspace) : Hub
 {
     private static readonly TimeSpan GrantCheckInterval = TimeSpan.FromSeconds(30);
 
     public override async Task OnConnectedAsync()
     {
+        if (workspace.Enabled)
+        {
+            if (Context.GetHttpContext()?.Items[typeof(WorkspaceDefinition)] is not WorkspaceDefinition selectedWorkspace)
+            {
+                Context.Abort();
+                return;
+            }
+            workspace.Bind(selectedWorkspace);
+        }
         if (!IsSecureOrigin(Context.GetHttpContext(), security.Value.AllowedOrigins))
         {
             Context.Abort();
@@ -36,11 +46,13 @@ public sealed class LiveChangesHub(IServiceScopeFactory scopes, IOptions<Securit
         string? subject = Context.User?.FindFirstValue(ClaimTypes.NameIdentifier) ?? Context.User?.FindFirstValue("sub");
         CancellationToken disconnected = Context.ConnectionAborted;
         Action abort = Context.Abort;
-        _ = MonitorGrantAsync(issuer, subject, disconnected, abort);
+        WorkspaceDefinition? selected = workspace.Selected;
+        await Groups.AddToGroupAsync(Context.ConnectionId, LiveChangeNotifier.Group(workspace.Id ?? Guid.Empty), disconnected);
+        _ = MonitorGrantAsync(issuer, subject, selected, disconnected, abort);
         await base.OnConnectedAsync();
     }
 
-    private async Task MonitorGrantAsync(string? issuer, string? subject, CancellationToken disconnected, Action abort)
+    private async Task MonitorGrantAsync(string? issuer, string? subject, WorkspaceDefinition? selected, CancellationToken disconnected, Action abort)
     {
         try
         {
@@ -48,6 +60,12 @@ public sealed class LiveChangesHub(IServiceScopeFactory scopes, IOptions<Securit
             {
                 await Task.Delay(GrantCheckInterval, disconnected);
                 await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+                if (selected is not null)
+                {
+                    WorkspaceDefinition? current = await scope.ServiceProvider.GetRequiredService<IWorkspaceRegistry>().FindReadyAsync(selected.Id, disconnected);
+                    if (current is null || current != selected) { abort(); return; }
+                    scope.ServiceProvider.GetRequiredService<WorkspaceContext>().Bind(selected);
+                }
                 if (!await scope.ServiceProvider.GetRequiredService<AccessGrantService>()
                     .IsAllowedAsync(issuer, subject, disconnected))
                 {
@@ -81,16 +99,15 @@ public sealed class LiveChangesHub(IServiceScopeFactory scopes, IOptions<Securit
         || System.Net.IPAddress.TryParse(host, out System.Net.IPAddress? address) && System.Net.IPAddress.IsLoopback(address);
 }
 
-public sealed class LiveChangeNotifier(IHubContext<LiveChangesHub> hub, ILogger<LiveChangeNotifier> logger) : BackgroundService,
-    ICameraTransferActivityPublisher, IPreviewActivityPublisher
+public sealed class LiveChangeBuffer(IHubContext<LiveChangesHub> hub, ILogger<LiveChangeNotifier> logger) : BackgroundService
 {
     private const int Capacity = 256;
     private static readonly TimeSpan ActiveObservationLifetime = TimeSpan.FromSeconds(60);
     private readonly Lock _activityLock = new();
-    private readonly Dictionary<Guid, CameraTransferActivity> _receiving = [];
-    private readonly Dictionary<(Guid CaptureId, Guid AssetId, PreviewProfile Profile), PreviewPreparationObservation> _preparingPreviews = [];
-    private long _activitySequence;
-    private int _activityCoverageComplete = 1;
+    private readonly Dictionary<(Guid Workspace, Guid Transfer), CameraTransferActivity> _receiving = [];
+    private readonly Dictionary<(Guid Workspace, Guid CaptureId, Guid AssetId, PreviewProfile Profile), PreviewPreparationObservation> _preparingPreviews = [];
+    private readonly Dictionary<Guid, long> activitySequences = [];
+    private readonly HashSet<Guid> incompleteWorkspaces = [];
     private readonly Channel<LiveChange> _pending = Channel.CreateBounded<LiveChange>(new BoundedChannelOptions(Capacity)
     {
         FullMode = BoundedChannelFullMode.Wait,
@@ -100,60 +117,61 @@ public sealed class LiveChangeNotifier(IHubContext<LiveChangesHub> hub, ILogger<
     private readonly string _epoch = Guid.NewGuid().ToString("N");
     private int _resyncRequired;
     public string Epoch => _epoch;
-    public bool ActivityCoverageComplete => Volatile.Read(ref _activityCoverageComplete) != 0;
+    public bool ActivityCoverageComplete => IsActivityCoverageComplete(Guid.Empty);
+    public bool IsActivityCoverageComplete(Guid workspace) { lock (_activityLock) return !incompleteWorkspaces.Contains(workspace); }
 
-    public void CaptureChanged(Guid captureId, string kind) => Publish($"capture:{captureId}", "captureChanged", new CaptureChangedHint(captureId, kind));
-    public void RetentionChanged() => Publish("retention", "resyncRequired", new ResyncRequiredHint(_epoch));
+    public void CaptureChanged(Guid workspace, Guid captureId, string kind) => Publish(workspace, $"capture:{captureId}", "captureChanged", new CaptureChangedHint(captureId, kind));
+    public void RetentionChanged(Guid workspace) => Publish(workspace, "retention", "resyncRequired", new ResyncRequiredHint(_epoch));
 
-    public void PreviewReady(Guid captureId, Guid assetId, string profile) =>
-        Publish($"preview:{captureId}:{assetId}:{profile}", "previewReady", new PreviewReadyHint(captureId, assetId, profile));
+    public void PreviewReady(Guid workspace, Guid captureId, Guid assetId, string profile) =>
+        Publish(workspace, $"preview:{captureId}:{assetId}:{profile}", "previewReady", new PreviewReadyHint(captureId, assetId, profile));
 
-    public void SourceAuthenticationChanged(Guid sourceId, string outcome, DateTimeOffset observedAt, long version) =>
-        Publish($"source-auth:{sourceId}", "sourceAuthenticationChanged", new SourceAuthenticationChangedHint(sourceId, outcome, observedAt, version));
+    public void SourceAuthenticationChanged(Guid workspace, Guid sourceId, string outcome, DateTimeOffset observedAt, long version) =>
+        Publish(workspace, $"source-auth:{sourceId}", "sourceAuthenticationChanged", new SourceAuthenticationChangedHint(sourceId, outcome, observedAt, version));
 
-    public void UnassignedAuthenticationActivity(DateTimeOffset observedAt) =>
-        Publish("unassigned-auth", "unassignedAuthenticationActivity", new UnassignedAuthenticationActivityHint(observedAt));
+    public void UnassignedAuthenticationActivity(Guid workspace, DateTimeOffset observedAt) =>
+        Publish(workspace, "unassigned-auth", "unassignedAuthenticationActivity", new UnassignedAuthenticationActivityHint(observedAt));
 
-    public void Preparing(Guid captureId, Guid assetId, PreviewProfile profile, DateTimeOffset observedAt)
+    public void Preparing(Guid workspace, Guid captureId, Guid assetId, PreviewProfile profile, DateTimeOffset observedAt)
     {
         lock (_activityLock)
         {
-            long version = ++_activitySequence;
-            var identity = (captureId, assetId, profile);
-            if (_preparingPreviews.ContainsKey(identity) || _preparingPreviews.Count < Capacity)
+            long version = activitySequences[workspace] = activitySequences.GetValueOrDefault(workspace) + 1;
+            var identity = (workspace, captureId, assetId, profile);
+            if (_preparingPreviews.ContainsKey(identity) || _preparingPreviews.Count(pair => pair.Key.Workspace == workspace) < Capacity)
                 _preparingPreviews[identity] = new(observedAt, version);
             else
             {
-                Interlocked.Exchange(ref _activityCoverageComplete, 0);
+                incompleteWorkspaces.Add(workspace);
                 Interlocked.Exchange(ref _resyncRequired, 1);
-                var oldest = _preparingPreviews.MinBy(pair => pair.Value.ObservedAt).Key;
+                var oldest = _preparingPreviews.Where(pair => pair.Key.Workspace == workspace).MinBy(pair => pair.Value.ObservedAt).Key;
                 if (_preparingPreviews[oldest].ObservedAt < observedAt)
                 {
                     _preparingPreviews.Remove(oldest);
                     _preparingPreviews[identity] = new(observedAt, version);
                 }
             }
-            Publish($"capture:{captureId}", "captureChanged",
+            Publish(workspace, $"capture:{captureId}", "captureChanged",
                 new CaptureChangedHint(captureId, "preview-preparing"));
         }
     }
 
-    public void Finished(Guid captureId, Guid assetId, PreviewProfile profile)
+    public void Finished(Guid workspace, Guid captureId, Guid assetId, PreviewProfile profile)
     {
         lock (_activityLock)
         {
-            if (!_preparingPreviews.Remove((captureId, assetId, profile))) return;
-            Publish($"capture:{captureId}", "captureChanged",
+            if (!_preparingPreviews.Remove((workspace, captureId, assetId, profile))) return;
+            Publish(workspace, $"capture:{captureId}", "captureChanged",
                 new CaptureChangedHint(captureId, "preview-finished"));
         }
     }
 
-    public PreviewPreparationObservation? GetRecentPreviewPreparation(Guid captureId, Guid assetId,
+    public PreviewPreparationObservation? GetRecentPreviewPreparation(Guid workspace, Guid captureId, Guid assetId,
         PreviewProfile profile, DateTimeOffset now)
     {
         lock (_activityLock)
         {
-            var identity = (captureId, assetId, profile);
+            var identity = (workspace, captureId, assetId, profile);
             if (!_preparingPreviews.TryGetValue(identity, out PreviewPreparationObservation? observation)) return null;
             if (observation.ObservedAt < now - ActiveObservationLifetime)
             {
@@ -164,51 +182,51 @@ public sealed class LiveChangeNotifier(IHubContext<LiveChangesHub> hub, ILogger<
         }
     }
 
-    public void Publish(CameraTransferActivity activity)
+    public void Publish(Guid workspace, CameraTransferActivity activity)
     {
         lock (_activityLock)
         {
-            activity = activity with { Version = ++_activitySequence };
+            activity = activity with { Version = activitySequences[workspace] = activitySequences.GetValueOrDefault(workspace) + 1 };
             if (activity.Phase == CameraTransferPhase.Receiving)
             {
-                if (_receiving.ContainsKey(activity.TransferId) || _receiving.Count < Capacity)
-                    _receiving[activity.TransferId] = activity;
+                if (_receiving.ContainsKey((workspace, activity.TransferId)) || _receiving.Count(pair => pair.Key.Workspace == workspace) < Capacity)
+                    _receiving[(workspace, activity.TransferId)] = activity;
                 else
                 {
-                    Interlocked.Exchange(ref _activityCoverageComplete, 0);
+                    incompleteWorkspaces.Add(workspace);
                     Interlocked.Exchange(ref _resyncRequired, 1);
-                    Guid oldestId = _receiving.MinBy(pair => pair.Value.ObservedAt).Key;
+                    var oldestId = _receiving.Where(pair => pair.Key.Workspace == workspace).MinBy(pair => pair.Value.ObservedAt).Key;
                     if (_receiving[oldestId].ObservedAt < activity.ObservedAt)
                     {
                         _receiving.Remove(oldestId);
-                        _receiving[activity.TransferId] = activity;
+                        _receiving[(workspace, activity.TransferId)] = activity;
                     }
                 }
             }
-            else _receiving.Remove(activity.TransferId);
-            Publish($"transfer:{activity.TransferId}", "sourceActivityChanged",
+            else _receiving.Remove((workspace, activity.TransferId));
+            Publish(workspace, $"transfer:{activity.TransferId}", "sourceActivityChanged",
                 new SourceActivityChangedHint(_epoch, activity.TransferId, activity.SourceId, activity.AssetId, activity.CaptureId,
                     activity.Phase.ToString(), activity.ObservedAt, activity.Version, activity.Accepted, activity.PreviewReady));
         }
     }
 
-    public CameraTransferActivity? GetRecentReceiving(Guid transferId, DateTimeOffset now)
+    public CameraTransferActivity? GetRecentReceiving(Guid workspace, Guid transferId, DateTimeOffset now)
     {
         lock (_activityLock)
         {
-            if (!_receiving.TryGetValue(transferId, out CameraTransferActivity? activity)) return null;
+            if (!_receiving.TryGetValue((workspace, transferId), out CameraTransferActivity? activity)) return null;
             if (activity.ObservedAt < now - ActiveObservationLifetime)
             {
-                _receiving.Remove(transferId);
+                _receiving.Remove((workspace, transferId));
                 return null;
             }
             return activity;
         }
     }
 
-    private void Publish(string key, string eventName, object hint)
+    private void Publish(Guid workspace, string key, string eventName, object hint)
     {
-        if (!_pending.Writer.TryWrite(new(key, eventName, hint))) Interlocked.Exchange(ref _resyncRequired, 1);
+        if (!_pending.Writer.TryWrite(new(workspace, $"{workspace:N}:{key}", eventName, hint))) Interlocked.Exchange(ref _resyncRequired, 1);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -228,9 +246,10 @@ public sealed class LiveChangeNotifier(IHubContext<LiveChangesHub> hub, ILogger<
                 {
                     MaxDegreeOfParallelism = 16,
                     CancellationToken = timeout.Token,
-                }, async (item, token) => await hub.Clients.All.SendAsync(item.EventName, item.Payload, token));
+                }, async (item, token) => await hub.Clients.Group(LiveChangeNotifier.Group(item.Workspace)).SendAsync(item.EventName, item.Payload, token));
                 if (Interlocked.Exchange(ref _resyncRequired, 0) != 0)
-                    await hub.Clients.All.SendAsync("resyncRequired", new ResyncRequiredHint(_epoch), timeout.Token);
+                    foreach (Guid workspace in latest.Values.Select(item => item.Workspace).Distinct())
+                        await hub.Clients.Group(LiveChangeNotifier.Group(workspace)).SendAsync("resyncRequired", new ResyncRequiredHint(_epoch), timeout.Token);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
             catch (Exception)
@@ -241,7 +260,8 @@ public sealed class LiveChangeNotifier(IHubContext<LiveChangesHub> hub, ILogger<
                 {
                     using var resyncTimeout = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
                     resyncTimeout.CancelAfter(TimeSpan.FromSeconds(1));
-                    await hub.Clients.All.SendAsync("resyncRequired", new ResyncRequiredHint(_epoch), resyncTimeout.Token);
+                    foreach (Guid workspace in latest.Values.Select(item => item.Workspace).Distinct())
+                        await hub.Clients.Group(LiveChangeNotifier.Group(workspace)).SendAsync("resyncRequired", new ResyncRequiredHint(_epoch), resyncTimeout.Token);
                     Interlocked.Exchange(ref _resyncRequired, 0);
                 }
                 catch (Exception) { }
@@ -260,5 +280,31 @@ public sealed class LiveChangeNotifier(IHubContext<LiveChangesHub> hub, ILogger<
             Interlocked.Exchange(ref _resyncRequired, 1);
     }
 
-    private sealed record LiveChange(string Key, string EventName, object Payload);
+    private sealed record LiveChange(Guid Workspace, string Key, string EventName, object Payload);
+}
+
+public sealed class LiveChangeNotifier : ICameraTransferActivityPublisher, IPreviewActivityPublisher
+{
+    private readonly LiveChangeBuffer buffer;
+    private readonly WorkspaceContext workspace;
+    public LiveChangeNotifier(LiveChangeBuffer buffer, WorkspaceContext workspace)
+    { this.buffer = buffer; this.workspace = workspace; }
+    public LiveChangeNotifier(IHubContext<LiveChangesHub> hub, ILogger<LiveChangeNotifier> logger)
+        : this(new LiveChangeBuffer(hub, logger), new WorkspaceContext(false)) { }
+    private Guid Id => workspace.Id ?? Guid.Empty;
+    public static string Group(Guid id) => $"workspace:{id:N}";
+    public string Epoch => buffer.Epoch;
+    public bool ActivityCoverageComplete => buffer.IsActivityCoverageComplete(Id);
+    public void CaptureChanged(Guid id, string kind) => buffer.CaptureChanged(Id, id, kind);
+    public void RetentionChanged() => buffer.RetentionChanged(Id);
+    public void PreviewReady(Guid capture, Guid asset, string profile) => buffer.PreviewReady(Id, capture, asset, profile);
+    public void SourceAuthenticationChanged(Guid source, string outcome, DateTimeOffset observed, long version) =>
+        buffer.SourceAuthenticationChanged(Id, source, outcome, observed, version);
+    public void UnassignedAuthenticationActivity(DateTimeOffset observed) => buffer.UnassignedAuthenticationActivity(Id, observed);
+    public void Preparing(Guid capture, Guid asset, PreviewProfile profile, DateTimeOffset observed) => buffer.Preparing(Id, capture, asset, profile, observed);
+    public void Finished(Guid capture, Guid asset, PreviewProfile profile) => buffer.Finished(Id, capture, asset, profile);
+    public void Publish(CameraTransferActivity activity) => buffer.Publish(Id, activity);
+    public CameraTransferActivity? GetRecentReceiving(Guid transfer, DateTimeOffset now) => buffer.GetRecentReceiving(Id, transfer, now);
+    public PreviewPreparationObservation? GetRecentPreviewPreparation(Guid capture, Guid asset, PreviewProfile profile, DateTimeOffset now) =>
+        buffer.GetRecentPreviewPreparation(Id, capture, asset, profile, now);
 }

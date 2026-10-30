@@ -9,10 +9,21 @@ Choose the guide for the task you are doing. These pages describe the implemente
 - [Gallery slideshow](gallery.md): play filtered photographs and resume after interruptions.
 - [Retention and recovery](retention.md): understand lifetimes, Favorites and Trash before removing photographs.
 
+### Choose a workspace
+
+On a shared installation, sign in, choose a workspace assigned to your account and select **Open workspace**.
+Use the header's **Workspace** selector to switch. Resolve or explicitly abandon unsaved edits when prompted; switching reloads the page.
+Each tab keeps its selected workspace in its URL, so you can use different workspaces in separate tabs. A shared URL grants no access.
+
+If some memberships could not be checked, you can explicitly open a listed, confirmed workspace or choose **Retry** to check again.
+An unavailable or unconfirmed URL selection never opens another workspace automatically.
+If **No workspace access** appears after a complete check, contact the operator if you expected access.
+
 ## Operating ShutterSpool
 
 - [Packaged installation](../deploy/README.md#tldr): configure the bundled single-host installation or select external dependencies.
 - [Operator setup](setup/README.md): installation navigation and the incompatible older-data transition.
+- [Shared workspace provisioning](../deploy/operations/README.md#shared-workspace-provisioning): separate databases, fixed storage allocations, explicit setup and upgrades on one Server.
 - [Certificates](../deploy/certificates/README.md): supply, validate and replace HTTPS/FTPS material.
 - [Maintenance and recovery](../deploy/operations/README.md): stop writers, preserve matching state, restore, upgrade and roll back.
 - [Storage policy](retention.md#settings-and-safe-activation): capacity, admission, safe activation and privacy-erasure limits.

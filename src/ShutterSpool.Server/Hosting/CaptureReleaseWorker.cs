@@ -4,8 +4,10 @@ using ShutterSpool.Server.Api.Live;
 namespace ShutterSpool.Server.Hosting;
 
 internal sealed class CaptureReleaseWorker(IServiceScopeFactory scopes, TimeProvider clock,
-    LiveChangeNotifier changes, ILogger<CaptureReleaseWorker> logger) : BackgroundService
+    ILogger<CaptureReleaseWorker> logger) : BackgroundService
 {
+    private readonly WorkspaceWorkerCursor tenants = new(scopes);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -13,7 +15,8 @@ internal sealed class CaptureReleaseWorker(IServiceScopeFactory scopes, TimeProv
             bool processed = false;
             try
             {
-                await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+                await using WorkspaceWorkerScope scope = await tenants.NextAsync(stoppingToken);
+                LiveChangeNotifier changes = scope.ServiceProvider.GetRequiredService<LiveChangeNotifier>();
                 CaptureCurationService curation = scope.ServiceProvider.GetRequiredService<CaptureCurationService>();
                 processed = await curation.ReleaseDueOneAsync(clock.GetUtcNow(), stoppingToken);
                 if (curation.LastReleasedCaptureId is Guid captureId) changes.CaptureChanged(captureId, "release");

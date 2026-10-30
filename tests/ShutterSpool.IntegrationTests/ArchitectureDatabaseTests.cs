@@ -261,7 +261,10 @@ public sealed class ArchitectureDatabaseTests
         await database.SaveChangesAsync(token);
         PostgresException referencedCollection = await Assert.ThrowsAsync<PostgresException>(() => database.Database.ExecuteSqlRawAsync(
             "DELETE FROM collections", token));
-        Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, referencedCollection.SqlState);
+        Assert.Contains(referencedCollection.SqlState, new[] { PostgresErrorCodes.RestrictViolation, PostgresErrorCodes.ForeignKeyViolation });
+        Assert.Equal("FK_sources_collections_CollectionId", referencedCollection.ConstraintName);
+        Assert.True(await database.Sources.AsNoTracking().AnyAsync(item => item.Id == source, token));
+        Assert.True(await database.Collections.AsNoTracking().AnyAsync(item => item.IsBuiltIn, token));
     }
 
     [Fact]

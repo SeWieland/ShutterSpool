@@ -564,7 +564,8 @@ public sealed partial class ConfigurationApiTests
             await database.SaveChangesAsync(token);
         }
 
-        IPreviewCache cache = fixture.Server.Services.GetRequiredService<IPreviewCache>();
+        await using AsyncServiceScope cacheScope = fixture.Server.Services.CreateAsyncScope();
+        IPreviewCache cache = cacheScope.ServiceProvider.GetRequiredService<IPreviewCache>();
         byte[] validPreview = Convert.FromBase64String("UklGRi4AAABXRUJQVlA4ICIAAABwAQCdASoCAAMAAUAmJZQCdAFAAAD+/DeBV/fU6D4r4AAA");
         await cache.WriteAsync(oldKey, validPreview, token);
         JsonElement oldReady = await ReadTransferAsync(oldTransferId);
@@ -948,7 +949,7 @@ public sealed partial class ConfigurationApiTests
                 services.AddSingleton<ShutterSpool.Application.Retention.IRetentionControllerLock>(
                     new PostgresRetentionControllerLock(testConnectionString));
                 services.RemoveAll<IProtectionAdmissionLock>();
-                services.AddSingleton<IProtectionAdmissionLock>(provider => new PostgresProtectionAdmissionLock(
+                services.AddScoped<IProtectionAdmissionLock>(provider => new PostgresProtectionAdmissionLock(
                     testConnectionString, provider.GetRequiredService<ShutterSpool.Application.Ingest.ISpool>()));
                 services.AddSingleton(Microsoft.Extensions.Options.Options.Create(new CredentialProtectionOptions
                 { EncryptionKey = invalidEncryptionKey ? "synthetic-invalid-base64" : Convert.ToBase64String(new byte[32]) }));

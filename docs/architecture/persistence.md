@@ -8,6 +8,14 @@ The details here protect accepted media when an operation races another worker o
 
 Infrastructure owns one internal `ShutterSpoolDbContext` and migration history. Source identity/policy is independent from its ingress credential; regeneration changes the verifier and generation, while ingress suspension changes enabled state and generation. Identity, root, historical Assets and existing workflow state remain intact. Destination identity has an immutable provider kind and enabled state; routing rules, local root configuration and optional encrypted credentials have separate destination-owned records. Authorization grants use issuer/subject, not source or destination identity.
 
+In shared-workspace mode, this same schema and its database-local locks live separately in each tenant database.
+The scoped context factory selects the verified workspace's runtime connection reference; it never changes a global connection while work is running.
+The separate control registry owns routing/provisioning and allocation metadata, while grants and workflow mutations remain tenant-local.
+Provisioning and upgrades use separate migration privileges through the [operator commands](../../src/ShutterSpool.Server/README.md#shared-workspace-provisioning).
+Normal shared-workspace startup checks the exact supported schema and storage identity and completes recovery before admitting tenant work; it does not migrate or repeat the initial grant.
+It holds an exclusive writer-lock file in each allocated root for its lifetime; operator upgrade/allocation commands acquire the same locks before changing state.
+Fixed filesystem allocations preserve tenant-local quota reservations without cross-database upload accounting.
+
 Camera ingress keeps login/admission records separate from Sources and Assets.
 Admission checks the login's credential generation under the credential/Source locks; an already admitted transfer may finish after revocation.
 Each Source selects one explicit `ConnectionProfile`; a camera login records the profile supplied by its trusted callback route.

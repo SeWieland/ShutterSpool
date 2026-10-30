@@ -50,6 +50,15 @@ After a Web build, use `aspire resource server rebuild` before checking Server s
 Imaginary has no spool mount or remote URL source; the Server sends selected JPEG bytes over its private endpoint. Its disposable cache is under `.data/previews` in the local AppHost configuration.
 Preview tuning parameters are `Parameters:preview-max-concurrent-generations` (default 32), `Parameters:preview-queue-timeout-seconds` (60), `Parameters:preview-generation-timeout-seconds` (90), and `Parameters:preview-prewarm-mode` (`Off`, `GridOnly` by default, or `Full`). They bound each Server replica's concurrent source streams, queue wait and generation time; prewarming uses one background worker per replica. Imaginary uses separate `Parameters:imaginary-concurrency` (20 requests per second), `Parameters:imaginary-cpus` (2, also enforced as a local container CPU quota) and `Parameters:imaginary-http-timeout-seconds` (120 for both read and write). Set these through AppHost configuration or User Secrets for the host's capacity; increasing the Server limit does not raise Imaginary's CPU allocation. Kubernetes deployments must set their own CPU limit.
 
+## Shared-workspace development
+
+Follow the [Server provisioning procedure](../ShutterSpool.Server/README.md#shared-workspace-provisioning) with isolated empty databases and storage roots.
+Set `ShutterSpool:Workspaces:Enabled`, `ShutterSpool:Workspaces:UsableCapacityBytes`, `ConnectionStrings:shutterspool-controlFile`, and each `Definitions:<workspace-guid>:ConnectionReference` under the Workspaces section, with the corresponding `ConnectionStrings:<reference>File`.
+AppHost forwards those restricted runtime file references and destination capability/egress settings to Server; it does not forward migration references, initial-Owner definitions or the stopped-writer declaration.
+Supply those only to explicit operator commands. In workspace mode, AppHost does not supply the legacy application's database connection or bootstrap grant to Server.
+Keep connection files and initial Owner issuer consistent with the current PostgreSQL and Keycloak endpoints after an AppHost restart; discover them through Aspire before provisioning.
+Ordinary temporary directories can exercise application scoping locally, but do not establish native filesystem allocation enforcement or hosted readiness.
+
 ## Separate application data for the initial migration baseline
 
 An incompatible older installation requires a fresh application database and empty spool at separately selected locations.

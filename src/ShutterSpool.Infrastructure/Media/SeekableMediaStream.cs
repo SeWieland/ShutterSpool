@@ -1,8 +1,12 @@
+using ShutterSpool.Application.Retention;
+using ShutterSpool.Application.Workspaces;
+
 namespace ShutterSpool.Infrastructure.Media;
 
 internal static class SeekableMediaStream
 {
-    public static async Task<SeekableMedia> OpenAsync(Stream original, long size, long maximumSize, CancellationToken cancellationToken)
+    public static async Task<SeekableMedia> OpenAsync(Stream original, long size, long maximumSize, CancellationToken cancellationToken,
+        WorkspaceContext? workspace = null, ISpoolQuotaStore? quota = null)
     {
         ArgumentNullException.ThrowIfNull(original);
         if (!original.CanRead) throw new MediaUnreadableException();
@@ -15,10 +19,26 @@ internal static class SeekableMediaStream
             return new SeekableMedia(original, ownsStream: false);
         }
 
-        string path = Path.Combine(Path.GetTempPath(), $"shutterspool-media-{Guid.NewGuid():N}.tmp");
+        Guid operation = Guid.NewGuid();
+        bool tenant = workspace?.Enabled == true;
+        string key = $"incoming/media-temporary/{operation:N}.tmp";
+        string path = tenant ? Path.Combine(workspace!.Required.StorageRoot, key.Replace('/', Path.DirectorySeparatorChar))
+            : Path.Combine(Path.GetTempPath(), $"shutterspool-media-{operation:N}.tmp");
+        if (tenant)
+        {
+            if (quota is null || size <= 0 || !await quota.TryReserveAsync(new(operation, null, size, 0, [key], size), cancellationToken))
+                throw new IOException("Temporary workspace media capacity is unavailable.");
+        }
         FileStream? file = null;
         try
         {
+            if (tenant)
+            {
+                string directory = Path.GetDirectoryName(path)!;
+                System.IO.Directory.CreateDirectory(directory);
+                for (DirectoryInfo? current = new(directory); current is not null; current = current.Parent)
+                    if ((current.Attributes & FileAttributes.ReparsePoint) != 0) throw new IOException("Temporary media contains a linked path.");
+            }
             var options = new FileStreamOptions
             {
                 Mode = FileMode.CreateNew,
@@ -42,22 +62,31 @@ internal static class SeekableMediaStream
                 throw new MediaSizeMismatchException();
             await file.FlushAsync(cancellationToken);
             file.Position = 0;
-            return new SeekableMedia(file, ownsStream: true);
+            return new SeekableMedia(file, ownsStream: true, tenant ? async () =>
+            {
+                if (!File.Exists(path)) await quota!.ReleaseReservationAsync(operation, CancellationToken.None);
+            } : null);
         }
         catch
         {
             if (file is not null) await file.DisposeAsync();
             else if (File.Exists(path)) File.Delete(path);
+            if (tenant && !File.Exists(path)) await quota!.ReleaseReservationAsync(operation, CancellationToken.None);
             throw;
         }
     }
 }
 
-internal sealed class SeekableMedia(Stream stream, bool ownsStream) : IAsyncDisposable
+internal sealed class SeekableMedia(Stream stream, bool ownsStream, Func<Task>? released = null) : IAsyncDisposable
 {
     public Stream Stream { get; } = stream;
 
-    public ValueTask DisposeAsync() => ownsStream ? Stream.DisposeAsync() : ValueTask.CompletedTask;
+    public async ValueTask DisposeAsync()
+    {
+        if (!ownsStream) return;
+        await Stream.DisposeAsync();
+        if (released is not null) await released();
+    }
 }
 
 internal sealed class MediaUnreadableException() : Exception("Media cannot be read.");

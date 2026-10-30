@@ -9,10 +9,12 @@ using ShutterSpool.Domain.Sources;
 using ShutterSpool.Domain.Collections;
 using ShutterSpool.Infrastructure.Destinations.WebDav;
 using System.Text.Json;
+using ShutterSpool.Application.Workspaces;
 
 namespace ShutterSpool.Infrastructure.Persistence;
 
-internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database) : ISourceConfigurationStore
+internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database, IWorkspaceRegistry? registry = null,
+    WorkspaceContext? workspace = null) : ISourceConfigurationStore
 {
     public Task<SourceManagementConfiguration[]> ListAsync(int limit, string? afterName, Guid? afterId, CancellationToken token)
     {
@@ -84,6 +86,7 @@ internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database)
         if (credential.Username == username
             && System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(verifier, credential.SecretVerifier))
             throw new UnchangedSourceCredentialException();
+        if (registry is not null) await registry.RegisterIngressAsync(WorkspaceIngressHandle.Username(username), id, token);
         credential.Username = username;
         credential.SecretVerifier = verifier;
         credential.CredentialGeneration = checked(credential.CredentialGeneration + 1);
@@ -109,6 +112,7 @@ internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database)
         }
         if (credential.IsIngressEnabled != enabled)
         {
+            if (enabled && registry is not null) await registry.RegisterIngressAsync(WorkspaceIngressHandle.Username(credential.Username), id, token);
             credential.IsIngressEnabled = enabled;
             credential.CredentialGeneration = checked(credential.CredentialGeneration + 1);
             source.ConfigurationRevision++;
@@ -168,6 +172,7 @@ internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database)
         var credentialEntity = new SourceCredentialEntity
         {
             SourceId = source.Id, Username = source.Username, VirtualRoot = source.VirtualRoot, SecretVerifier = source.SecretVerifier,
+            IsIngressEnabled = workspace?.Enabled != true,
         };
         database.Sources.Add(sourceEntity);
         database.SourceCredentials.Add(credentialEntity);
@@ -181,6 +186,14 @@ internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database)
             throw new ConfigurationConflictException();
         }
         await transaction.CommitAsync(cancellationToken);
+        if (workspace?.Enabled == true)
+        {
+            await transaction.DisposeAsync();
+            // A failed control write leaves a visible disabled Source whose credentials can be repaired.
+            await registry!.RegisterIngressAsync(WorkspaceIngressHandle.Username(source.Username), source.Id, cancellationToken);
+            credentialEntity.IsIngressEnabled = true;
+            await database.SaveChangesAsync(cancellationToken);
+        }
     }
 
     public async Task<SourcePolicy?> UpdatePolicyAsync(Guid id, SourceCurationMode mode, int delaySeconds, CancellationToken cancellationToken)
@@ -218,6 +231,7 @@ internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database)
         if (source.IsArchived) return null;
         if (credential.IsIngressEnabled != enabled)
         {
+            if (enabled && registry is not null) await registry.RegisterIngressAsync(WorkspaceIngressHandle.Username(credential.Username), id, cancellationToken);
             credential.IsIngressEnabled = enabled;
             credential.CredentialGeneration = checked(credential.CredentialGeneration + 1);
             source.ConfigurationRevision++;
@@ -260,10 +274,11 @@ internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database)
         .SingleOrDefaultAsync(cancellationToken);
 }
 
-internal sealed class EfDestinationConfigurationStore(ShutterSpoolDbContext database) : IDestinationConfigurationStore
+internal sealed class EfDestinationConfigurationStore(ShutterSpoolDbContext database, DestinationCapabilities? capabilities = null) : IDestinationConfigurationStore
 {
     public async Task CreateAsync(DestinationConfiguration destination, string? encryptedSecret, CancellationToken cancellationToken)
     {
+        (capabilities ?? DestinationCapabilities.All).EnsureEnabled(destination.Kind);
         database.Destinations.Add(new DestinationEntity
         {
             Id = destination.Id, Name = destination.Name, Kind = destination.Kind, Enabled = destination.Enabled,
@@ -381,7 +396,7 @@ internal sealed class EfDestinationConfigurationStore(ShutterSpoolDbContext data
 
 internal sealed class EfWebDavDestinationConfiguration(ShutterSpoolDbContext database,
     ShutterSpool.Application.Security.ICredentialProtector protector,
-    WebDavDestinationDeliveryAdapter adapter) : IWebDavDestinationConfiguration
+    WebDavDestinationDeliveryAdapter adapter, DestinationCapabilities? capabilities = null) : IWebDavDestinationConfiguration
 {
     public Task<WebDavDestinationConfiguration?> GetAsync(Guid destinationId, CancellationToken cancellationToken) =>
         database.WebDavDestinations.AsNoTracking().Where(item => item.DestinationId == destinationId)
@@ -398,6 +413,7 @@ internal sealed class EfWebDavDestinationConfiguration(ShutterSpoolDbContext dat
     private async Task<string?> ConfigureCoreAsync(Guid destinationId, long? expectedRevision, string collectionUrl,
         string username, string? password, CancellationToken cancellationToken)
     {
+        if (!(capabilities ?? DestinationCapabilities.All).IsEnabled("webdav")) return "DESTINATION_TYPE_DISABLED";
         if (collectionUrl is null || !WebDavDestinationUris.TryCollection(collectionUrl, out Uri? normalized)) return "INVALID_COLLECTION_URL";
         if (string.IsNullOrWhiteSpace(username) || username.Length > 256 || username.Contains(':') || username.Any(char.IsControl)
             || password is not null && password.Length is 0 or > 4096) return "INVALID_CREDENTIALS";
@@ -437,6 +453,9 @@ internal sealed class EfWebDavDestinationConfiguration(ShutterSpoolDbContext dat
     public async Task<(bool Writable, string? ErrorCode, long TestedConfigurationRevision)> TestWithRevisionAsync(
         Guid destinationId, CancellationToken cancellationToken)
     {
+        if (!(capabilities ?? DestinationCapabilities.All).IsEnabled("webdav"))
+            return (false, "DESTINATION_TYPE_DISABLED", await database.Destinations.AsNoTracking()
+                .Where(item => item.Id == destinationId).Select(item => item.ConfigurationRevision).SingleOrDefaultAsync(cancellationToken));
         var config = await (from destination in database.Destinations.AsNoTracking()
             join item in database.WebDavDestinations.AsNoTracking() on destination.Id equals item.DestinationId
             join credential in database.DestinationCredentials.AsNoTracking() on item.DestinationId equals credential.DestinationId

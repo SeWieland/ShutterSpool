@@ -1,4 +1,4 @@
-# Back up and recover a stopped installation
+# Provision, maintain and recover an installation
 
 Use a maintenance window and standard Docker, PostgreSQL and archive tools.
 Commands run from the extracted package directory on Linux/WSL2 with the installation's complete `COMPOSE_FILE` selection.
@@ -9,6 +9,145 @@ Examples below cover bundled PostgreSQL and Keycloak.
 External-service owners provide equivalent database/role and identity custody during the same application shutdown interval.
 Do not stop a shared external IdP or dump unrelated databases: preserve that issuer under its provider's recovery procedure.
 Valkey and previews are disposable; destination storage has separate custody.
+
+For shared-workspace mode, first follow the [workspace provisioning procedure](#shared-workspace-provisioning).
+The single-database capture/restore examples below are not a complete backup of a shared instance: include the control database, every registered tenant database, every allocated storage root, matching keys/configuration and required identity state in the same stopped-writer interval.
+Keep each database dump and storage root identified by its workspace and storage identity; preserve restricted runtime/migration roles and filesystem allocation boundaries on restore.
+Do not restore one tenant independently or restore current registry state beside older tenant state.
+
+## Shared workspace provisioning
+
+Shared-workspace mode serves up to 32 workspaces from one Server, with a separate PostgreSQL database, restricted runtime role and fixed filesystem allocation for each.
+It is an explicit deployment choice: set `ShutterSpool:Workspaces:Enabled=true` before provisioning.
+Existing single-workspace data is not adopted or reset. Retain its database, spool and matching keys/configuration when creating a separate installation.
+
+Prepare storage and PostgreSQL with standard operator tools while Server and camera edges are stopped:
+
+1. Create an empty control database and an empty database for each workspace, with separate migration owners and restricted runtime logins. Runtime logins must not own their database/schema, inherit other roles, create objects or hold privileged PostgreSQL attributes.
+2. Revoke `PUBLIC` connection access to these databases; grant connection access only to their intended migration/runtime roles. Do not grant tenant roles access to another tenant or the control database. The CLI grants the needed table/schema privileges within its selected database.
+3. Provision an existing empty, filesystem-enforced storage allocation for each workspace. Use bounded volumes or native filesystem quotas; an ordinary directory or thin-provisioned promise alone is insufficient. Total allocations must fit usable storage after physical reserves and non-workspace overhead.
+4. Establish the first member's verified OIDC issuer and subject from an account they can sign into. An operator identity is not automatically a workspace member.
+
+The following settings use standard configuration notation; environment variables replace `:` with `__`.
+Connection references name entries in `ConnectionStrings`, not literal connection strings supplied by a client.
+Any named connection can use a `<reference>File` entry pointing to a mounted secret file instead of an inline connection string.
+
+| Setting | Purpose |
+| --- | --- |
+| `ShutterSpool:Workspaces:UsableCapacityBytes` | Operator's usable total, after reserves and storage needed outside workspace allocations. |
+| `ConnectionStrings:shutterspool-control` | Restricted control registry/routing connection for normal Server operation. |
+| `ConnectionStrings:shutterspool-control-migration` | Separate privileged connection to that same control database, only for operator commands. |
+| `ShutterSpool:Workspaces:Definitions:<workspace-guid>:Name` | Workspace label. |
+| `…:StorageIdentity`, `…:StorageRoot`, `…:AllocatedBytes` | Stable operator storage identity, absolute allocated root and fixed byte budget. |
+| `…:ConnectionReference`, `…:MigrationConnectionReference` | Runtime and migration connection names for the same tenant database, with distinct roles. |
+| `…:OwnerIssuer`, `…:OwnerSubject` | Verified initial member identity bound to the configured OIDC authority. HTTPS is required except for the supported non-packaged loopback development issuer. |
+
+Definitions and migration connections are operator-command inputs; normal Server operation reads activated definitions from the control registry and needs only its restricted control/tenant connections.
+Keep migration secrets out of the normal runtime's mounts/configuration. Preserve the existing deployment encryption key with all tenant recovery sets.
+The control registry stores routing/provisioning facts and connection reference names, not connection secrets or authoritative memberships.
+This tenancy foundation gives provisioned members management access; delegated member roles are not yet available.
+
+### Mount runtime and operator configuration
+
+The package's default Compose graph is single-workspace configuration. Before starting shared mode:
+
+1. In the generated core's `server` service, remove the `ConnectionStrings__shutterspoolFile` environment entry and its `database-connection` service secret. Retain the encryption-key secret and other required service configuration. Do not give normal Server operation a privileged legacy database connection.
+2. Add the restricted control and tenant `<reference>File` settings to `config/server.json`, enable workspace mode and set usable capacity. For example, `ConnectionStrings:shutterspool-controlFile` can point to `/run/workspace-connections/control` and `ConnectionStrings:workspace-oneFile` to `/run/workspace-connections/workspace-one`.
+3. Put only those restricted runtime connection files in `secrets/workspace-runtime`. Each contains its complete Npgsql connection string, using the database's address reachable from the Compose `backend` network (`postgres` for the bundled service). Keep privileged migration connections separately in `secrets/workspace-migration`.
+4. Add a local override such as `config/workspaces.yaml` to the installation's `COMPOSE_FILE` selection. Mount every allocated root and the runtime connection directory into `server`; use the same container paths for operator commands. The example below adds one workspace. Substitute the already provisioned host allocation and repeat the root mount for each workspace.
+
+```yaml
+services:
+  server:
+    volumes:
+      - type: bind
+        source: ./secrets/workspace-runtime
+        target: /run/workspace-connections
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /srv/shutterspool/workspace-one
+        target: /var/lib/shutterspool/workspaces/11111111-1111-4111-8111-111111111111
+        bind:
+          create_host_path: false
+```
+
+Bind source paths resolve from the package's base Compose file, even when the override is under `config`.
+Set that workspace's `StorageRoot` to the exact container target above; paths in the registry must match normal runtime and maintenance containers.
+The bind mount exposes an allocation; it does not create or enforce its filesystem quota.
+The image runs as UID/GID 1654. Give that identity write/traverse access to allocated roots and read/traverse access to its restricted connection files/directories; keep other host users out.
+Shared mode enables no destination kinds by default. Set the operator-controlled `ShutterSpool:Destinations:EnabledKinds` array in `config/server.json` to the intended subset of `local` and `webdav`.
+If local destinations are enabled, the operator creates their `destinations` directory inside the allocation before members configure them. WebDAV denies private/local and special-use addresses unless the operator permits the exact required CIDR through `ShutterSpool:Destinations:WebDavEgress:AllowedPrivateNetworks`; normal certificate validation and no-redirect behavior remain required.
+Choose camera listeners through the [package camera profiles](../README.md#camera-profiles); apply capability changes only while writers are stopped. Enabling a type does not qualify its storage or provider.
+
+Create a private `config/workspace-operator.json` containing the same workspace mode/capacity, OIDC security settings and runtime connection file references, plus every exact provisioning definition and migration `<reference>File` setting from the table above.
+For example, `ConnectionStrings:shutterspool-control-migrationFile` can point to `/run/workspace-migration/control`, and the tenant's migration reference to `/run/workspace-migration/workspace-one`.
+Keep the operator file and migration directory readable only by their operator/UID 1654 consumers. Never copy migration secrets into the runtime directory or mount them into the ordinary Server.
+Preserve the verified initial Owner and original provisioning values in this private operator inventory for retries and upgrades.
+
+Validate the complete Compose selection with `docker compose config --quiet`.
+Start only the required database service if it is not already running; keep Server, camera edges and public traffic stopped. Use provider tools for external PostgreSQL.
+From the package directory, define this host-shell function:
+
+```sh
+set -eu
+workspace_operator() {
+  docker compose run --rm --no-deps \
+    --env ASPNETCORE_ENVIRONMENT=WorkspaceOperator \
+    --volume "$PWD/config/workspace-operator.json:/app/appsettings.WorkspaceOperator.json:ro" \
+    --volume "$PWD/secrets/workspace-migration:/run/workspace-migration:ro" \
+    server "$@"
+}
+```
+
+The one-off container uses the selected image's `dotnet ShutterSpool.Server.dll` entrypoint, inherited runtime mounts/network/encryption key and the additional operator-only configuration/secrets.
+It publishes no service ports and the commands below exit without starting HTTP or workers. No shell or SDK is needed in the image.
+### Initialize and provision
+
+Stop on every failed command; do not start the normal graph until provisioning and all identity/key/schema/storage checks succeed:
+
+```sh
+workspace_operator --workspace-control-init
+workspace_operator --workspace-provision 11111111-1111-4111-8111-111111111111 22222222-2222-4222-8222-222222222222
+```
+
+Replace both example GUIDs: the first identifies the configured workspace and the second identifies this provisioning operation. Retain them for retry.
+Initialization refuses an unknown nonempty database/root. Provisioning records the exact targets and initial identity, establishes schema, keys, defaults and storage markers, and activates only after checks succeed.
+Retry the same operation and inputs after interruption; changed targets/identity are a conflict. Repeating a completed operation does not regrant removed membership.
+Do not erase registry rows, markers or migration history to force a retry.
+
+### Upgrade workspace databases
+
+Only after [stopping every writer](#stop-writers-before-capture) and capturing an eligible complete recovery set, set `ShutterSpool:Workspaces:WritersStopped=true` in `config/workspace-operator.json` for the operator process and run:
+
+```sh
+workspace_operator --workspace-upgrade
+```
+
+That flag is the operator's declaration, not a mechanism that stops other processes.
+Normal Server operation holds `.shutterspool-writers.lock` in each allocated root for its lifetime; upgrade/allocation commands must acquire those same locks and refuse while the Server holds them.
+Operator commands serialize through the control database. These safeguards do not stop unrelated tools or replace the stopped-writer procedure.
+Keep the instance closed on any failed upgrade or identity/key/recovery check; repair forward or restore a complete eligible set under the [supported recovery boundary](#supported-recovery-boundary).
+Normal startup validates exact schema compatibility and storage identity and completes tenant recovery without migrations or initial-grant replay.
+
+### Resize a storage allocation
+
+To resize an allocation, stop writers, adjust and requalify the native filesystem boundary, then use the same operator settings with `WritersStopped=true`:
+
+```sh
+# Example: change a 2 GiB allocation to 4 GiB; substitute the workspace and exact byte values.
+workspace_operator --workspace-allocation 11111111-1111-4111-8111-111111111111 2147483648 4294967296
+```
+
+The command checks the expected current allocation, known tenant accounting and total deployment capacity; it refuses a size below retained occupancy/reservations or the saved workspace quota.
+Lower that quota through its normal impact-confirmed settings flow before maintenance when shrinking. Never shrink a filesystem beneath retained data.
+An already-applied retry is idempotent. The command changes only the assigned registry budget, not storage, keys, media or the original provisioning tuple; keep original definitions unchanged for provisioning retries.
+
+Workspace quota settings cannot exceed the assigned allocation or disable its cap. Receive, original, quarantine, temporary-copy and disk-preview writes stay in that workspace's storage boundary.
+Unused allocation cannot be borrowed from another workspace; fixed budgets do not guarantee that storage is currently available or replace physical free-space checks.
+Platform enforcement and recovery must be qualified on the actual deployment; application tests are not persistent-volume or power-loss evidence.
+This foundation does not provide delegated roles or invitations and does not establish readiness to open a hosted service.
 
 ## Supported recovery boundary
 
@@ -70,6 +209,8 @@ tar -tzf "$backup/configuration.tar.gz" > "$backup/configuration.contents"
 ```
 
 Adjust database names; omit the identity dump for an independently managed issuer.
+For a shared instance, repeat the application database dump/list verification and storage copy for the control database and each tenant/root from the operator inventory; the control database has no media root.
+Use distinct dump and directory names so no workspace copy overwrites another. Include the fixed allocation configuration and native volume/quota setup in the recovery inventory.
 Include all additional Compose overrides, external secret/certificate mounts and local destination mount configuration.
 Inspect the complete copied spool/recovery inventory and numeric ownership.
 Record the stopped-writer interval, package and database versions in an operator note; retain matching image/package artifacts.
@@ -127,7 +268,9 @@ Open traffic only after validation and deliberate operator cutover. Stop isolate
 ## Upgrade and rollback
 
 Use only the release's explicitly named compatible predecessor.
-Drain, capture a verified recovery set, replace package/image/configuration and allow migrations/recovery before reopening traffic.
+Drain, capture a verified recovery set, replace package/image/configuration and complete migrations/recovery before reopening traffic.
+Shared-workspace mode requires the explicit [workspace upgrade command](#shared-workspace-provisioning) with operator migration credentials; ordinary startup never migrates tenant databases.
+Keep the whole instance closed until all registered databases, storage identities, keys, allocation limits and recovery checks pass. A maintenance page alone does not stop writers.
 Never run old and new Servers concurrently against one database/spool.
 Failed initialization leaves the installation closed; preserve diagnostics and the pre-upgrade set.
 
@@ -149,7 +292,7 @@ This is a specific pre-alpha transition. Use [upgrade and rollback](#upgrade-and
 
 ## Export current suppression evidence
 
-This first-packaged-key-enrollment procedure applies only to a database already on the compatible initial migration baseline. It cannot bypass historical-schema rejection and does not qualify recovery after later erasure.
+This first-packaged-key-enrollment procedure applies only to single-workspace mode with a database already on the compatible initial migration baseline. Shared-workspace mode denies these suppression HTTP routes; its fresh provisioning enrolls the key before activation. It cannot bypass historical-schema rejection and does not qualify recovery after later erasure.
 For a compatible Source-only database lacking a protected key check, obtain a current administrator token through the configured Authorization Code + PKCE client.
 Keep it in a private curl configuration, never shell arguments/history/logs:
 

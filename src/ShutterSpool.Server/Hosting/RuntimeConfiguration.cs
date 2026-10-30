@@ -8,6 +8,9 @@ internal static class RuntimeConfiguration
         Load(configuration, "ConnectionStrings:valkeyFile", "ConnectionStrings:valkey");
         Load(configuration, "ShutterSpool:Security:EncryptionKeyFile", "ShutterSpool:Security:EncryptionKey");
         Load(configuration, "ShutterSpool:CameraIngress:CallbackKeyFile", "ShutterSpool:CameraIngress:CallbackKey");
+        foreach (IConfigurationSection connection in configuration.GetSection("ConnectionStrings").GetChildren().ToArray())
+            if (connection.Key.EndsWith("File", StringComparison.OrdinalIgnoreCase))
+                Load(configuration, connection.Path, "ConnectionStrings:" + connection.Key[..^4]);
     }
 
     public static void ValidatePackaged(IConfiguration configuration)
@@ -24,7 +27,11 @@ internal static class RuntimeConfiguration
             "ShutterSpool:Security:EncryptionKey",
             "ShutterSpool:Spool:RootPath",
         ];
-        if (required.Any(key => string.IsNullOrWhiteSpace(configuration[key])))
+        bool tenancy = configuration.GetValue<bool>("ShutterSpool:Workspaces:Enabled");
+        if ((tenancy ? required.Where(key => !key.Contains("Bootstrap", StringComparison.Ordinal)
+                && key != "ConnectionStrings:shutterspool" && key != "ShutterSpool:Spool:RootPath")
+                .Append("ConnectionStrings:shutterspool-control") : required)
+            .Any(key => string.IsNullOrWhiteSpace(configuration[key])))
             throw new InvalidOperationException("Packaged deployment requires PostgreSQL, identity, encryption-key and spool configuration.");
         string authorityText = configuration["ShutterSpool:Security:Authority"]!;
         if (!Uri.TryCreate(authorityText, UriKind.Absolute, out Uri? authority) || authority.Scheme != Uri.UriSchemeHttps

@@ -70,7 +70,8 @@ public interface ISourceAuthenticationObservationRecorder
     void RecordUnassigned(DateTimeOffset observedAt);
 }
 
-public sealed class SourceManagementService(ISourceConfigurationStore store, ICredentialProtector protector, CameraCredentialPolicy policy)
+public sealed class SourceManagementService(ISourceConfigurationStore store, ICredentialProtector protector, CameraCredentialPolicy policy,
+    ShutterSpool.Application.Workspaces.WorkspaceContext? workspace = null)
 {
     private static readonly string[] UsernamePrefixes =
     [
@@ -100,7 +101,7 @@ public sealed class SourceManagementService(ISourceConfigurationStore store, ICr
         if (string.IsNullOrWhiteSpace(name) || name.Trim().Length > 256) throw new ArgumentException("Provide a source name of at most 256 characters.");
         (SourceCurationMode policy, int delay) = ParsePolicy(mode, delaySeconds);
         Guid id = Guid.NewGuid();
-        string username = requestedUsername ?? GenerateUsername();
+        string username = requestedUsername ?? (workspace?.Enabled == true ? $"camera-{Guid.NewGuid():N}" : GenerateUsername());
         ValidateUsername(username);
         string secret = ResolvePassword(passwordMode, requestedPassword);
         string root = $"sources/{Guid.NewGuid():N}";

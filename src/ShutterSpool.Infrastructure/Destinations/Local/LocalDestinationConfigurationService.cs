@@ -1,14 +1,19 @@
 using Microsoft.EntityFrameworkCore;
 using ShutterSpool.Application.Delivery;
+using ShutterSpool.Application.Destinations;
+using ShutterSpool.Application.Workspaces;
 using ShutterSpool.Infrastructure.Persistence;
 
 namespace ShutterSpool.Infrastructure.Destinations.Local;
 
 // Manages the fixed local root and mount marker; connection tests do not mutate delivery work.
-internal sealed class LocalDestinationConfigurationService(ShutterSpoolDbContext database) : ILocalDestinationConfiguration
+internal sealed class LocalDestinationConfigurationService(ShutterSpoolDbContext database,
+    DestinationCapabilities? capabilities = null, WorkspaceContext? workspace = null) : ILocalDestinationConfiguration
 {
     public Task<LocalDirectoryListingResult> BrowseAsync(string? path, CancellationToken cancellationToken) =>
-        Task.FromResult(LocalDirectoryBrowser.Browse(path, cancellationToken));
+        Task.FromResult(!(capabilities ?? DestinationCapabilities.All).IsEnabled("local")
+            ? new LocalDirectoryListingResult(null, "Local destinations are unavailable in this deployment.")
+            : LocalDirectoryBrowser.Browse(path, cancellationToken, LocalDestinationPaths.AssignedRoot(workspace)));
 
     public Task<string?> GetRootAsync(Guid destinationId, CancellationToken cancellationToken) =>
         database.LocalDestinations.AsNoTracking().Where(item => item.DestinationId == destinationId)
@@ -23,6 +28,7 @@ internal sealed class LocalDestinationConfigurationService(ShutterSpoolDbContext
     private async Task<string?> ConfigureCoreAsync(Guid destinationId, long? expectedRevision, string root,
         CancellationToken cancellationToken)
     {
+        if (!(capabilities ?? DestinationCapabilities.All).IsEnabled("local")) return "DESTINATION_KIND_DISABLED";
         root = LocalDirectoryBrowser.NormalizePath(root);
         if (string.IsNullOrWhiteSpace(root) || root.Length > 2_048)
             return "INVALID_ROOT";
@@ -33,6 +39,7 @@ internal sealed class LocalDestinationConfigurationService(ShutterSpoolDbContext
             normalized = Path.GetFullPath(root);
         }
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException) { return "INVALID_ROOT"; }
+        if (!LocalDestinationPaths.IsAllowed(normalized, workspace)) return "UNSAFE_PATH";
         if (!await database.Destinations.AsNoTracking().AnyAsync(item => item.Id == destinationId && item.Kind == "local" && !item.IsArchived, cancellationToken))
             return "LOCAL_DESTINATION_NOT_FOUND";
         await database.Database.OpenConnectionAsync(cancellationToken);
@@ -90,7 +97,9 @@ internal sealed class LocalDestinationConfigurationService(ShutterSpoolDbContext
 
     public async Task<(bool Writable, string? ErrorCode)> TestAsync(Guid destinationId, CancellationToken cancellationToken)
     {
+        if (!(capabilities ?? DestinationCapabilities.All).IsEnabled("local")) return (false, "DESTINATION_KIND_DISABLED");
         string? root = await GetRootAsync(destinationId, cancellationToken);
+        if (root is not null && !LocalDestinationPaths.IsAllowed(root, workspace)) return (false, "UNSAFE_PATH");
         return root is null ? (false, "LOCAL_ROOT_NOT_CONFIGURED") : LocalFileDelivery.TestRoot(root, destinationId);
     }
 
@@ -104,8 +113,10 @@ internal sealed class LocalDestinationConfigurationService(ShutterSpoolDbContext
             select new { destination.ConfigurationRevision, destination.IsArchived, RootPath = root == null ? null : root.RootPath })
             .SingleOrDefaultAsync(token);
         if (config is null) return (false, "LOCAL_DESTINATION_NOT_FOUND", 0);
+        if (!(capabilities ?? DestinationCapabilities.All).IsEnabled("local")) return (false, "DESTINATION_KIND_DISABLED", config.ConfigurationRevision);
         if (config.IsArchived) return (false, "DESTINATION_ARCHIVED", config.ConfigurationRevision);
         if (config.RootPath is null) return (false, "LOCAL_ROOT_NOT_CONFIGURED", config.ConfigurationRevision);
+        if (!LocalDestinationPaths.IsAllowed(config.RootPath, workspace)) return (false, "UNSAFE_PATH", config.ConfigurationRevision);
         (bool writable, string? error) = LocalFileDelivery.TestRoot(config.RootPath, destinationId);
         return (writable, error, config.ConfigurationRevision);
     }

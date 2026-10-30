@@ -15,14 +15,14 @@ internal static class SourceAuthenticationEndpoints
             .Produces<SourceAuthenticationObservationsResponse>().ProducesValidationProblem();
 
     private static async Task<IResult> ReadAsync(Guid[] sourceIds, ISourceAuthenticationObservationStore observations,
-        SourceAuthenticationObservationWorker recorder, CancellationToken cancellationToken)
+        SourceAuthenticationObservationWorker recorder, ShutterSpool.Application.Workspaces.WorkspaceContext workspace, CancellationToken cancellationToken)
     {
         Guid[] ids = [.. sourceIds.Distinct()];
         if (ids.Length is < 1 or > 100)
             return Results.ValidationProblem(new Dictionary<string, string[]> { ["sourceIds"] = ["Provide 1 to 100 distinct Source identities."] });
 
         IReadOnlyList<SourceAuthenticationSnapshot> snapshots = await observations.ReadAsync(ids, cancellationToken);
-        return Results.Ok(new SourceAuthenticationObservationsResponse(recorder.CoverageComplete,
+        return Results.Ok(new SourceAuthenticationObservationsResponse(recorder.IsCoverageComplete(workspace.Id ?? Guid.Empty),
             [.. snapshots.Select(item => new SourceAuthenticationObservationResponse(item.SourceId,
                 item.Outcome.ToString(), item.ObservedAt, item.Version))]));
     }

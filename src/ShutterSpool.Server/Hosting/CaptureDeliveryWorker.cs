@@ -4,16 +4,21 @@ using ShutterSpool.Server.Api.Live;
 namespace ShutterSpool.Server.Hosting;
 
 internal sealed class CaptureDeliveryWorker(IServiceScopeFactory scopes, DeliveryWorkerSettings settings,
-    IDeliveryWorkSignal signal, LiveChangeNotifier changes, ILogger<CaptureDeliveryWorker> logger) : BackgroundService
+    IDeliveryWorkSignal signal, ILogger<CaptureDeliveryWorker> logger) : BackgroundService
 {
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    private readonly WorkspaceWorkerCursor tenants = new(scopes);
+
+    protected override Task ExecuteAsync(CancellationToken stoppingToken) => Task.WhenAll(RunAsync(stoppingToken), RunAsync(stoppingToken));
+
+    private async Task RunAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
         {
             bool processed;
             try
             {
-                await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+                await using WorkspaceWorkerScope scope = await tenants.NextAsync(stoppingToken);
+                LiveChangeNotifier changes = scope.ServiceProvider.GetRequiredService<LiveChangeNotifier>();
                 DeliveryProcessingService delivery = scope.ServiceProvider.GetRequiredService<DeliveryProcessingService>();
                 processed = await delivery.ProcessOneAsync(stoppingToken,
                     captureId => changes.CaptureChanged(captureId, "delivery"));

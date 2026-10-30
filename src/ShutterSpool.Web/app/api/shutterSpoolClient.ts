@@ -10,6 +10,8 @@ import { ManagementRequestBuilderNavigationMetadata, type ManagementRequestBuild
 // @ts-ignore
 import { MediaRequestBuilderNavigationMetadata, type MediaRequestBuilder } from './media/index.js';
 // @ts-ignore
+import { type WorkspacesRequestBuilder, WorkspacesRequestBuilderRequestsMetadata } from './workspaces/index.js';
+// @ts-ignore
 import { apiClientProxifier, ParseNodeFactoryRegistry, SerializationWriterFactoryRegistry, type BaseRequestBuilder, type KeysToExcludeForNavigationMetadata, type NavigationMetadata, type RequestAdapter } from '@microsoft/kiota-abstractions';
 // @ts-ignore
 import { FormParseNodeFactory, FormSerializationWriterFactory } from '@microsoft/kiota-serialization-form';
@@ -71,6 +73,10 @@ export interface ShutterSpoolClient extends BaseRequestBuilder<ShutterSpoolClien
      * The media property
      */
     get media(): MediaRequestBuilder;
+    /**
+     * The workspaces property
+     */
+    get workspaces(): WorkspacesRequestBuilder;
 }
 /**
  * Uri template for the request builder.
@@ -91,6 +97,9 @@ export const ShutterSpoolClientNavigationMetadata: Record<Exclude<keyof ShutterS
     },
     media: {
         navigationMetadata: MediaRequestBuilderNavigationMetadata,
+    },
+    workspaces: {
+        requestsMetadata: WorkspacesRequestBuilderRequestsMetadata,
     },
 };
 /* tslint:enable */

@@ -64,12 +64,13 @@ public sealed record RetentionSettingsRequest(int ExpectedSettingsRevision, int 
     bool AcknowledgeImpact = false);
 
 public sealed record RetentionSettingsDocumentResponse(RetentionPolicyDto Settings, SpoolQuotaSettingsDto Quota,
-    PreviewCacheSettingsDto PreviewCache, PreviewCacheSettingsDto EffectivePreviewCache, bool RestartRequired)
+    PreviewCacheSettingsDto PreviewCache, PreviewCacheSettingsDto EffectivePreviewCache, bool RestartRequired,
+    long? WorkspaceAllocatedBytes = null)
 {
-    internal static RetentionSettingsDocumentResponse From(RetentionSettingsDocument value) => new(
+    internal static RetentionSettingsDocumentResponse From(RetentionSettingsDocument value, long? allocation = null) => new(
         RetentionPolicyDto.From(value.Settings), SpoolQuotaSettingsDto.From(value.Quota),
         PreviewCacheSettingsDto.From(value.PreviewCache), PreviewCacheSettingsDto.From(value.EffectivePreviewCache),
-        value.RestartRequired);
+        value.RestartRequired, allocation);
 }
 
 public sealed record RetentionSettingsImpactResponse(DateTimeOffset AsOf, bool Complete, bool AccountingKnown,
@@ -89,8 +90,8 @@ public sealed record RetentionSettingsImpactResponse(DateTimeOffset AsOf, bool C
 public sealed record RetentionSettingsUpdateResponse(bool Succeeded, RetentionSettingsDocumentResponse? Current,
     RetentionSettingsImpactResponse? Impact, string? ErrorCode)
 {
-    internal static RetentionSettingsUpdateResponse From(RetentionSettingsUpdateResult value) => new(value.Succeeded,
-        value.Current is null ? null : RetentionSettingsDocumentResponse.From(value.Current),
+    internal static RetentionSettingsUpdateResponse From(RetentionSettingsUpdateResult value, long? allocation = null) => new(value.Succeeded,
+        value.Current is null ? null : RetentionSettingsDocumentResponse.From(value.Current, allocation),
         value.Impact is null ? null : RetentionSettingsImpactResponse.From(value.Impact), value.ErrorCode);
 }
 
@@ -109,7 +110,8 @@ public static class RetentionSettingsEndpoints
     }
 
     private static async Task<RetentionSettingsDocumentResponse> GetAsync([FromServices] RetentionSettingsService service,
-        CancellationToken cancellationToken) => RetentionSettingsDocumentResponse.From(await service.GetAsync(cancellationToken));
+        ShutterSpool.Application.Workspaces.WorkspaceContext workspace, CancellationToken cancellationToken) =>
+        RetentionSettingsDocumentResponse.From(await service.GetAsync(cancellationToken), workspace.Enabled ? workspace.Required.AllocatedBytes : null);
 
     private static async Task<IResult> PreviewAsync(RetentionSettingsRequest request,
         [FromServices] RetentionSettingsService service, CancellationToken cancellationToken)
@@ -124,7 +126,7 @@ public static class RetentionSettingsEndpoints
     }
 
     private static async Task<IResult> UpdateAsync(RetentionSettingsRequest request,
-        [FromServices] RetentionSettingsService service, CancellationToken cancellationToken)
+        [FromServices] RetentionSettingsService service, ShutterSpool.Application.Workspaces.WorkspaceContext workspace, CancellationToken cancellationToken)
     {
         RetentionSettingsUpdateResult result;
         try
@@ -134,7 +136,7 @@ public static class RetentionSettingsEndpoints
                 request.AcknowledgeImpact, cancellationToken);
         }
         catch (ArgumentException exception) { return Invalid("settings", exception.Message); }
-        RetentionSettingsUpdateResponse response = RetentionSettingsUpdateResponse.From(result);
+        RetentionSettingsUpdateResponse response = RetentionSettingsUpdateResponse.From(result, workspace.Enabled ? workspace.Required.AllocatedBytes : null);
         return result.Succeeded ? Results.Ok(response) : Results.Conflict(response);
     }
 

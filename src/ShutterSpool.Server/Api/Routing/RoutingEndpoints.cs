@@ -28,7 +28,7 @@ public static class RoutingEndpoints
 
     private static async Task<IResult> UpdateAsync(Guid id, UpdateDestinationRoutingRequest request,
         DestinationManagementService destinations, DestinationRoutingService routing, IDeliveryWorkSignal signal,
-        CancellationToken cancellationToken)
+        DestinationCapabilities capabilities, CancellationToken cancellationToken)
     {
         if (request.Rules is null || request.Rules.Any(rule => rule is null || rule.Conditions is null || rule.Conditions.Any(condition => condition is null)))
             return Invalid("rules", "Provide a valid rule list and condition lists.");
@@ -39,7 +39,9 @@ public static class RoutingEndpoints
         RoutingRule[] rules = [.. request.Rules.Select(rule => rule.ToDomain())];
         string? error = RoutingRuleEvaluator.Validate(rules);
         if (error is not null) return Invalid("rules", error);
-        if (await destinations.GetAsync(id, cancellationToken) is null) return Missing("Destination");
+        DestinationConfiguration? destination = await destinations.GetAsync(id, cancellationToken);
+        if (destination is null) return Missing("Destination");
+        if (!capabilities.IsEnabled(destination.Kind)) return Invalid("destination", "This destination type is disabled in this deployment.");
         var updated = new DestinationRouting(id, request.Enabled, rules);
         DestinationRoutingMutation result = await routing.SetAsync(updated, request.ExpectedRevision, cancellationToken);
         if (result.Current is null) return Missing("Destination");
