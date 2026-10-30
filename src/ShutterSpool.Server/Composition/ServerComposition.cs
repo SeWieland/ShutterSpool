@@ -223,6 +223,7 @@ internal static class ServerComposition
             new Microsoft.AspNetCore.Mvc.ProducesResponseTypeAttribute(typeof(Microsoft.AspNetCore.Mvc.ProblemDetails), StatusCodes.Status503ServiceUnavailable));
         management.MapGet("/status", () => Results.Ok());
         management.MapWorkspaceAccessEndpoints();
+        app.MapWorkspaceInvitationEndpoints(management);
         management.MapSourceEndpoints();
         management.MapCollectionEndpoints();
         management.MapSourceDisplayEndpoints();

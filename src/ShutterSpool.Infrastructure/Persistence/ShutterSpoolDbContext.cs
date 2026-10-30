@@ -38,6 +38,7 @@ internal sealed partial class ShutterSpoolDbContext(DbContextOptions<ShutterSpoo
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         ConfigureConfiguration(modelBuilder);
+        ConfigureInvitations(modelBuilder);
         ConfigureQuota(modelBuilder);
         ConfigureProtections(modelBuilder);
         ConfigureErasure(modelBuilder);

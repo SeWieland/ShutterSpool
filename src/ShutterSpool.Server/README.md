@@ -61,12 +61,39 @@ Access mutations carry `operationId` and `expectedRevision`. Promotion also requ
 The store commits the change, operation result and audit together. Reuse the same operation identity and inputs to reconcile an uncertain result; use current revisions for a new decision.
 Problem Details distinguish `last-owner` and `membership-conflict` (409), `permission-denied` (403) and `membership-not-found` (404).
 A forbidden action differs from revoked membership: it does not by itself require discarding a still-valid sign-in or workspace membership.
-There is no ordinary create-member or invitation endpoint.
+Ordinary membership activation uses the recipient-bound invitation flow below; there is no unrestricted create-member endpoint.
 Exceptional Owner recovery uses the [protected operator procedure](../../deploy/operations/README.md#protected-owner-recovery), not a management endpoint or login claim.
 
 `GET /management/captures/{id}/delivery-summary` returns authorized safe outcomes: delivery `id`, `assetId`, `state` and `canRetry`, with at most 1,000 items and an explicit `truncated` flag.
 It exposes no provider paths or diagnostics. Raw decisions, delivery/attempt history and operational configuration require Owner or Administrator authority.
 Viewer scope applies before private media lists, detail, counts, tags, Collection projections and previews; filters cannot broaden it.
+
+## Workspace invitations
+
+The [workspace guide](../../docs/workspaces.md#join-an-invited-workspace) explains the user flow; the [packaged operator procedure](../../deploy/operations/README.md#prepare-invited-accounts-and-recipients) owns native account setup and the protected recipient handoff.
+An offer binds an operator-supplied recipient reference to a non-Owner role in one workspace. Signing in or completing native account setup alone does not create a membership.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /management/invitation-recipients` | Owner/Administrator reads approved `{id,label}` references for this workspace. |
+| `GET /management/invitations` | Owner/Administrator reads local offer state and revisions. |
+| `POST /management/invitations` | Create an offer with `operationId`, `recipientId` and optional `role` (default `Viewer`). |
+| `POST /management/invitations/{id}/renew` | Replace an unaccepted offer version using `operationId`, `expectedRevision` and optional non-Owner `role`. |
+| `POST /management/invitations/{id}/cancel` | Cancel an unused offer using `operationId` and `expectedRevision`. |
+| `GET /workspace-offers` | Authenticated discovery of only the caller's offers, without requiring membership. Returns `items` and `incomplete`. |
+| `POST /workspace-offers/{workspaceId}/{id}/accept` | Explicit recipient Join with `operationId` and `expectedRevision`; requires the exact principal and a signed boolean `email_verified=true` access-token claim. |
+
+Recipient discovery exposes only its own offer ID, workspace ID/name, role, status, revision and creation/expiry times. It does not expose media, configuration or other members.
+An incomplete discovery is retryable and cannot prove an omitted offer does not exist. Single-workspace mode returns no discoverable offers.
+Allowed offered roles are Viewer, Curator and Administrator. Native identity setup and local membership are separate commits; no distributed transaction or application email delivery is involved.
+
+The tenant transaction checks current authority, recipient, offer revision/state and database time after acquiring the access-change lock. An offer is valid only before its expiry, 24 hours after creation.
+Renewal keeps the unaccepted offer ID but advances its revision and starts a fresh lifetime; stale versions cannot be accepted. Accepted offers cannot be renewed. After removal, a fresh Create operation creates a new offer identity.
+Acceptance and its audit/result commit with membership activation. Replays report current membership without overwriting a later role change or restoring a removed membership.
+Loss of invitation authority, recipient removal and replacement during protected Owner recovery invalidate affected pending offers in the same transaction. Owner-to-Administrator changes retain ordinary invitation authority.
+
+Problem Details distinguish `email-verification-required` and `permission-denied` (403), `invitation-not-found` (404), and expired/cancelled/invalidated/accepted/conflicting offer states (409).
+Use the same operation identity and inputs to reconcile an uncertain change; reread current offer/membership state before making a new decision.
 
 ## Shared workspace provisioning
 

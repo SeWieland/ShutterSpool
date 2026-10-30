@@ -152,7 +152,84 @@ An already-applied retry is idempotent. The command changes only the assigned re
 Workspace quota settings cannot exceed the assigned allocation or disable its cap. Receive, original, quarantine, temporary-copy and disk-preview writes stay in that workspace's storage boundary.
 Unused allocation cannot be borrowed from another workspace; fixed budgets do not guarantee that storage is currently available or replace physical free-space checks.
 Platform enforcement and recovery must be qualified on the actual deployment; application tests are not persistent-volume or power-loss evidence.
-Invitation creation is unavailable. Provisioning and role support do not establish readiness to open a hosted service.
+Provisioning and role support do not establish readiness to open a hosted service. Prepare invited accounts and recipient references through the procedure below before workspace administrators create invitations.
+
+## Prepare invited accounts and recipients
+
+Account setup belongs to the identity provider; a ShutterSpool invitation is a separate, tenant-local offer of membership.
+Use protected native Keycloak administration for the following account steps. Workspace Owners and Administrators receive neither realm-admin credentials nor a global user directory.
+The supported companion keeps public registration off (`registrationAllowed=false`), enables native email verification and password recovery (`verifyEmail=true`, `resetPasswordAllowed=true`), and maps a boolean `email_verified` claim into the API access token.
+Normal bootstrap and exceptional Owner recovery retain their stronger verification procedures above and below.
+
+### Configure native email
+
+In Keycloak **Realm settings → Email**, configure a verified sender and Resend SMTP: host `smtp.resend.com`, port `465` with SSL/TLS, authentication enabled, username `resend`, and the protected Resend API key as the password.
+Keep TLS certificate validation enabled and provider credentials in the protected native configuration. The Server does not need a Resend key or an email queue.
+See the supported [Keycloak administration guide](https://www.keycloak.org/docs/26.6.4/server_admin/) and [Resend SMTP settings](https://resend.com/docs/send-with-smtp).
+Sender/domain approval, provider credentials, mailbox delivery and operating procedures must be qualified on the actual deployment before onboarding people.
+
+### Create or reuse the exact account
+
+Use an authenticated native administrative client; the HTTP examples below omit privileged credentials deliberately.
+For a new recipient, create an enabled account with the confirmed address, initially unverified email and no password or credential payload:
+
+```http
+POST /admin/realms/shutterspool/users
+Content-Type: application/json
+
+{"username":"confirmed-recipient","email":"recipient@example.invalid","enabled":true,"emailVerified":false,"firstName":"Chosen","lastName":"Name"}
+```
+
+Substitute the intended account and its required native profile fields. Capture its stable Keycloak ID from the creation result or an exact username lookup, requiring one exact match.
+For an existing account, reuse its existing identity and credentials; do not create another account for another workspace or reset its password as part of an invitation.
+Confirm the selected realm, account and address with the onboarding contact. Use the realm's public issuer and that account's stable ID as the application principal; matching email addresses are not identity binding.
+
+For a new account, request Keycloak's native setup email with an explicit 24-hour lifespan:
+
+```http
+PUT /admin/realms/shutterspool/users/VERIFIED_ACCOUNT_ID/execute-actions-email?lifespan=86400
+Content-Type: application/json
+
+["VERIFY_EMAIL","UPDATE_PASSWORD"]
+```
+
+Leave `redirect_uri` and `client_id` out of this request. Setup finishes on Keycloak; the recipient then uses the ordinary application URL and obtains a fresh OIDC sign-in.
+Keep the normal application callback allowlist and state/nonce/PKCE protections. Do not copy setup tokens into application URLs, logs, analytics or recipient-reference files.
+The per-request setup lifespan does not alter password-recovery or other native action lifetimes.
+
+A successful native send reports SMTP submission, not mailbox delivery. Failure or timeout may be uncertain: a message can have been accepted even when its acknowledgement was lost.
+Check and retry through native administration; neither a send result nor successful account setup grants workspace membership.
+Resending does not promise to revoke every earlier setup link. Native email/account control is the selected enrollment assurance: a stolen usable setup link may give control of the same account, even though another signed-in principal cannot accept its workspace invitation.
+
+### Hand off a workspace recipient
+
+After verifying the exact principal, create `secrets/workspace-migration/recipient.json`, protected and readable by the operator container's UID 1654:
+
+```json
+{
+  "issuer": "https://identity.example.invalid/realms/shutterspool",
+  "subject": "verified-native-account-id",
+  "label": "Recipient label for this workspace",
+  "operatorIdentity": "responsible-authenticated-operator"
+}
+```
+
+The label is for human selection, not authentication. Use the exact configured public issuer and stable subject, not an email address in place of the subject.
+With the existing `workspace_operator` function and the correct workspace/operation GUIDs, run:
+
+```sh
+workspace_operator --workspace-recipient 11111111-1111-4111-8111-111111111111 44444444-4444-4444-8444-444444444444 /run/workspace-migration/recipient.json
+```
+
+This records the operator's verified-principal attestation as an audited recipient reference for that workspace; it does not look up Keycloak on the operator's behalf. It creates no membership and sends no email.
+Retry the same operation and inputs after an uncertain result. Correct a mistaken principal through a new explicit handoff; do not edit an existing offer's identity silently.
+Owners and Administrators can then select the approved recipient in **Settings → Members → Invitations**, choose a non-Owner role (Viewer by default), and create the offer.
+The intended recipient sees the workspace and role after sign-in and explicitly chooses **Join workspace**. Activation requires a fresh API token with `email_verified=true` and current local offer/inviter authority.
+
+Local offers expire 24 hours after creation independently of native account links. Renewal starts a fresh offer version and supersedes the previous one; it does not reset credentials, renew a native link or change an existing membership.
+Cancelling an unused offer and removing a joined membership are separate operations. Neither operation deletes or disables the global Keycloak account.
+An accepted offer cannot be renewed. After membership removal, create a fresh invitation for the approved recipient instead of replaying the old acceptance.
+For another supported OIDC provider, use its native account setup and trusted equivalent verified-email claim mapping; ShutterSpool adds no general identity-provider provisioning service.
 
 ## Protected Owner recovery
 

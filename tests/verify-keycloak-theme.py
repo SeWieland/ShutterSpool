@@ -1,6 +1,7 @@
-"""Verify login-theme selection safety using the shipped shell and a controlled kcadm stub.
+"""Verify native enrollment defaults and login-theme selection with a controlled kcadm stub.
 Run: python tests/verify-keycloak-theme.py (requires Docker and the supported Keycloak image).
 """
+import json
 import pathlib
 import subprocess
 import tempfile
@@ -14,6 +15,23 @@ RESOURCES = ['theme.properties', 'resources/css/shutterspool.v1.css',
 
 
 class ThemeSelectionTests(unittest.TestCase):
+    def test_fresh_realms_require_verification_disable_registration_and_allow_native_recovery(self):
+        realm = json.loads((SCRIPT.parent / 'shutterspool-realm.json').read_text())
+        self.assertIs(realm['registrationAllowed'], False)
+        self.assertIs(realm['verifyEmail'], True)
+        self.assertIs(realm['resetPasswordAllowed'], True)
+        self.assertNotIn('actionTokenGeneratedByUserLifespan', realm)
+
+    def test_access_tokens_explicitly_map_native_verification_as_boolean(self):
+        mapper = json.loads((SCRIPT.parent / 'shutterspool-email-verified-mapper.json').read_text())
+        self.assertEqual(mapper['protocol'], 'openid-connect')
+        self.assertEqual(mapper['protocolMapper'], 'oidc-usermodel-property-mapper')
+        config = mapper['config']
+        self.assertEqual(config['user.attribute'], 'emailVerified')
+        self.assertEqual(config['claim.name'], 'email_verified')
+        self.assertEqual(config['jsonType.label'], 'boolean')
+        self.assertEqual(config['access.token.claim'], 'true')
+
     def run_selection(self, theme='shutterspool', missing=None, check=False, pointer=False):
         with tempfile.TemporaryDirectory() as directory:
             fixture = pathlib.Path(directory)

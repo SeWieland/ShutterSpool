@@ -1999,6 +1999,76 @@ namespace ShutterSpool.Infrastructure.Persistence.Migrations
                     b.ToTable("workspace_access_operations", (string)null);
                 });
 
+            modelBuilder.Entity("ShutterSpool.Infrastructure.Persistence.WorkspaceInvitationEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("InviterId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("RecipientId")
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("Revision")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InviterId");
+
+                    b.HasIndex("RecipientId")
+                        .IsUnique();
+
+                    b.ToTable("workspace_invitations", (string)null);
+                });
+
+            modelBuilder.Entity("ShutterSpool.Infrastructure.Persistence.WorkspaceInvitationRecipientEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Issuer")
+                        .IsRequired()
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Issuer", "Subject")
+                        .IsUnique();
+
+                    b.ToTable("workspace_invitation_recipients", (string)null);
+                });
+
             modelBuilder.Entity("ShutterSpool.Infrastructure.Persistence.WorkspaceViewerPolicyEntity", b =>
                 {
                     b.Property<int>("Id")
@@ -2285,6 +2355,21 @@ namespace ShutterSpool.Infrastructure.Persistence.Migrations
                         .WithOne()
                         .HasForeignKey("ShutterSpool.Infrastructure.Persistence.WebDavDestinationEntity", "DestinationId")
                         .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("ShutterSpool.Infrastructure.Persistence.WorkspaceInvitationEntity", b =>
+                {
+                    b.HasOne("ShutterSpool.Infrastructure.Persistence.AuthorizationGrant", null)
+                        .WithMany()
+                        .HasForeignKey("InviterId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("ShutterSpool.Infrastructure.Persistence.WorkspaceInvitationRecipientEntity", null)
+                        .WithOne()
+                        .HasForeignKey("ShutterSpool.Infrastructure.Persistence.WorkspaceInvitationEntity", "RecipientId")
+                        .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });
 

@@ -47,7 +47,8 @@ export function workspaceRequestHeaders(
     workspaceId: string | null,
 ): Headers {
     const result = new Headers(headers);
-    if (workspaceId && new URL(url, 'http://workspace.local').pathname !== '/workspaces')
+    const path = new URL(url, 'http://workspace.local').pathname;
+    if (workspaceId && path !== '/workspaces' && !path.startsWith('/workspace-offers'))
         result.set('X-ShutterSpool-Workspace', workspaceId);
     return result;
 }

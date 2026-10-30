@@ -37,7 +37,7 @@ Unix permission checks, Windows symbolic-link privileges, the distinct Linux `/d
 
 After starting the local Keycloak companion through Aspire, run `pwsh -File tests/verify-keycloak-bootstrap.ps1 -KeycloakContainer <running-keycloak-container-name>` from the repository root. This separate runtime check uses the mounted reconciliation script and a uniquely named disposable realm to verify fresh subject retention, exact username matching, repeated reconciliation and preservation of identity/credentials on a rejected subject mismatch. It deletes only the realm and temporary files created by that invocation; existing realms and deployment secrets are retained. PostgreSQL CI acceptance remains mandatory independently of this companion check.
 
-The database suite checks the supported initial/workspace-role migration chain, model/snapshot consistency, fresh startup/restart, concurrent startup serialization, SQL-owned key custody and Collection constraints, and non-destructive refusal of unsupported historical histories and unversioned objects. This does not establish an upgrade path from those incompatible historical installations.
+The database suite checks the supported migration chain and preservation of existing workspace state, model/snapshot consistency, fresh startup/restart, concurrent startup serialization, SQL-owned key custody and Collection constraints, and non-destructive refusal of unsupported historical histories and unversioned objects. This does not establish an upgrade path from those incompatible historical installations.
 
 Preserve meaningful regression expectations when changing implementation boundaries. Tests supply evidence for the request and documented safety constraints, rather than replacing them.
 
@@ -70,7 +70,7 @@ Run checks from the repository root with Python 3.10+ unless noted. These use co
 | `python tests/verify-edge-startup.py` | Reject absent, expired, wrong-host or wrong-key edge certificates; requires a POSIX shell and OpenSSL. |
 | `python tests/verify-release-build.py` | Check Compose package construction and refusal paths with controlled fixtures. |
 | `python tests/verify-ftps-edge.py` | Exercise the pinned disposable edge's protocol behavior and controlled certificate replacement; requires Docker and OpenSSL. Add `--legacy` for the separate RSA AES-CBC profile. |
-| `python tests/verify-keycloak-theme.py` | Check theme preflight, selection and fallback in the pinned Keycloak shell with a controlled administrative-command stub; requires Docker. |
+| `python tests/verify-keycloak-theme.py` | Check native enrollment defaults/verified-email mapper and theme preflight, selection and fallback; shell cases use the pinned Keycloak image and a controlled administrative-command stub. Requires Docker; this optional check does not prove email delivery or account enrollment. |
 | `python tests/verify-sftpgo-httpfs.py` | Characterize synchronous completion, same-name uploads, rejected append/resume and hook-failure cleanup with synthetic bytes on a disposable loopback FTP endpoint; requires Docker. |
 
 `camera_ftp.py` is the reusable synthetic client, not a standalone acceptance run. It keeps the socket address separate from the TLS hostname and never falls back to plaintext after TLS failure.

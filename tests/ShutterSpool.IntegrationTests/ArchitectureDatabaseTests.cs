@@ -71,8 +71,8 @@ public sealed class ArchitectureDatabaseTests
         await using var database = new ShutterSpoolDbContext(fixture.Options);
         await new DatabaseInitializer(database).InitializeAsync(fixture.SpoolRoot, TestContext.Current.CancellationToken);
         Assert.Equal("20261025211318_InitialCreate", database.Database.GetMigrations().First());
-        Assert.EndsWith("_WorkspaceRoles", database.Database.GetMigrations().Last(), StringComparison.Ordinal);
-        Assert.Equal(2, database.Database.GetMigrations().Count());
+        Assert.EndsWith("_WorkspaceInvitations", database.Database.GetMigrations().Last(), StringComparison.Ordinal);
+        Assert.Equal(3, database.Database.GetMigrations().Count());
         Assert.Equal(database.Database.GetMigrations(), await database.Database.GetAppliedMigrationsAsync(TestContext.Current.CancellationToken));
         Assert.False(database.Database.HasPendingModelChanges());
         Directory.CreateDirectory(fixture.SpoolRoot);
