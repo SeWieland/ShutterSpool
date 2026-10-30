@@ -176,7 +176,7 @@ export function useReconciliation(
             void start();
             schedule();
         }
-    }, 60_000);
+    }, 40_000);
     window.addEventListener("online", foreground);
     window.addEventListener("offline", foreground);
     window.addEventListener("focus", foreground);

@@ -261,7 +261,7 @@ Compact identity/matching, frozen routing/curation, final outcomes and removal t
 The server supplies one authoritative retention summary with deadlines, protections, pause reasons and per-variant byte/removal state.
 Time bars show observed intervals; they do not promise exact purge times or advance warning of unscheduled pressure selection.
 Stale status keeps dated last-known evidence instead of an apparently live countdown.
-SignalR provides change hints, authorized reads establish truth, and 60-second reconciliation catches missed hints.
+SignalR provides change hints, authorized reads establish truth, and periodic foreground reconciliation catches missed hints.
 
 For endpoint details, use the [Server retention API reference](../src/ShutterSpool.Server/README.md#retention-api).
 For implementation ownership and removal fences, see the [persistence reference](architecture/persistence.md#privacy-erasure-and-restore-evidence) and the [Infrastructure cleanup guide](../src/ShutterSpool.Infrastructure/README.md#retention-persistence-and-cleanup).

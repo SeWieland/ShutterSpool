@@ -50,30 +50,12 @@ internal sealed class WorkspaceSelectionMiddleware(RequestDelegate next)
         WorkspaceDefinition? selected = await registry.FindReadyAsync(id, http.RequestAborted);
         if (selected is null)
         {
-            http.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await Results.Problem(statusCode: 403, title: "Workspace membership is unavailable",
+                extensions: new Dictionary<string, object?> { ["errorCode"] = "membership-revoked" }).ExecuteAsync(http);
             return;
         }
         workspace.Bind(selected);
         http.Items[typeof(WorkspaceDefinition)] = selected;
-        try
-        {
-            string? issuer = http.User.FindFirst("iss")?.Value;
-            string? subject = http.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? http.User.FindFirst("sub")?.Value;
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(http.RequestAborted);
-            timeout.CancelAfter(TimeSpan.FromSeconds(3));
-            if (!await http.RequestServices.GetRequiredService<ShutterSpool.Application.Security.AccessGrantService>()
-                    .IsAllowedAsync(issuer, subject, timeout.Token))
-            {
-                http.Response.StatusCode = StatusCodes.Status403Forbidden;
-                return;
-            }
-        }
-        catch (OperationCanceledException) when (http.RequestAborted.IsCancellationRequested) { throw; }
-        catch (Exception)
-        {
-            http.Response.StatusCode = StatusCodes.Status403Forbidden;
-            return;
-        }
         await next(http);
     }
 }

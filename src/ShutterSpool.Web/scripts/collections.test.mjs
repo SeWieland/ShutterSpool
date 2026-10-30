@@ -14,7 +14,7 @@ function mount(name, props, management) {
         setTimeout(callback, delay) { assert.equal(delay, 200); timers.set(++timerId, callback); return timerId; },
         clearTimeout(id) { timers.delete(id); },
         defineProps: () => props, defineEmits: () => (name, ...args) => events.push([name, ...args]),
-        require: name => name.endsWith('/session') ? { accessGeneration: () => 1, onAccessLost: callback => { loseAccess = callback; return () => {}; } } : {
+        require: name => name.endsWith('/workspace-access') ? { mayAdminister: ref(true) } : name.endsWith('/session') ? { accessGeneration: () => 1, onAccessLost: callback => { loseAccess = callback; return () => {}; } } : {
             api: { management }, handleFailure: failure => failure.status,
         },
     });

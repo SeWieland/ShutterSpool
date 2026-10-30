@@ -18,7 +18,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ShutterSpool.IntegrationTests;
 
-public sealed class WorkspaceTenancyPostgresTests
+public sealed partial class WorkspaceTenancyPostgresTests
 {
     [Fact]
     public async Task Provisioning_is_explicit_idempotent_and_runtime_scopes_isolate_state_bytes_and_quota()
@@ -408,6 +408,7 @@ public sealed class WorkspaceTenancyPostgresTests
                     fixture.Configuration[prefix + "MigrationConnectionReference"] = "runtime" + (index + 1) + "-migration";
                     fixture.Configuration[prefix + "OwnerIssuer"] = "https://identity.example";
                     fixture.Configuration[prefix + "OwnerSubject"] = "studio" + index;
+                    fixture.Configuration[prefix + "SetupOperatorIdentity"] = "synthetic-setup-operator";
                 }
                 return fixture;
             }

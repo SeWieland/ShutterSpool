@@ -15,7 +15,7 @@ The build emits `openapi/ShutterSpool_Server.json` for the generated TypeScript 
 
 ## Local security configuration
 
-Management endpoints require a verified OIDC bearer token and an active PostgreSQL-backed local grant.
+Management endpoints require a verified OIDC bearer token, an active PostgreSQL-backed membership and the operation's workspace permission.
 Single-workspace mode also requires the `shutterspool-admin` token role; shared-workspace mode checks the selected tenant's grant without requiring that provider role.
 Set `ShutterSpool__Security__Authority`, `ShutterSpool__Security__Audience`, `ShutterSpool__Security__BootstrapIssuer`, and `ShutterSpool__Security__BootstrapSubject` through deployment configuration.
 Set `ShutterSpool__Security__EncryptionKey` to a persistent base64-encoded 32-byte deployment secret outside PostgreSQL; it must accompany backups and is never committed, logged, or stored in Valkey. Packaged deployments can provide it through `ShutterSpool__Security__EncryptionKeyFile`; the file contents override the inline value.
@@ -38,7 +38,35 @@ The host shutdown deadline is configurable with `ShutterSpool__ShutdownTimeoutSe
 In single-workspace mode, changing the bootstrap issuer or subject and restarting the Server revokes the preceding bootstrap grant.
 Shared-workspace mode provisions its initial grant once and never replays it on ordinary restart.
 
-Management HTTP DTOs are finite and endpoint-local. The management group caps request bodies at 2 MiB and rejects unknown JSON properties; list endpoints use validated keyset cursors (30 by default, 100 maximum). Configuration writes carry an expected revision and return the authorized current redacted representation on conflict. Capture curation accepts rating -1 through 5, optional fixed-vocabulary label and tags; selection is response-only and derived. Batch actions require 1–100 distinct Capture IDs and recheck the active management grant before each item.
+Management HTTP DTOs are finite and endpoint-local. The management group caps request bodies at 2 MiB and rejects unknown JSON properties; list endpoints use validated keyset cursors (30 by default, 100 maximum). Configuration writes carry an expected revision and return the authorized current redacted representation on conflict. Capture curation accepts rating -1 through 5, optional fixed-vocabulary label and tags; selection is response-only and derived. Batch actions require 1–100 distinct Capture IDs and recheck current permission before each independently committed item.
+
+## Workspace permissions and membership
+
+The [workspace guide](../../docs/workspaces.md) owns the fixed role matrix and Viewer visibility behavior; the [authorization guide](../../docs/architecture/authentication-and-authorization.md#protected-request-and-revocation) explains admission and revocation.
+Requests check current membership and permission before execution. Already admitted ordinary work may finish after revocation; membership, Owner and Viewer-policy mutations recheck authority inside their atomic tenant transaction.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /management/access` | Current `membershipId`, `role`, `revision`, capability flags and Viewer policy. Available to every active member. |
+| `GET /management/members` | Workspace membership records for an Owner or Administrator. |
+| `POST /management/members/{id}/role` | Change an existing member's role, respecting actor/target Owner restrictions. |
+| `POST /management/members/{id}/promote-owner` | Separately confirmed Owner promotion by an Owner. |
+| `POST /management/members/{id}/remove` | Remove a membership under role and last-Owner safeguards. |
+| `POST /management/membership/leave` | Leave the caller's own membership under the last-Owner safeguard. |
+| `GET /management/viewer-policy` | Read the workspace's `includeUnreleased` policy as any active member. |
+| `PUT /management/viewer-policy` | Change the workspace's policy as Owner or Administrator. |
+
+Capabilities are `canCurate`, `canAdminister`, `canManageMembers` and `canManageOwners`; they describe the current member, not a client-supplied authorization decision.
+Access mutations carry `operationId` and `expectedRevision`. Promotion also requires `confirmed: true`; policy updates use the current policy revision.
+The store commits the change, operation result and audit together. Reuse the same operation identity and inputs to reconcile an uncertain result; use current revisions for a new decision.
+Problem Details distinguish `last-owner` and `membership-conflict` (409), `permission-denied` (403) and `membership-not-found` (404).
+A forbidden action differs from revoked membership: it does not by itself require discarding a still-valid sign-in or workspace membership.
+There is no ordinary create-member or invitation endpoint.
+Exceptional Owner recovery uses the [protected operator procedure](../../deploy/operations/README.md#protected-owner-recovery), not a management endpoint or login claim.
+
+`GET /management/captures/{id}/delivery-summary` returns authorized safe outcomes: delivery `id`, `assetId`, `state` and `canRetry`, with at most 1,000 items and an explicit `truncated` flag.
+It exposes no provider paths or diagnostics. Raw decisions, delivery/attempt history and operational configuration require Owner or Administrator authority.
+Viewer scope applies before private media lists, detail, counts, tags, Collection projections and previews; filters cannot broaden it.
 
 ## Shared workspace provisioning
 
@@ -76,8 +104,9 @@ Replacement retains the username when omitted and atomically advances configurat
 It affects every sharing device and blocks new work from stale sessions; previously admitted transfers retain completion guarantees.
 The Source identity, root, connection profile, media and history remain intact.
 
-Generated usernames combine two short photography-themed words, such as `softglow` or `tinyzoom`: 6–8 lowercase letters,
+Single-workspace mode generates usernames from two short photography-themed words, such as `softglow` or `tinyzoom`: 6–8 lowercase letters,
 with no prefix, separator or digits. The database enforces uniqueness and creation retries a collision up to five total attempts.
+Shared-workspace mode uses a `camera-` prefix and generated GUID; shared ingress usernames, including custom names, must be unique across workspaces.
 Existing usernames stay unchanged. Generated passwords use at least 20 characters
 from `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` (or the configured minimum, if greater).
 Only generated passwords appear once in successful responses; custom passwords remain write-only and ordinary reads expose neither.
@@ -88,7 +117,7 @@ Successful FTP authentication initializes/checks the guarded virtual root before
 
 Previews support browsing; the [workflow guide](../../docs/core-workflow.md#3-let-the-photograph-lead-curation) explains why they never gate acceptance or release. The values below are the runtime reference.
 
-`GET /media/previews/{captureId}/grid` and `/detail` require the same verified OIDC token and active local grant as other private media, including the selected workspace in shared mode. Single-workspace mode additionally requires the `shutterspool-admin` token role. The one-segment route uses `grid`. Ready WebP responses use `Cache-Control: private, no-cache` and an ETag: the browser may store the bytes but must revalidate, and an authorized unchanged request receives `304`. Pending, unavailable and missing responses use `private, no-store`; `X-Preview-State` describes the state. RAW-only Captures return a static SVG with `pending`; failed or inaccessible JPEG generation returns the SVG with `unavailable`.
+`GET /media/previews/{captureId}/grid` and `/detail` require the same verified OIDC token, current membership and Capture visibility as other private media, including the selected workspace in shared mode. Single-workspace mode additionally requires the `shutterspool-admin` token role. Cached bytes and an ETag never bypass these checks. The one-segment route uses `grid`. Ready WebP responses use `Cache-Control: private, no-cache` and an ETag: the browser may store the bytes but must revalidate, and an authorized unchanged request receives `304`. Pending, unavailable and missing responses use `private, no-store`; `X-Preview-State` describes the state. RAW-only Captures return a static SVG with `pending`; failed or inaccessible JPEG generation returns the SVG with `unavailable`.
 
 The Server resolves the current primary JPEG from PostgreSQL and sends only its committed bytes to a private Imaginary `/fit` request on a cache miss. Set `ShutterSpool:Preview:ImaginaryUrl` to the private service URL. In single-workspace mode, set `ShutterSpool:Preview:CacheRootPath` to a private writable directory separate from originals. Shared-workspace mode instead fixes each cache at `<workspace-storage-root>/previews` inside its assigned allocation; a deployment-level cache path does not override that boundary. Cache files are disposable; deleting them regenerates derivatives while the JPEG original remains. Keep the cache root writable only by the Server. Imaginary needs neither a spool mount nor remote URL fetching.
 
@@ -114,9 +143,9 @@ Preview routes accept `maximumDimension` from 64 to 4096, with the requested siz
 These reads use existing management/media authorization and Application ports. Released read-only behavior is
 a web-workspace restriction; the existing server's versioned current-curation policy remains intact.
 
-`GET /management/captures?limit=30&cursor=...` returns at most 100 grouped Captures, newest first by default. Optional `oldestFirst=true` reverses immutable first-acceptance timestamp/ID ordering before paging; cursors bind both direction and filters. Ungrouped Assets are never shown as Captures. `GET /management/captures/{id}` combines current/frozen curation, variant identities, the current JPEG preview Asset ID and compact delivery summaries. Decisions, deliveries and explicit actions have separate paged Capture routes; attempts have a paged Delivery route. Decision and delivery rows include nullable destination display names, including archived configurations. All use the same OIDC administrator role and active local grant as mutations. Inbox responses contain no original paths, hashes or bytes; authorized preview endpoints remain the only browsing media reads.
+`GET /management/captures?limit=30&cursor=...` returns at most 100 authorized grouped Captures, newest first by default. Optional `oldestFirst=true` reverses immutable first-acceptance timestamp/ID ordering before paging; cursors bind both direction and filters. Ungrouped Assets are never shown as Captures. `GET /management/captures/{id}` combines authorized curation, variant identities, the current JPEG preview Asset ID and compact delivery summaries. Raw decisions, deliveries, explicit actions and attempts have separate administrative history routes; decision and delivery rows include nullable destination display names, including archived configurations. Curator/Viewer clients use the safe delivery summary described above. Inbox responses contain no original paths, hashes or bytes; authorized preview endpoints remain the only browsing media reads.
 
-`GET /auth/config` exposes only the public OIDC `authority`, `clientId` and `audience` settings. Set `ShutterSpool:Security:ClientId` for a non-default public client. Configure exact browser origins in `ShutterSpool:Security:AllowedOrigins` when the SPA is cross-origin; same-origin needs no entry. HTTP origins are accepted only for loopback development. `/live/changes` is the authorized SignalR hub; bearer query authentication is accepted on its transport and negotiate paths only. It closes when the token expires and rechecks the active local grant every 30 seconds. Browser origins must match the request origin or the configured exact list. Hub hints carry Capture/Asset IDs and change kinds only; clients reread authorized HTTP state. Missing or dropped hints do not alter PostgreSQL workflow state.
+`GET /auth/config` exposes only the public OIDC `authority`, `clientId` and `audience` settings. Set `ShutterSpool:Security:ClientId` for a non-default public client. Configure exact browser origins in `ShutterSpool:Security:AllowedOrigins` when the SPA is cross-origin; same-origin needs no entry. HTTP origins are accepted only for loopback development. `/live/changes` is the authorized SignalR hub; bearer query authentication is accepted on its transport and negotiate paths only. It closes when the token expires and rechecks current access every 30 seconds. Browser origins must match the request origin or the configured exact list. Administrative hub hints carry scoped Capture/Asset IDs and change kinds; Curator/Viewer connections receive content-free `resyncRequired` hints and reread authorized HTTP state. Missing or dropped hints do not alter PostgreSQL workflow state.
 
 `GET /management/sources/authentication-observations?sourceIds=<guid>` reads outcomes for 1–100 distinct Sources. It returns only Source identity, generic outcome, time and a persisted monotonic version; a missing item means no saved outcome, not proof that authentication never occurred. Camera auth queues observations outside its response path. A bounded in-process worker coalesces per Source, commits PostgreSQL state, then emits `sourceAuthenticationChanged`; overflow or write failure marks current coverage incomplete. A verified secret rejected because ingress is disabled or the trusted legacy-FTPS route is not enabled for that Source may be attributed. Unknown or wrong-secret failures never select a Source. The durable row is deleted with its Source.
 
@@ -132,7 +161,7 @@ Inbox Assets expose available camera make/model; detail exposes byte size for ro
 ## Collections API
 
 Use the [Collection guide](../../docs/collections.md) for the photographer's workflow and naming/routing consequences.
-These endpoints share the existing management administrator/local-grant authorization; Source credentials grant no access.
+Collection reads apply current membership and media scope. Creation, rename and deletion require Owner or Administrator authority; moving Captures to existing Collections also permits Curators under the existing lifecycle guards. Source credentials grant no access.
 The emitted OpenAPI document owns exhaustive request/response schemas.
 
 | Operation | HTTP contract |

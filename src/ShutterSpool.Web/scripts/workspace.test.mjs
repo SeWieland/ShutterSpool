@@ -25,6 +25,7 @@ function moduleAt(name, overrides = {}) {
 }
 function workspace(read, batch = async () => ({ items: [] }), browser = {}) {
     let generation = 0; let lost; let dispose;
+    const permissions = { mayCurate: ref(browser.role !== 'Viewer'), mayAdminister: ref(!browser.role || ['Owner', 'Administrator'].includes(browser.role)), workspaceAccess: ref({ role: browser.role ?? 'Owner' }), refreshWorkspaceAccess: browser.refreshAccess ?? (async () => true) };
     const session = ref({ profile: { iss: 'synthetic', sub: 'operator' } });
     const testApi = browser.api ?? { management: { captures: {
         byId: id => ({ get: options => read(id, options), favorite: { put: browser.favorite ?? (async () => {}) }, trash: { post: browser.trash ?? (async () => {}) }, curation: { put: async body => ({ ...body, revision: body.expectedRevision + 1 }) } }),
@@ -38,7 +39,7 @@ function workspace(read, batch = async () => ({ items: [] }), browser = {}) {
         watch: browser.watch ?? (() => {}), onMounted() {}, onUnmounted(callback) { dispose = callback; }, onBeforeRouteLeave() {}, defineExpose: value => Object.assign(browser.exposed ??= {}, value), nextTick: browser.nextTick ?? (async () => {}), shallowRef,
         window: { confirm: () => true, scrollY: 640, scrollBy() {}, scrollTo() {}, addEventListener() {}, removeEventListener() {}, ...browser.window },
         document: documentState,
-        require: name => name.endsWith('/api') ? { api: { management: {
+        require: name => name.endsWith('/workspace-access') ? permissions : name.endsWith('/api') ? { api: { management: {
             sources: { get: browser.sources ?? (async () => ({ items: [{ curationMode: 'Manual' }] })) },
             captures: { get: browser.page ?? (async () => ({ items: [], nextCursor: null })), byId: id => ({ get: options => read(id, options), curation: { put: async body => ({ ...body, revision: body.expectedRevision + 1 }) } }), batch: { curation: { post: batch }, hold: { post: batch }, restore: { post: batch }, release: { post: batch } } },
         } }, cancellable: signal => ({getKey: () => 'shutterspool.abort', signal}), handleFailure: browser.handleFailure ?? (error => error.responseStatusCode) }
@@ -61,7 +62,7 @@ function workspace(read, batch = async () => ({ items: [] }), browser = {}) {
         const names = declarations.flatMap(statement => ts.isVariableStatement(statement)
             ? statement.declarationList.declarations.flatMap(declaration => ts.isIdentifier(declaration.name) ? [declaration.name.text] : ts.isObjectBindingPattern(declaration.name) ? declaration.name.elements.map(element => element.name.getText()) : [])
             : ts.isFunctionDeclaration(statement) && statement.name ? [statement.name.text] : []);
-        return mountTemplate(template.exports.render, run('({' + names.join(',') + '})'), browser.document, browser);
+        return mountTemplate(template.exports.render, run('({' + names.join(',') + ', mayCurate: require("../lib/workspace-access").mayCurate, mayAdminister: require("../lib/workspace-access").mayAdminister})'), browser.document, browser);
     };
     return run;
 }
@@ -104,7 +105,7 @@ function mountTemplate(render, bindings, documentOverrides = {}, browser = {}) {
         vm.runInContext(ts.transpileModule(compiledTrashAction.content, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, trashContext);
         app.component('CaptureTrashAction', trashContext.exports.default);
     }
-    for (const name of ['UIcon', 'RatingStar', 'CaptureRating', 'AuthorizedPreview', 'CaptureEvidence', 'SourceWorkspace', 'DeliveryWorkspace', 'ReleaseLifetime', 'ReevaluateAction', 'RetentionLifetime', 'FavoriteControl', 'RetentionDetails', ...(browser.realTrashAction ? [] : ['CaptureTrashAction']), 'CaptureResumeAction', 'NoDeliveryIntentAction', 'PrivacyErasurePanel', 'TrashWorkspace', 'RetentionSettings', 'CollectionPicker', 'CollectionMove']) {
+    for (const name of ['UIcon', 'RatingStar', 'CaptureRating', 'AuthorizedPreview', 'CaptureEvidence', 'SourceWorkspace', 'DeliveryWorkspace', 'ReleaseLifetime', 'ReevaluateAction', 'RetentionLifetime', 'FavoriteControl', 'RetentionDetails', ...(browser.realTrashAction ? [] : ['CaptureTrashAction']), 'CaptureResumeAction', 'NoDeliveryIntentAction', 'PrivacyErasurePanel', 'TrashWorkspace', 'RetentionSettings', 'CollectionPicker', 'CollectionMove', 'WorkspaceLeave', 'WorkspaceMembers']) {
         app.component(name, { props: ['capture', 'captureId', 'gridMaximumDimension', 'active', 'deliveryOnly'], setup: props => () => Vue.h('mock-' + name, { captureId: props.captureId, active: props.active, deliveryOnly: props.deliveryOnly }, props.capture?.displayName ?? '') });
     }
     for (const name of ['LazySourceWorkspace', 'LazyDeliveryWorkspace', 'LazyTrashWorkspace', 'LazyRetentionSettings']) {
@@ -144,6 +145,61 @@ test('explicit Capture links retain the requested photo despite Curation members
     }
 });
 
+test('Curator and Viewer refreshes avoid Source configuration, Viewer opens no autosave session or keyboard mutation', async () => {
+    for (const role of ['Curator', 'Viewer']) {
+        let sources = 0, waiting = 0, writes = 0;
+        const run = workspace(async id => ({ id, curation: { revision: 1, rating: 0 }, assets: [] }), async () => { writes++; }, {
+            role, sources: async () => { sources++; throw new Error('Forbidden configuration read'); },
+            page: async options => { if (options?.queryParameters?.released === false) waiting++; return { items: [{ id: 'visible', curation: { revision: 1, rating: 0 }, assets: [] }] }; },
+        });
+        await run('refresh()');
+        assert.equal(sources, 0); assert.equal(waiting, role === 'Curator' ? 1 : 0);
+        assert.equal(run('availableViews.value.includes("Sources")'), false);
+        assert.equal(run('availableViews.value.includes("Delivery")'), false);
+        await run("switchView('Sources')"); assert.equal(run('view.value'), 'Gallery');
+        if (role === 'Viewer') {
+            assert.equal(run('editSessions.size'), 0, 'read-only details never create a save session');
+            await run("switchView('Curation')"); assert.equal(run('view.value'), 'Gallery');
+            run("view.value = 'Curation'; selection.value = ['visible']");
+            assert.equal(run("curationKey({ key: 'r', preventDefault() { throw new Error('Viewer key was consumed') } })"), false);
+            await run("bulk('rating')"); assert.equal(writes, 0);
+        }
+        run.dispose();
+    }
+});
+
+test('Viewer refresh replaces historical cached rows around its visible anchor without retargeting the active photograph', async () => {
+    const queries = [];
+    const run = workspace(async id => ({ id, curation: { revision: 1, rating: 0 }, assets: [] }), undefined, { role: 'Viewer', page: async options => { queries.push(options.queryParameters); return { items: [{ id: 'anchor', curation: { revision: 1, rating: 0 }, assets: [] }], nextCursor: 'next' }; } });
+    run("galleryGrid.measure = () => {}; rows.value = [{ id: 'forbidden-cached', curation: { revision: 1 } }, { id: 'anchor', curation: { revision: 1 } }]; activeId.value = 'anchor'; gridElement.value = { querySelector: () => ({ dataset: { id: 'anchor' }, getBoundingClientRect: () => ({ top: 200 }) }) }");
+    await run('refresh()');
+    assert.equal(queries[0].startAt, 'anchor');
+    assert.equal(run('rows.value.map(row => row.id).join()'), 'anchor', 'unreturned historical private media is discarded');
+    assert.equal(run('browsing.Gallery.rows.map(row => row.id).join()'), 'anchor', 'the inactive snapshot cannot retain previous private rows');
+    assert.equal(run('activeId.value'), 'anchor');
+    assert.equal(run('editSessions.size'), 0);
+    await run("switchView('Settings')");
+    await run('refresh()');
+    assert.equal(run('rows.value.length'), 0);
+    assert.equal(run('browsing.Gallery.rows.length'), 0, 'a Viewer in Settings must not retain unchecked Gallery media');
+    assert.equal(run('capture.value'), undefined);
+    run.dispose();
+});
+
+test('Viewer rendered inspection hides Favorite, Collection moves, Trash and administrator actions', async () => {
+    const run = workspace(async id => ({ id, curation: { revision: 1 }, assets: [] }), undefined, { role: 'Viewer' });
+    run("rows.value = [{ id: 'visible', displayName: 'Synthetic photograph', curation: { revision: 1 }, assets: [] }]");
+    await run("inspectCapture('visible')");
+    const tree = run.mount();
+    const all = node => [node, ...node.children.flatMap(all)];
+    const nodes = all(tree.root);
+    for (const name of ['FavoriteControl', 'CollectionMove', 'CaptureTrashAction', 'CaptureResumeAction', 'NoDeliveryIntentAction', 'PrivacyErasurePanel'])
+        assert.equal(nodes.some(node => node.type === `mock-${name}`), false, `${name} must stay unmounted`);
+    assert.equal(nodes.some(node => node.props['aria-label'] === 'Gallery views'), false, 'Viewer cannot open Trash');
+    assert.equal(nodes.some(node => node.props.class === 'photo-select-action'), false, 'Viewer has no unusable selection action');
+    tree.close(); run.dispose();
+});
+
 function sourceWorkspace(read, sources = [{ id: 'a', name: 'A', configurationRevision: 1 }, { id: 'b', name: 'B', configurationRevision: 1 }], authRead = async () => ({ coverageComplete: true, items: [] }), phaseRead = async () => ({ epoch: 'one', coverageComplete: true, items: [] }), management = {}, watchProperties = false) {
     const props = reactive({ sources, connected: true, gridMaximumDimension: 512 });
     let generation = 0; let accessLost;
@@ -169,7 +225,7 @@ function sourceWorkspace(read, sources = [{ id: 'a', name: 'A', configurationRev
         const names = declarations.flatMap(statement => ts.isVariableStatement(statement)
             ? statement.declarationList.declarations.filter(declaration => ts.isIdentifier(declaration.name)).map(declaration => declaration.name.text)
             : ts.isFunctionDeclaration(statement) && statement.name ? [statement.name.text] : []);
-        return mountTemplate(template.exports.render, { ...run('({' + names.join(',') + '})'), sources, connected: computed(() => props.connected), gridMaximumDimension: props.gridMaximumDimension, motionEnabled, previewVersions: {} });
+        return mountTemplate(template.exports.render, { ...run('({' + names.join(',') + ', mayCurate: require("../lib/workspace-access").mayCurate, mayAdminister: require("../lib/workspace-access").mayAdminister})'), sources, connected: computed(() => props.connected), gridMaximumDimension: props.gridMaximumDimension, motionEnabled, previewVersions: {} });
     };
     return run;
 }
@@ -620,7 +676,7 @@ test('authentication loss clears private Capture state and never sends a pending
 
 async function settle() { await nextTick(); await new Promise(resolve => setImmediate(resolve)); }
 
-function component(name, props, api) {
+function component(name, props, api, role = 'Owner') {
     if (name === 'CaptureEvidence' && !('active' in props)) props.active = true;
     const scope = effectScope();
     const unmounted = [];
@@ -629,7 +685,7 @@ function component(name, props, api) {
     const context = vm.createContext({
         exports: {}, AbortController, defineProps: () => props, defineEmits: () => () => {},
         ref, shallowRef, computed, watch, nextTick, onUnmounted: callback => unmounted.push(callback), onMounted() {},
-        require: moduleName => moduleName.endsWith('/api')
+        require: moduleName => moduleName.endsWith('/workspace-access') ? { mayCurate: ref(role !== 'Viewer'), mayAdminister: ref(['Owner', 'Administrator'].includes(role)) } : moduleName.endsWith('/api')
             ? { api, cancellable: signal => ({getKey: () => 'shutterspool.abort', signal}), handleFailure: error => error.responseStatusCode }
             : moduleName.endsWith('/workspace-interactions') ? moduleAt('workspace-interactions')
             : moduleName.endsWith('/destination-capabilities') ? moduleAt('destination-capabilities')
@@ -651,6 +707,28 @@ function evidenceApi(read) {
         get: options => read(kind, id, options?.queryParameters),
     }])) } } };
 }
+
+test('Curator and Viewer evidence uses only safe summaries and an uncertain Curator retry requires a fresh read', async () => {
+    for (const role of ['Curator', 'Viewer']) {
+        let summaries = 0, rawReads = 0, retries = 0;
+        const forbidden = { get: async () => { rawReads++; throw new Error('Forbidden diagnostics'); } };
+        const view = component('CaptureEvidence', reactive({ capture: { id: 'synthetic', assets: [{ id: 'asset', variant: 'JPEG' }], curation: { revision: 1, releasedAt: new Date() } }, active: true, online: true, generation: 0 }), {
+            management: { captures: { byId: () => ({ routing: forbidden, deliveries: forbidden, actions: forbidden, deliverySummary: { get: async () => { summaries++; return { items: [{ id: 'work', assetId: 'asset', state: 'Failed', canRetry: true }], truncated: false }; } } }) },
+                deliveries: { byId: () => ({ retry: { post: async () => { retries++; throw { responseStatusCode: 503 }; } } }) } },
+        }, role);
+        await settle();
+        assert.equal(summaries, 1); assert.equal(rawReads, 0);
+        await view.read("retrySafeDelivery('work')");
+        assert.equal(retries, role === 'Curator' ? 1 : 0);
+        if (role === 'Curator') {
+            assert.equal(view.read('retryUncertain.value'), true);
+            await view.read("retrySafeDelivery('work')"); assert.equal(retries, 1, 'unknown outcome is never automatically replayed');
+            await view.read('read()'); assert.equal(view.read('retryUncertain.value'), false);
+            assert.equal(summaries, 2);
+        }
+        assert.equal(rawReads, 0); view.close();
+    }
+});
 
 test('delivery summary groups targets and preserves older blockers while hiding duplicate matched routing', async () => {
     const props = reactive({ capture: { id: 'c', curation: { releasedAt: new Date() }, assets: [] }, generation: 0, deliveryOnly: true });

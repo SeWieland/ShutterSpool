@@ -85,6 +85,8 @@ public static class SecurityExtensions
                 }
             });
         services.AddScoped<IAuthorizationHandler, LocalGrantAuthorizationHandler>();
+        services.AddHttpContextAccessor();
+        services.AddSingleton<IAuthorizationMiddlewareResultHandler, WorkspaceAuthorizationResultHandler>();
         services.AddAuthorizationBuilder().AddPolicy(ManagementAccessPolicy, policy =>
         {
             policy.RequireAuthenticatedUser();

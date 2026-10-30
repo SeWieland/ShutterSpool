@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using ShutterSpool.Application.Workspaces;
+using ShutterSpool.Application.Security;
 using ShutterSpool.Infrastructure.Persistence;
 using ShutterSpool.Infrastructure.Security;
 using ShutterSpool.Infrastructure.Workspaces;
@@ -24,6 +25,12 @@ public static class WorkspaceOperator
         await using var operationTransaction = await operationLock.BeginTransactionAsync(token);
         await using (var serial = new NpgsqlCommand("SELECT pg_advisory_xact_lock(721034250721)", operationLock, operationTransaction))
             await serial.ExecuteNonQueryAsync(token);
+        if (args.Length >= 2 && Guid.TryParseExact(args[1], "D", out Guid accessWorkspace)
+            && args[0] is "--workspace-access" or "--workspace-recover-owner" or "--workspace-recovery-notification")
+        {
+            await AccessAsync(args, configuration, accessWorkspace, token);
+            return;
+        }
         if (args is ["--workspace-control-init"])
         {
             await InitializeControlAsync(configuration, token);
@@ -51,7 +58,52 @@ public static class WorkspaceOperator
             await ChangeAllocationAsync(configuration, selected, expected, next, token);
             return;
         }
-        throw new ArgumentException("Use --workspace-control-init, --workspace-provision <workspace GUID> <operation GUID>, --workspace-upgrade, or --workspace-allocation <workspace GUID> <expected bytes> <new bytes>.");
+        throw new ArgumentException("Use --workspace-control-init, --workspace-provision, --workspace-upgrade, --workspace-allocation, --workspace-access <workspace GUID>, --workspace-recover-owner <workspace GUID> <operation GUID> <protected request-file path>, or --workspace-recovery-notification <workspace GUID> <operation GUID> <success|failed>.");
+    }
+
+    private static async Task AccessAsync(string[] args, IConfiguration configuration, Guid id, CancellationToken token)
+    {
+        WorkspaceDefinition workspace = await new PostgresWorkspaceRegistry(configuration, new WorkspaceContext(true)).FindReadyAsync(id, token)
+            ?? throw new InvalidOperationException("The exact ready workspace is required.");
+        WorkspaceRuntime.ValidateRoot(workspace);
+        Provisioning provisioning = ReadProvisioning(configuration, id);
+        await using ShutterSpoolDbContext database = CreateDatabase(MigrationConnection(configuration,
+            provisioning.MigrationConnectionReference, workspace.ConnectionReference));
+        Guid tenantId = await database.Database.SqlQuery<Guid>($"SELECT id AS \"Value\" FROM workspace_identity").SingleAsync(token);
+        if (tenantId != id || !(await database.Database.GetAppliedMigrationsAsync(token)).SequenceEqual(database.Database.GetMigrations()))
+            throw new InvalidOperationException("The tenant identity or schema does not match the selected workspace.");
+        var store = new EfAccessGrantStore(database);
+        var display = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        display.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
+        if (args is ["--workspace-access", _])
+        {
+            Console.WriteLine(JsonSerializer.Serialize(await store.InspectAsync(token), display));
+            return;
+        }
+        if (args.Length == 4 && Guid.TryParseExact(args[2], "D", out Guid operation) && operation != Guid.Empty)
+        {
+            if (args[0] == "--workspace-recover-owner")
+            {
+                string path = Path.GetFullPath(args[3]);
+                if (!Path.IsPathFullyQualified(args[3]) || !File.Exists(path) || new FileInfo(path).Length > 16_384
+                    || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                    throw new ArgumentException("Use a protected absolute recovery request-file path of at most 16 KiB.");
+                WorkspaceOwnerRecovery recovery = JsonSerializer.Deserialize<WorkspaceOwnerRecovery>(await File.ReadAllTextAsync(path, token),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)) ?? throw new ArgumentException("The recovery request is required.");
+                if (!string.Equals(recovery.TargetIssuer, configuration["ShutterSpool:Security:Authority"]?.TrimEnd('/'), StringComparison.Ordinal))
+                    throw new ArgumentException("The independently verified target must use the configured public OIDC issuer.");
+                AccessChangeResult result = await store.RecoverOwnerAsync(operation, recovery, token);
+                Console.WriteLine(JsonSerializer.Serialize(result, display));
+                if (result.Status != "applied") throw new InvalidOperationException("Recovery did not change grants; inspect current authority and reverify before a new operation.");
+                return;
+            }
+            if (args[0] == "--workspace-recovery-notification")
+            {
+                await store.RecordRecoveryNotificationAsync(operation, args[3], token);
+                return;
+            }
+        }
+        throw new ArgumentException("Provide the exact workspace access command arguments.");
     }
 
     private static async Task InitializeControlAsync(IConfiguration configuration, CancellationToken token)
@@ -160,7 +212,8 @@ public static class WorkspaceOperator
             bool complete = await database.Database.SqlQuery<bool>($"SELECT bootstrap_complete AS \"Value\" FROM workspace_identity WHERE id={id}").SingleAsync(token);
             if (!complete)
             {
-                database.AuthorizationGrants.Add(new AuthorizationGrant { Issuer = provision.OwnerIssuer, Subject = provision.OwnerSubject, IsActive = true, IsBootstrap = true });
+                await new EfAccessGrantStore(database).PrepareInitialOwnerAsync(operation, provision.OwnerIssuer, provision.OwnerSubject,
+                    configuration[$"ShutterSpool:Workspaces:Definitions:{id:D}:SetupOperatorIdentity"], token);
                 SpoolQuotaSettingsEntity quota = await database.SpoolQuotaSettings.SingleAsync(item => item.Id == 1, token);
                 quota.IsActive = true; quota.QuotaBytes = definition.AllocatedBytes;
                 quota.HighWatermarkBytes = Math.Max(1, definition.AllocatedBytes * 9 / 10);
@@ -211,6 +264,9 @@ public static class WorkspaceOperator
             if (!applied.SequenceEqual(database.Database.GetMigrations().Take(applied.Length), StringComparer.Ordinal))
                 throw new InvalidOperationException("A tenant schema has an unsupported migration history.");
             await database.Database.MigrateAsync(token);
+            string runtimeRole = new NpgsqlConnectionStringBuilder(configuration.GetConnectionString(workspace.ConnectionReference)).Username!;
+            string privileges = $"GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO {Quote(runtimeRole)}; GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO {Quote(runtimeRole)}; REVOKE INSERT,UPDATE,DELETE ON workspace_identity,\"__EFMigrationsHistory\",deployment_key_checks FROM {Quote(runtimeRole)}";
+            await database.Database.ExecuteSqlRawAsync(privileges, token);
         }
     }
 

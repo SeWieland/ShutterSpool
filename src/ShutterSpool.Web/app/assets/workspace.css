@@ -585,3 +585,10 @@ body:has(.fullscreen-viewer) { overflow:hidden; }
     .workspace-preference-fields { grid-template-columns:minmax(0,1fr); gap:20px; }
     .appearance-content .appearance-fields { align-items:stretch; }
 }
+.member-list { list-style: none; padding: 0; margin: 0; }
+.member-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; padding: 24px 0; border-bottom: 1px solid var(--border); }
+.member-identity, .member-actions { display: grid; align-content: start; gap: 8px; min-width: 0; overflow-wrap: anywhere; }
+.member-policy { margin-block: 24px 32px; }
+.member-policy label, .member-actions label { display: grid; gap: 8px; }
+.member-policy > button { margin-top: 12px; }
+@media (max-width: 760px) { .member-row { grid-template-columns: minmax(0, 1fr); gap: 16px; } }

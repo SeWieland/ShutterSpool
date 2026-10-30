@@ -8,17 +8,19 @@ The [Server reference](../../src/ShutterSpool.Server/README.md#local-security-co
 
 - An external OpenID Connect (OIDC) issuer authenticates a person. ShutterSpool does not store or check management passwords.
 - The Server validates the issuer, audience, signature and expiry. Single-workspace mode additionally requires the `shutterspool-admin` token role; shared-workspace mode does not require that provider role.
-- The Server then checks an active local grant in PostgreSQL, keyed by the token's stable issuer and subject. Both checks must pass before a management API, private preview/original, or live-status stream can return private data.
+- The Server then checks an active local membership in PostgreSQL, keyed by the token's stable issuer and subject, and the permission required by the operation. Media reads also apply the member's current visibility scope.
 - PostgreSQL is the authority for grants and credential state. Valkey is not in the authorization path and cannot make stale or revoked access valid.
 
 ```mermaid
 flowchart TD
     Client[Client with bearer token] --> Token{Token valid?}
     Token -->|No| Deny[Deny private access]
-    Token -->|Yes| Grant{Active grant?}
+    Token -->|Yes| Grant{Active membership and permission?}
     DB[(PostgreSQL)] --> Grant
     Grant -->|No or unavailable| Deny
-    Grant -->|Yes| Data[Authorized private response]
+    Grant -->|Yes| Scope{Resource visible?}
+    Scope -->|No| Deny
+    Scope -->|Yes| Data[Authorized private response]
 ```
 
 The web client is outside the trusted authorization boundary. It may hide or show controls, but it cannot authorize access; the Server does that for every protected request.
@@ -30,22 +32,39 @@ OIDC answers **who presented this token**, while a local grant answers **whether
 | Decision | Authority | What it proves | Failure result |
 | --- | --- | --- | --- |
 | Authentication | Configured OIDC issuer, verified by Server | A token is from the allowed issuer, for this audience and unexpired; single-workspace mode also checks its coarse role. | No principal; protected endpoint returns no private data. |
-| Authorization | PostgreSQL, checked by Server | The `(issuer, subject)` has an active ShutterSpool grant. | Access is denied, including if the database cannot make a safe decision. |
+| Authorization | PostgreSQL, checked by Server | The `(issuer, subject)` has an active membership with the required workspace permission and resource visibility. | Access is denied, including if the database cannot make a safe decision. |
 
 Keycloak is an identity provider here, not the owner of photographic permissions. It does not contain individual Assets, Captures, Routes, Destinations, or Delivery permissions. Those records and workspace grants remain ShutterSpool workflow truth in PostgreSQL.
 
 ## Protected request and revocation
 
-Every protected HTTP request goes through both checks. A valid token alone is insufficient. This means an operator can be removed by deactivating the local grant even while the token would otherwise remain valid.
+Every protected HTTP request checks current authority before private reads or command execution; independently committed bulk items each receive a fresh check.
+A valid token alone is insufficient, and removing a local membership denies subsequent admission while the token would otherwise remain valid.
+Already admitted work may finish and commit after revocation or a policy change returns. An admitted release can therefore still queue delivery.
+Ordinary workflow transactions do not share an authorization lock with membership changes; existing lifecycle, revision and media-custody checks still apply.
 
 Signing metadata and keys come from the configured issuer as needed; token validation does not mean asking the issuer to authorize each photograph.
-The Server verifies signature, issuer, audience and expiry, plus the coarse role in single-workspace mode, then reads the local grant before returning private data.
+The Server verifies signature, issuer, audience and expiry, plus the coarse role in single-workspace mode, then reads current local authority.
+Cached derivative bytes do not bypass admission, and personal filters cannot widen the authorized media query.
 
-Live status is a long-lived exception only in transport, not in policy. The Server closes the hub connection at token expiry and rechecks its local grant every 30 seconds; a revoked principal therefore loses hub access at the next check. The legacy live-status event stream checks expiry and authorization every 60 seconds. A cache miss, stale cache entry, or lost cache invalidation notification must never preserve access.
+Live status is a long-lived exception only in transport, not in policy. The Server closes the hub connection at token expiry and rechecks its local grant every 30 seconds; a revoked principal therefore loses hub access at the next check. The legacy live-status event stream also checks expiry and authorization every 30 seconds. A cache miss, stale cache entry, or lost cache invalidation notification must never preserve access.
+
+## Roles and access changes
+
+The fixed Owner, Administrator, Curator and Viewer roles belong to each workspace membership.
+The [user guide](../workspaces.md#understand-your-role) owns their capability comparison and Viewer visibility rules.
+Endpoint permissions and media predicates apply on the Server; private operations without a mapped permission deny access.
+Operational/configuration diagnostics remain administrative. Nonadministrative media reads use safe outcomes without provider paths or raw attempt diagnostics.
+
+Membership, Owner and Viewer-policy changes serialize in a short transaction inside the selected tenant database.
+After acquiring that boundary, the operation rechecks the current actor, target role, expected revision and remaining active Owner count.
+The change, operation result and audit commit together. An earlier request check cannot authorize a later access change after the actor loses that authority.
+Owner promotion is a separate confirmed action; an Administrator cannot alter an Owner, and the last active Owner cannot leave or be removed/demoted.
+Protected operator recovery uses the same atomic authority and audit boundary; it does not grant routine media access to the operator.
 
 ## Bootstrap and recovery
 
-Shared-workspace mode uses [explicit workspace provisioning](../../src/ShutterSpool.Server/README.md#shared-workspace-provisioning) to create its first local grant once, against a verified issuer/subject.
+Shared-workspace mode uses [explicit workspace provisioning](../../src/ShutterSpool.Server/README.md#shared-workspace-provisioning) to create its initial Owner membership once, against a verified issuer/subject.
 An ordinary restart never replays that grant or substitutes the deployment operator as a workspace member.
 The following bootstrap reconciliation applies only to single-workspace mode.
 
@@ -118,7 +137,7 @@ APIs return a generated Source password only at creation or explicit credential 
 
 ## Constraints for changes
 
-- Put the final authorization check in `ShutterSpool.Server`, before returning private bytes, previews, configuration, or live data.
+- Authorize request admission in `ShutterSpool.Server`; access-changing operations also recheck current authority inside their atomic tenant update.
 - Treat the client, preview service, cache, and identity-provider roles as supporting layers, never as an independent authorization authority.
 - Keep local grants and credential state durable in PostgreSQL; tolerate cache loss safely.
 - Preserve issuer and subject as the stable person reference. Do not make provider-specific identities durable owners of media or workflow records.
@@ -128,7 +147,7 @@ APIs return a generated Source password only at creation or explicit credential 
 ## Current limits
 
 Shared-workspace isolation is limited to one Server and separate tenant databases/filesystem allocations.
-Delegated/team roles, public links, Keycloak UMA/object resources, external key management and key rotation are not implemented by this boundary.
+Custom roles, individual Viewer rules, public links, Keycloak UMA/object resources, external key management and key rotation are not implemented by this boundary.
 Hosted processing, storage enforcement and recovery still need qualification for the selected deployment.
 An external OIDC provider still needs the documented client, claim and local-grant configuration; discovery alone does not prove compatibility.
 

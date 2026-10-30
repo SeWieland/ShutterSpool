@@ -256,6 +256,16 @@ namespace ShutterSpool.Infrastructure.Persistence.Migrations
                         .HasMaxLength(2048)
                         .HasColumnType("character varying(2048)");
 
+                    b.Property<long>("Revision")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasDefaultValue("Owner");
+
                     b.Property<string>("Subject")
                         .IsRequired()
                         .HasMaxLength(512)
@@ -1938,6 +1948,86 @@ namespace ShutterSpool.Infrastructure.Persistence.Migrations
                     b.HasKey("DestinationId");
 
                     b.ToTable("webdav_destinations", (string)null);
+                });
+
+            modelBuilder.Entity("ShutterSpool.Infrastructure.Persistence.WorkspaceAccessOperationEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ActorIssuer")
+                        .IsRequired()
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)");
+
+                    b.Property<string>("ActorSubject")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<string>("AfterState")
+                        .HasColumnType("text");
+
+                    b.Property<string>("BeforeState")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("NotificationStatus")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("RecordedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Request")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Result")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("TargetId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("workspace_access_operations", (string)null);
+                });
+
+            modelBuilder.Entity("ShutterSpool.Infrastructure.Persistence.WorkspaceViewerPolicyEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<long>("AuthorityRevision")
+                        .HasColumnType("bigint");
+
+                    b.Property<bool>("IncludeUnreleased")
+                        .HasColumnType("boolean");
+
+                    b.Property<long>("Revision")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("workspace_viewer_policy", (string)null);
+
+                    b.HasData(
+                        new
+                        {
+                            Id = 1,
+                            AuthorityRevision = 0L,
+                            IncludeUnreleased = false,
+                            Revision = 0L
+                        });
                 });
 
             modelBuilder.Entity("ShutterSpool.Infrastructure.Persistence.AssetRemovalOperationEntity", b =>

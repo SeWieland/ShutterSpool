@@ -47,12 +47,30 @@ public sealed class LiveChangesHub(IServiceScopeFactory scopes, IOptions<Securit
         CancellationToken disconnected = Context.ConnectionAborted;
         Action abort = Context.Abort;
         WorkspaceDefinition? selected = workspace.Selected;
-        await Groups.AddToGroupAsync(Context.ConnectionId, LiveChangeNotifier.Group(workspace.Id ?? Guid.Empty), disconnected);
-        _ = MonitorGrantAsync(issuer, subject, selected, disconnected, abort);
+        WorkspaceMembership initial;
+        WorkspaceViewerPolicy initialPolicy;
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(disconnected);
+            timeout.CancelAfter(TimeSpan.FromSeconds(3));
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            if (selected is not null) scope.ServiceProvider.GetRequiredService<WorkspaceContext>().Bind(selected);
+            IAccessGrantStore grants = scope.ServiceProvider.GetRequiredService<IAccessGrantStore>();
+            WorkspaceMembership? member = string.IsNullOrWhiteSpace(issuer) || string.IsNullOrWhiteSpace(subject)
+                ? null : await grants.GetAsync(issuer, subject, timeout.Token);
+            if (member?.IsActive != true) { abort(); return; }
+            initial = member;
+            initialPolicy = await grants.GetViewerPolicyAsync(timeout.Token);
+        }
+        catch (Exception) { abort(); return; }
+        await Groups.AddToGroupAsync(Context.ConnectionId, initial.Role is WorkspaceRole.Owner or WorkspaceRole.Administrator
+            ? LiveChangeNotifier.Group(workspace.Id ?? Guid.Empty) : LiveChangeNotifier.MemberGroup(workspace.Id ?? Guid.Empty), disconnected);
+        _ = MonitorGrantAsync(issuer, subject, selected, initial, initialPolicy, disconnected, abort);
         await base.OnConnectedAsync();
     }
 
-    private async Task MonitorGrantAsync(string? issuer, string? subject, WorkspaceDefinition? selected, CancellationToken disconnected, Action abort)
+    private async Task MonitorGrantAsync(string? issuer, string? subject, WorkspaceDefinition? selected,
+        WorkspaceMembership initial, WorkspaceViewerPolicy initialPolicy, CancellationToken disconnected, Action abort)
     {
         try
         {
@@ -60,14 +78,19 @@ public sealed class LiveChangesHub(IServiceScopeFactory scopes, IOptions<Securit
             {
                 await Task.Delay(GrantCheckInterval, disconnected);
                 await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(disconnected);
+                timeout.CancelAfter(TimeSpan.FromSeconds(3));
                 if (selected is not null)
                 {
-                    WorkspaceDefinition? current = await scope.ServiceProvider.GetRequiredService<IWorkspaceRegistry>().FindReadyAsync(selected.Id, disconnected);
+                    WorkspaceDefinition? current = await scope.ServiceProvider.GetRequiredService<IWorkspaceRegistry>().FindReadyAsync(selected.Id, timeout.Token);
                     if (current is null || current != selected) { abort(); return; }
                     scope.ServiceProvider.GetRequiredService<WorkspaceContext>().Bind(selected);
                 }
-                if (!await scope.ServiceProvider.GetRequiredService<AccessGrantService>()
-                    .IsAllowedAsync(issuer, subject, disconnected))
+                IAccessGrantStore grants = scope.ServiceProvider.GetRequiredService<IAccessGrantStore>();
+                WorkspaceMembership? currentMember = await grants.GetAsync(issuer!, subject!, timeout.Token);
+                WorkspaceViewerPolicy currentPolicy = await grants.GetViewerPolicyAsync(timeout.Token);
+                if (currentMember?.IsActive != true || currentMember.Role != initial.Role || currentMember.Revision != initial.Revision
+                    || currentPolicy != initialPolicy)
                 {
                     abort();
                     return;
@@ -246,7 +269,11 @@ public sealed class LiveChangeBuffer(IHubContext<LiveChangesHub> hub, ILogger<Li
                 {
                     MaxDegreeOfParallelism = 16,
                     CancellationToken = timeout.Token,
-                }, async (item, token) => await hub.Clients.Group(LiveChangeNotifier.Group(item.Workspace)).SendAsync(item.EventName, item.Payload, token));
+                }, async (item, token) =>
+                {
+                    await hub.Clients.Group(LiveChangeNotifier.Group(item.Workspace)).SendAsync(item.EventName, item.Payload, token);
+                    await hub.Clients.Group(LiveChangeNotifier.MemberGroup(item.Workspace)).SendAsync("resyncRequired", new ResyncRequiredHint(_epoch), token);
+                });
                 if (Interlocked.Exchange(ref _resyncRequired, 0) != 0)
                     foreach (Guid workspace in latest.Values.Select(item => item.Workspace).Distinct())
                         await hub.Clients.Group(LiveChangeNotifier.Group(workspace)).SendAsync("resyncRequired", new ResyncRequiredHint(_epoch), timeout.Token);
@@ -293,6 +320,7 @@ public sealed class LiveChangeNotifier : ICameraTransferActivityPublisher, IPrev
         : this(new LiveChangeBuffer(hub, logger), new WorkspaceContext(false)) { }
     private Guid Id => workspace.Id ?? Guid.Empty;
     public static string Group(Guid id) => $"workspace:{id:N}";
+    public static string MemberGroup(Guid id) => $"workspace-members:{id:N}";
     public string Epoch => buffer.Epoch;
     public bool ActivityCoverageComplete => buffer.IsActivityCoverageComplete(Id);
     public void CaptureChanged(Guid id, string kind) => buffer.CaptureChanged(Id, id, kind);
