@@ -32,6 +32,8 @@ If your npm policy defers esbuild's postinstall, run `npm install-scripts approv
 
 Sources configures shared incoming upload connections; Curation handles photographic decisions; Gallery browses accepted Captures; Delivery explains outgoing work.
 Settings opens Workspace for personal width, motion and advanced preview-quality preferences; Storage holds shared policy and capacity.
+Owners and Administrators also have Settings → Members for existing membership and Viewer visibility; all members can leave through Settings → Workspace → Workspace membership, subject to the last-Owner safeguard.
+The [workspace guide](../../docs/workspaces.md) explains the fixed roles and access-change boundary.
 Gallery has a separate recoverable Trash view; its **Storage settings** action opens Storage directly.
 The [retention guide](../../docs/retention.md) explains Favorites, recovery windows and paused work after Restore.
 The [Collection guide](../../docs/collections.md) covers incoming defaults, independent photo filters, management and single/bulk moves within these workspaces.
@@ -44,6 +46,10 @@ The SPA uses same-origin `/auth/config`, generated Kiota requests and `/live/cha
 After sign-in, the shell loads the authenticated user's workspace memberships. In tenancy mode, choose a listed workspace before it mounts; a URL selection is confirmed against that membership list on every full page load. An incomplete membership query stays retryable and permits explicitly choosing a listed, confirmed workspace; it never opens an unconfirmed workspace or silently replaces a URL selection. The legacy single-workspace mode is used only when the Server explicitly reports that workspace selection is not required.
 The selected workspace ID stays in the page URL as `?workspace=<guid>` and is sent as `X-ShutterSpool-Workspace` on scoped API and authenticated preview requests. The live hub receives the same ID in its URL because WebSocket handshakes cannot set the scope header. Server membership checks remain authoritative; a URL value never grants access.
 The shell retains one selected workspace across `/` and `/captures/:id`; explicit Capture links open the requested photograph in Gallery. Switching workspaces confirms the existing unsaved-work departure guard, then reloads the shell so private drafts, previews and live state cannot cross workspace boundaries.
+It loads current workspace access before mounting private controls. Permission gates cover requests, navigation, keyboard actions, autosave and queued bulk items, not only visible buttons.
+An ordinary `permission-denied` response preserves a valid sign-in; reconciliation refreshes permissions. Revoked membership closes the selected workspace and requires explicit selection again.
+Viewer refreshes replace their cached media window and recheck the active photograph so policy or current-Reject changes cannot leave forbidden photographs in an old loaded page.
+Curator/Viewer live hints contain no media or operational IDs; the existing reconciliation path rereads authorized state.
 Paged Capture reads and a bounded tile window keep browsing independent of original media size.
 Original downloads are not offered by this workspace; selection does not fetch originals.
 
@@ -96,7 +102,7 @@ An uncertain mutation response requires an authoritative reread before another a
 Live subscription precedes snapshots; racing hints coalesce into a follow-up read.
 Refresh scopes separate Capture, preview, Source, delivery, storage and erasure changes.
 Inactive photo, delivery and storage views retain an invalidation for revalidation when opened; preview hints do not reload configuration.
-Reconnect, explicit Refresh and 60-second foreground reconciliation recover missed hints while preserving drafts and the active photograph.
+Reconnect, explicit Refresh and 40-second foreground reconciliation recover missed hints while preserving authorized drafts and the active photograph. Viewer refresh replaces cached media and rereads the active photograph; denied media is removed.
 Stale observations remain dated last-known evidence rather than apparent live progress.
 
 Source/Destination removal uses revision-checked delete-or-archive APIs and never removes original/provider files.

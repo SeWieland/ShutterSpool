@@ -130,6 +130,9 @@ public sealed class SecurityBoundaryTests(WebApplicationFactory<Program> factory
         byte[] signingKey = Encoding.UTF8.GetBytes("test-only-signing-key-must-be-at-least-32-bytes");
         using WebApplicationFactory<Program> server = factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
         {
+            services.RemoveAll<DbContextOptions<ShutterSpoolDbContext>>();
+            services.RemoveAll<Microsoft.EntityFrameworkCore.Infrastructure.IDbContextOptionsConfiguration<ShutterSpoolDbContext>>();
+            services.AddDbContextFactory<ShutterSpoolDbContext>(options => options.UseInMemoryDatabase(Guid.NewGuid().ToString("N")));
             services.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options =>
             {
                 options.TokenValidationParameters = new TokenValidationParameters

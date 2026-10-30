@@ -41,11 +41,12 @@ Any named connection can use a `<reference>File` entry pointing to a mounted sec
 | `…:StorageIdentity`, `…:StorageRoot`, `…:AllocatedBytes` | Stable operator storage identity, absolute allocated root and fixed byte budget. |
 | `…:ConnectionReference`, `…:MigrationConnectionReference` | Runtime and migration connection names for the same tenant database, with distinct roles. |
 | `…:OwnerIssuer`, `…:OwnerSubject` | Verified initial member identity bound to the configured OIDC authority. HTTPS is required except for the supported non-packaged loopback development issuer. |
+| `…:SetupOperatorIdentity` | Identifiable authenticated operator responsible for the initial Owner grant; required before unfinished initial setup can commit. |
 
 Definitions and migration connections are operator-command inputs; normal Server operation reads activated definitions from the control registry and needs only its restricted control/tenant connections.
 Keep migration secrets out of the normal runtime's mounts/configuration. Preserve the existing deployment encryption key with all tenant recovery sets.
 The control registry stores routing/provisioning facts and connection reference names, not connection secrets or authoritative memberships.
-This tenancy foundation gives provisioned members management access; delegated member roles are not yet available.
+Provisioning assigns the verified initial member the Owner role. Owners manage workspace membership; Administrators manage non-Owner members, Curators curate media, and Viewers read eligible media. Installation operation does not confer a workspace membership.
 
 ### Mount runtime and operator configuration
 
@@ -114,7 +115,9 @@ workspace_operator --workspace-provision 11111111-1111-4111-8111-111111111111 22
 
 Replace both example GUIDs: the first identifies the configured workspace and the second identifies this provisioning operation. Retain them for retry.
 Initialization refuses an unknown nonempty database/root. Provisioning records the exact targets and initial identity, establishes schema, keys, defaults and storage markers, and activates only after checks succeed.
+The initial Owner grant and its operator-attributed audit/result commit together; an audit failure leaves no active initial grant. `SetupOperatorIdentity` is a trusted-host attestation, not application authentication of the operator. Keep identity-verification evidence in the protected onboarding record.
 Retry the same operation and inputs after interruption; changed targets/identity are a conflict. Repeating a completed operation does not regrant removed membership.
+Existing completed provisioning and upgrades do not require a new setup attestation or fabricate historical operator evidence.
 Do not erase registry rows, markers or migration history to force a retry.
 
 ### Upgrade workspace databases
@@ -130,6 +133,8 @@ Normal Server operation holds `.shutterspool-writers.lock` in each allocated roo
 Operator commands serialize through the control database. These safeguards do not stop unrelated tools or replace the stopped-writer procedure.
 Keep the instance closed on any failed upgrade or identity/key/recovery check; repair forward or restore a complete eligible set under the [supported recovery boundary](#supported-recovery-boundary).
 Normal startup validates exact schema compatibility and storage identity and completes tenant recovery without migrations or initial-grant replay.
+The workspace-role migration preserves existing grants and their active/inactive state, assigning them Owner authority to retain their prior administrative access. It starts Viewer visibility at released, non-rejected Active Captures and preserves existing media and workflow state.
+Review current Owners after upgrading. The migration deliberately refuses a downgrade that would discard role or access-audit state; repair forward or restore a complete eligible recovery set.
 
 ### Resize a storage allocation
 
@@ -147,7 +152,57 @@ An already-applied retry is idempotent. The command changes only the assigned re
 Workspace quota settings cannot exceed the assigned allocation or disable its cap. Receive, original, quarantine, temporary-copy and disk-preview writes stay in that workspace's storage boundary.
 Unused allocation cannot be borrowed from another workspace; fixed budgets do not guarantee that storage is currently available or replace physical free-space checks.
 Platform enforcement and recovery must be qualified on the actual deployment; application tests are not persistent-volume or power-loss evidence.
-This foundation does not provide delegated roles or invitations and does not establish readiness to open a hosted service.
+Invitation creation is unavailable. Provisioning and role support do not establish readiness to open a hosted service.
+
+## Protected Owner recovery
+
+Use the identity provider's native account recovery first: retaining the same issuer and subject retains the workspace membership.
+If another Owner can sign in, prefer ordinary membership administration. An Administrator role, an email-address match or knowledge of private photographs does not prove ownership.
+The following exceptional procedure is a host-authenticated operator command, with no public recovery endpoint and no automatic staff membership.
+
+Before onboarding, keep a minimal verified recovery contact and designated current Owner in a protected operator record outside the workspace login dependency.
+Keep that designation current: Owner removal, demotion or disablement invalidates it. Routine contact or representative changes require a current Owner's request or authorization; verify it through the established channel, confirm the new representative and audit the change in the protected record.
+A suspected compromised contact must not authorize its own replacement. Independently establish current customer authority or leave access unchanged.
+For a personally known customer, direct confirmation can establish that authority. A replacement contact supplied only by the recovery requester is insufficient.
+
+1. Authenticate to the protected operator host and identify the exact workspace. Confirm the request through the established, uncompromised channel and verify the representative still has current authority. Obtain fresh authenticated proof of control of the target OIDC issuer and subject through the identity provider. Keep the evidence in the protected operator record, not application logs.
+2. Inspect current tenant authority using the configuration and `workspace_operator` function above:
+
+   ```sh
+   workspace_operator --workspace-access 11111111-1111-4111-8111-111111111111
+   ```
+
+   The output contains `authorityRevision` and current membership identities, roles, active state and revisions. Protect this output. Match the designated representative to an active Owner; use `-1` for the target revision only when the exact target issuer/subject has no membership.
+3. Create a protected JSON request of at most 16 KiB in `secrets/workspace-migration/recovery.json`, readable by the operator container's UID 1654. It requires the following fields:
+
+   | Field | Value |
+   | --- | --- |
+   | `expectedAuthorityRevision` | Current inspected authority revision. |
+   | `representativeMembershipId`, `expectedRepresentativeRevision` | Verified designated Owner's membership and revision. |
+   | `targetIssuer`, `targetSubject`, `expectedTargetRevision` | Freshly verified target principal and its current revision, or `-1` if absent. The issuer must exactly match the configured public OIDC authority. |
+   | `verificationReference`, `verificationMethod` | Reference to the protected evidence and a short description of how it was verified. No evidence copies, credentials or tokens. |
+   | `operatorIdentity`, `reason` | Identifiable authenticated operator and the reason for this exceptional recovery, retained in the access audit. |
+
+4. Recheck the protected designation/contact record immediately before executing the change. Serialize this manual recovery procedure with contact/designation updates; a changed or disputed designation requires new verification. Use a new operation GUID for the verified decision and retain it with the request:
+
+   ```sh
+   workspace_operator --workspace-recover-owner 11111111-1111-4111-8111-111111111111 33333333-3333-4333-8333-333333333333 /run/workspace-migration/recovery.json
+   ```
+
+   The command checks tenant identity/schema, current authority and membership revisions inside the access-change transaction. It grants the target Owner, revokes the replaced representative's membership, and records the result and audit atomically. It does not change IdP credentials, other workspaces or media. Already admitted work can finish under the ordinary admission boundary.
+   The verification fields are the operator's attestation: the application does not independently authenticate a human or validate external contact evidence. Missing or disputed proof must stop the procedure before invoking the command.
+5. If the result is uncertain, retry the same operation GUID and unchanged request to retrieve its recorded result. A conflict requires inspecting current authority and fresh verification for a new operation; do not merely substitute newer revision numbers.
+6. Confirm successful sign-in. After identity replacement, explicitly establish and verify the new recovery designation; do not silently transfer the former principal's contact authority. Send the completion notice manually through the established contact channel, then record its outcome:
+
+   ```sh
+   workspace_operator --workspace-recovery-notification 11111111-1111-4111-8111-111111111111 33333333-3333-4333-8333-333333333333 success
+   ```
+
+   Use `failed` for an unsuccessful notice and follow up through the protected procedure. The application initially records `pending`; notification failure does not undo committed recovery. There is no application mail queue.
+
+These access commands do not require a storage-maintenance shutdown, but require the same protected migration credentials and exact tenant configuration. Never expose those credentials to ordinary Server operation.
+Before opening hosted access, name the operator/contact custodian, choose minimal evidence and audit retention and notification handling, and rehearse independent host access and synthetic recovery.
+Keep a current authorization checkpoint outside backups. After restore, reconcile current memberships, credentials, contact designations and offers against that checkpoint before reopening; an older database alone cannot establish current authority.
 
 ## Supported recovery boundary
 

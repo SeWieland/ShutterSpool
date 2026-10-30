@@ -16,6 +16,13 @@ Normal shared-workspace startup checks the exact supported schema and storage id
 It holds an exclusive writer-lock file in each allocated root for its lifetime; operator upgrade/allocation commands acquire the same locks before changing state.
 Fixed filesystem allocations preserve tenant-local quota reservations without cross-database upload accounting.
 
+Memberships add a fixed role and revision to the issuer/subject grant; Viewer policy and access audit/operation results stay in the same tenant database.
+The workspace-role migration upgrades prior administrative grants to Owner while retaining their active/revoked state.
+Apply it through the existing explicit shared-workspace upgrade procedure; it does not adopt an incompatible historical installation.
+Access changes serialize current actor/target/revision/last-Owner checks and their audit in one short transaction.
+Ordinary workflow commands use fresh request/item admission and retain their existing feature transactions; admitted work may commit after revocation.
+See [authorization](authentication-and-authorization.md#roles-and-access-changes) for that boundary and the current media predicate.
+
 Camera ingress keeps login/admission records separate from Sources and Assets.
 Admission checks the login's credential generation under the credential/Source locks; an already admitted transfer may finish after revocation.
 Each Source selects one explicit `ConnectionProfile`; a camera login records the profile supplied by its trusted callback route.

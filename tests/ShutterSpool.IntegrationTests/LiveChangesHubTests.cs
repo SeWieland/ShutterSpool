@@ -536,6 +536,12 @@ public sealed class LiveChangesHubTests(WebApplicationFactory<Program> factory)
         public Task<bool> IsActiveAsync(string issuer, string subject, CancellationToken cancellationToken) =>
             Unavailable ? throw new InvalidOperationException("synthetic authority store outage") : Task.FromResult(true);
         public Task BootstrapAsync(string issuer, string subject, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<WorkspaceMembership?> GetAsync(string issuer, string subject, CancellationToken cancellationToken) =>
+            Unavailable ? throw new InvalidOperationException("synthetic authority store outage")
+                : Task.FromResult<WorkspaceMembership?>(new(Guid.Empty, issuer, subject, WorkspaceRole.Owner, 0, true));
+        public Task<WorkspaceMembership[]> ListAsync(CancellationToken token) => throw new NotSupportedException();
+        public Task<WorkspaceViewerPolicy> GetViewerPolicyAsync(CancellationToken token) => Task.FromResult(new WorkspaceViewerPolicy(false, 0));
+        public Task<AccessChangeResult> ChangeAsync(AccessChange change, CancellationToken token) => throw new NotSupportedException();
     }
 
     private sealed class CapturedActivityExporter : BaseExporter<Activity>

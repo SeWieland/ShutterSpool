@@ -64,6 +64,33 @@ test('revocation during renewal cannot restore private access', async () => {
   assert.equal(c.api.accessMessage.value, 'Grant revoked')
 })
 
+test('workspace permission loss clears private consumers while retaining the shared issuer login', () => {
+  const c = client(async () => null)
+  const user = { access_token: 'shared-login', expires_in: 300 }
+  c.api.session.value = user
+  let cleared = 0
+  c.api.onAccessLost(() => cleared++)
+  const generation = c.api.accessGeneration()
+  c.api.clearPrivateAccess()
+  assert.equal(c.api.session.value, user)
+  assert.equal(c.api.accessGeneration(), generation + 1)
+  assert.equal(cleared, 1)
+  assert.equal(c.calls.removed, 0, 'workspace access loss must not remove the OIDC user')
+})
+
+test('workspace cache invalidation during token renewal does not interrupt the shared OIDC session', async () => {
+  let finish
+  const c = client(() => new Promise(resolve => { finish = resolve }))
+  c.api.session.value = { access_token: 'old', expires_in: 10 }
+  const pending = c.api.token()
+  await new Promise(resolve => setImmediate(resolve))
+  c.api.clearPrivateAccess()
+  finish({ access_token: 'renewed', expires_in: 300 })
+  assert.equal(await pending, 'renewed')
+  assert.equal(c.api.session.value.access_token, 'renewed')
+  assert.equal(c.calls.removed, 0)
+})
+
 test('reload uses one silent attempt then a credential-free top-level fallback', async () => {
   const c = client(async () => { throw new Error('iframe blocked') })
   await c.api.restoreSession('/captures/shot')

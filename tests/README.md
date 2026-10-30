@@ -37,7 +37,7 @@ Unix permission checks, Windows symbolic-link privileges, the distinct Linux `/d
 
 After starting the local Keycloak companion through Aspire, run `pwsh -File tests/verify-keycloak-bootstrap.ps1 -KeycloakContainer <running-keycloak-container-name>` from the repository root. This separate runtime check uses the mounted reconciliation script and a uniquely named disposable realm to verify fresh subject retention, exact username matching, repeated reconciliation and preservation of identity/credentials on a rejected subject mismatch. It deletes only the realm and temporary files created by that invocation; existing realms and deployment secrets are retained. PostgreSQL CI acceptance remains mandatory independently of this companion check.
 
-The database suite checks the single initial migration, model/snapshot consistency, fresh startup/restart, concurrent startup serialization, SQL-owned key custody and Collection constraints, and non-destructive refusal of historical histories and unversioned objects. It does not exercise upgrades from historical migration chains.
+The database suite checks the supported initial/workspace-role migration chain, model/snapshot consistency, fresh startup/restart, concurrent startup serialization, SQL-owned key custody and Collection constraints, and non-destructive refusal of unsupported historical histories and unversioned objects. This does not establish an upgrade path from those incompatible historical installations.
 
 Preserve meaningful regression expectations when changing implementation boundaries. Tests supply evidence for the request and documented safety constraints, rather than replacing them.
 

@@ -29,7 +29,7 @@ namespace ShutterSpool.IntegrationTests;
 public sealed class WorkspaceHttpEnvironmentCollection;
 
 [Collection("Workspace HTTP environment")]
-public sealed class WorkspaceTenancyHttpTests
+public sealed partial class WorkspaceTenancyHttpTests
 {
     private const string Issuer = "https://identity.example";
     private static readonly byte[] SigningKey = "synthetic-tenant-http-signing-key-at-least-32-bytes"u8.ToArray();
@@ -75,7 +75,7 @@ public sealed class WorkspaceTenancyHttpTests
             Assert.Equal(first.Id, Assert.Single(unavailable.Items).Id);
             Assert.True(unavailable.Incomplete);
             using HttpResponseMessage denied = await SendAsync(client, HttpMethod.Get, "/management/captures", second.Id);
-            Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, denied.StatusCode);
         }
         finally { fixture.Storage.Configuration[tenantKey] = originalTenant; }
 

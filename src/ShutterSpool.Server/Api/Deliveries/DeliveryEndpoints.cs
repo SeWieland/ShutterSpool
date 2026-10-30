@@ -33,7 +33,13 @@ public static class DeliveryEndpoints
     }
 
     private static async Task<IResult> RetryAsync(Guid id, CaptureRoutingActionService actions, IDeliveryWorkSignal signal,
-        CancellationToken cancellationToken) => await Respond(await actions.RetryAsync(id, cancellationToken), signal, cancellationToken);
+        ShutterSpool.Application.Security.WorkspaceAccessContext access, CancellationToken cancellationToken)
+    {
+        RoutingActionPreview result = await actions.RetryAsync(id, cancellationToken);
+        if (!access.IsAdministrator) result = result with { PreviousTarget = null, ProposedTarget = null,
+            Explanation = "Retry " + result.Status.ToString(), ConfirmationToken = null };
+        return await Respond(result, signal, cancellationToken);
+    }
 
     private static async Task<IResult> PreviewResendAsync(Guid id, CaptureRoutingActionService actions,
         CancellationToken cancellationToken) => Respond(await actions.PreviewResendAsync(id, cancellationToken));

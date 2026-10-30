@@ -17,6 +17,7 @@ import { useWorkspacePreferences } from '../composables/useWorkspacePreferences'
 import { useCaptureBrowser } from '../composables/useCaptureBrowser';
 import { effectiveMotion, reconcileCaptures, curationTiming } from '../lib/workspace-interactions';
 import { pageWorkspaceId, readWorkspaceId, withWorkspace } from '../lib/workspace-context';
+import { mayCurate, mayAdminister, workspaceAccess, refreshWorkspaceAccess, closeWorkspaceAccess } from '../lib/workspace-access';
 import type { CaptureInboxItemResponse as Capture, CaptureDetailResponse, CaptureCurationResponse, SourceConfigurationResponse } from '../api/models';
 const props = defineProps<{
     captureId?: string;
@@ -26,7 +27,8 @@ const workspaceRoute = (path: string) => withWorkspace(path, pageWorkspaceId);
 type View = 'Sources' | 'Curation' | 'Gallery' | 'Delivery' | 'Settings';
 const view = ref<View>('Gallery');
 const settingsDirty = ref(false);
-const settingsSection = ref<'Workspace' | 'Storage'>('Workspace');
+const settingsSection = ref<'Workspace' | 'Storage' | 'Members'>('Workspace');
+const settingsSections = computed(() => mayAdminister.value ? ['Workspace', 'Storage', 'Members'] as const : ['Workspace'] as const);
 const storageVisited = ref(false);
 const settingsOrigin = ref<View>('Gallery');
 const settingsOriginSurface = ref<'photos' | 'trash'>('photos');
@@ -186,7 +188,7 @@ const enterFull = viewerSession.enter;
 const closeFull = viewerSession.close;
 const fullscreenChanged = viewerSession.fullscreenChanged;
 const keyboard = viewerSession.keyboard;
-const canCurate = computed(() => !bulkBusy.value && !!edit.value?.editable && live.online.value && !['Conflict', 'Save failed', 'Checking outcome'].includes(edit.value.status));
+const canCurate = computed(() => mayCurate.value && !bulkBusy.value && !!edit.value?.editable && live.online.value && !['Conflict', 'Save failed', 'Checking outcome'].includes(edit.value.status));
 const phone = ref(false);
 const inspectorOpen = ref(false);
 const tag = curationVisit.activeTag;
@@ -280,7 +282,7 @@ const labels = ['Red', 'Yellow', 'Green', 'Blue', 'Purple'];
 const workflows = [{ name: 'Waiting', icon: 'i-lucide-clock' }, { name: 'Held', icon: 'i-lucide-pause' }, { name: 'Released', icon: 'i-lucide-send' }, { name: 'Attention', icon: 'i-lucide-triangle-alert' }];
 const filter = computed(() => filters[view.value === 'Curation' ? 'Curation' : 'Gallery']);
 const hasCuration = ref(true);
-const availableViews = computed(() => ['Sources', ...(hasCuration.value || view.value === 'Curation' ? ['Curation'] : []), 'Gallery', 'Delivery'] as View[]);
+const availableViews = computed(() => [...(mayAdminister.value ? ['Sources'] : []), ...(mayCurate.value && (hasCuration.value || view.value === 'Curation') ? ['Curation'] : []), 'Gallery', ...(mayAdminister.value ? ['Delivery'] : [])] as View[]);
 const unresolved = computed(() => bulkBusy.value || !!bulkTag.value.trim() || uncertainTrashIds.value.length > 0 || Object.values(dirtyEditors).some(Boolean) || curationVisit.hasPendingTag.value || curationVisit.hasUnresolvedEdits.value);
 const unloadRisk = computed(() => unresolved.value || settingsDirty.value);
 onMounted(() => {
@@ -423,8 +425,11 @@ async function loadPage(next: boolean, reconcile = false, parentSignal?: AbortSi
     const requestSurface = retentionSurface.value;
     const requestCriteria = JSON.stringify(query(false));
     const requestTagDraft = filterTagDraft.value;
+    const viewerAnchor = !mayCurate.value && !next && rows.value.length
+        ? (galleryInspectionId.value || full.value ? activeId.value : gridElement.value?.querySelector<HTMLElement>('.gallery-tile')?.dataset.id ?? String(rows.value[0]?.id))
+        : undefined;
     const pageRequest = captureBrowser.requestPage({
-        query: query(next),
+        query: { ...query(next), ...(viewerAnchor ? { startAt: viewerAnchor } : {}) },
         parentSignal,
         onCancel: () => { loading.value = false; },
         read: (queryParameters, signal) => api.management.captures.get({ queryParameters, options: [cancellable(signal)] }),
@@ -452,7 +457,9 @@ async function loadPage(next: boolean, reconcile = false, parentSignal?: AbortSi
         const retained = reconcile && page?.nextCursor ? await revalidateBoundary(incoming, isCurrent, signal) : rows.value;
         if (!isCurrent()) return;
         rows.value = next || reconcile && !!page?.nextCursor ? reconcileCaptures(next ? rows.value : retained, incoming, next, pageAfterId.value, appearance.value.sort === 'oldest') : incoming;
+        if (!mayCurate.value && !next) playback.reconcilePage(page ?? { items: [] });
         captureBrowser.acceptPage(page);
+        if (!mayCurate.value) captureBrowser.save('Gallery');
         if (orderSelection) {
             const loaded = new Set(rows.value.map(row => String(row.id)));
             selection.value = orderSelection.filter(id => loaded.has(id));
@@ -517,6 +524,8 @@ async function refreshData(ids?: Set<string>, previews?: {
     all: boolean;
     ids: Set<string>;
 }, scopes = new Set(['capture', 'previews', 'sources', 'delivery', 'storage', 'erasure'])) {
+    const previousAccess = accessGeneration();
+    if (!await refreshWorkspaceAccess() || previousAccess !== accessGeneration() || !workspaceActive) return;
     if (scopes.has('capture') || scopes.has('previews')) slideshowReady.value = false;
     const access = accessGeneration();
     refreshController?.abort();
@@ -525,8 +534,12 @@ async function refreshData(ids?: Set<string>, previews?: {
     let ownerKey = refreshOwnerKey();
     const current = () => workspaceActive && !controller.signal.aborted && access === accessGeneration() && ownerKey === refreshOwnerKey();
     const requested = ++refreshSequence;
+    const viewerDeadline = !mayCurate.value ? setTimeout(() => {
+        if (current()) closeWorkspaceAccess();
+    }, 8_000) : undefined;
     try {
-    const readSources = scopes.has('sources');
+    const readSources = mayAdminister.value && scopes.has('sources');
+    if (!mayAdminister.value && !initialized.value) initialized.value = true;
     if (readSources) try {
         const page = await api.management.sources.get({ queryParameters: { limit: 100 }, options: [cancellable(controller.signal)] });
         if (!current() || requested !== refreshSequence) return;
@@ -550,6 +563,13 @@ async function refreshData(ids?: Set<string>, previews?: {
     if (!session.value || !current() || requested !== refreshSequence)
         return;
     const captureActive = (view.value === 'Gallery' || view.value === 'Curation') && retentionSurface.value === 'photos';
+    if (!mayCurate.value && !captureActive) {
+        captureBrowser.clear();
+        capture.value = undefined;
+        activeId.value = paneAId.value = secondId.value = galleryInspectionId.value = '';
+        previewVersions.value = {};
+        endSlideshow();
+    }
     const deliveryActive = view.value === 'Delivery';
     const storageActive = view.value === 'Gallery' && retentionSurface.value === 'trash' || view.value === 'Settings' && settingsSection.value === 'Storage';
     if (scopes.has('capture') && !captureActive) capturesStale.value = true;
@@ -557,7 +577,7 @@ async function refreshData(ids?: Set<string>, previews?: {
     if (scopes.has('storage') && !storageActive) storageStale.value = true;
     if (scopes.has('delivery') && deliveryActive) { deliveryGeneration.value++; deliveryStale.value = false; }
     if (scopes.has('storage') && storageActive) { generation.value++; storageStale.value = false; }
-    if (scopes.has('capture') && captureActive) {
+    if (mayCurate.value && scopes.has('capture') && captureActive) {
         try {
             const waiting = await api.management.captures.get({ queryParameters: { released: false, limit: 1 }, options: [cancellable(controller.signal)] });
             if (!current() || requested !== refreshSequence) return;
@@ -567,7 +587,7 @@ async function refreshData(ids?: Set<string>, previews?: {
             handleFailure(failure);
         }
     }
-    hasCuration.value = policyStale.value || sources.value.some(s => s.curationMode !== 'Immediate') || waitingForCuration.value;
+    hasCuration.value = mayCurate.value && (policyStale.value || sources.value.some(s => s.curationMode !== 'Immediate') || waitingForCuration.value);
     if (scopes.has('capture') && (scopes.has('delivery') || scopes.has('storage') || scopes.has('erasure'))) evidenceGeneration.value++;
     if (scopes.has('capture') && captureActive && ids && rows.value.length) {
         for (const id of ids) {
@@ -597,7 +617,7 @@ async function refreshData(ids?: Set<string>, previews?: {
         evidenceGeneration.value++;
     }
     if (scopes.has('capture') && captureActive) {
-        await loadPage(false, rows.value.length > 0, controller.signal);
+        await loadPage(false, mayCurate.value && rows.value.length > 0, controller.signal);
         if (!current() || requested !== refreshSequence) return;
         capturesStale.value = false;
         evidenceGeneration.value++;
@@ -613,8 +633,12 @@ async function refreshData(ids?: Set<string>, previews?: {
         for (const id of idsToInvalidate)
             if (id) previewVersions.value[id] = (previewVersions.value[id] ?? 0) + 1;
     }
-    if (current() && requested === refreshSequence) slideshowReady.value = !pageError.value && !detailError.value;
+    if (current() && requested === refreshSequence) {
+        if (!mayCurate.value && (pageError.value || detailError.value)) { closeWorkspaceAccess(); return; }
+        slideshowReady.value = !pageError.value && !detailError.value;
+    }
     } finally {
+        clearTimeout(viewerDeadline);
         if (refreshController === controller && activeRefreshScopes === scopes)
             activeRefreshScopes = undefined;
     }
@@ -622,7 +646,7 @@ async function refreshData(ids?: Set<string>, previews?: {
 const live = useReconciliation(refreshData);
 const curationActions = useCaptureCurationActions({
     selection, rows, sessions: editSessions,
-    online: computed(() => live.online.value), view,
+    online: computed(() => live.online.value && mayCurate.value), view,
     visit: () => photoVisit,
     observe: observeCuration,
     forget: id => { captureBrowser.forget(id); selection.value = selection.value.filter(value => value !== id); },
@@ -713,7 +737,9 @@ async function openCapture(id: string, viewer = false, pane?: 'A' | 'B', focusOn
         const status = handleFailure(failure);
         if (status === 404 && isCurrent()) {
             await forgetUnavailableCapture(id);
-            error.value = 'This Capture is no longer available in this workspace. Open Trash or Settings privacy requests for current recovery/removal evidence.';
+            error.value = mayCurate.value
+                ? 'This Capture is no longer available in this workspace. Open Trash or ask an administrator for current recovery/removal evidence.'
+                : 'This photograph is not available to you in this workspace. Choose a visible photograph.';
         }
         else if (isCurrent())
             detailError.value = 'Unable to open this Capture. Refresh to try again.';
@@ -722,6 +748,7 @@ async function openCapture(id: string, viewer = false, pane?: 'A' | 'B', focusOn
     }
 }
 function observeCuration(id: string, current: CaptureCurationResponse) {
+    if (!mayCurate.value) return;
     return curationVisit.observe(id, current, body => api.management.captures.byId(id).curation.put(body), async () => {
         const detail = await api.management.captures.byId(id).get();
         if (!detail?.curation)
@@ -730,6 +757,7 @@ function observeCuration(id: string, current: CaptureCurationResponse) {
     }, handleFailure);
 }
 async function openSettings(section: 'Workspace' | 'Storage' = 'Workspace') {
+    if (section === 'Storage' && !mayAdminister.value) return;
     const origin = view.value;
     const originSurface = retentionSurface.value;
     const focus = document.activeElement as HTMLElement | undefined;
@@ -746,7 +774,8 @@ async function openSettings(section: 'Workspace' | 'Storage' = 'Workspace') {
     await nextTick();
     document.getElementById?.('settings-section-heading')?.focus();
 }
-function selectSettingsSection(section: 'Workspace' | 'Storage') {
+function selectSettingsSection(section: 'Workspace' | 'Storage' | 'Members') {
+    if (section !== 'Workspace' && !mayAdminister.value) return;
     settingsSection.value = section;
     if (section === 'Storage') storageVisited.value = true;
 }
@@ -760,6 +789,7 @@ async function returnFromSettings() {
     target?.focus({ preventScroll: true });
 }
 async function switchView(next: View) {
+    if ((next === 'Sources' || next === 'Delivery') && !mayAdminister.value || next === 'Curation' && !mayCurate.value) return;
     if (next === view.value)
         return;
     if (view.value === 'Settings' && settingsDirty.value && !window.confirm('Discard unsaved storage settings and leave Settings?')) return;
@@ -869,7 +899,7 @@ const unsubscribe = onAccessLost(() => {
     selection.value = [];
     orderSelection = undefined;
     suggestions.value = [];
-    closeFull();
+    closeFull(false);
 });
 onUnmounted(() => {
     workspaceActive = false;
@@ -1000,6 +1030,7 @@ let holdTimer: ReturnType<typeof setTimeout> | undefined;
 let holdStart = { x: 0, y: 0 };
 let held = false;
 function startHold(event: PointerEvent, id: string) {
+    if (!mayCurate.value) return;
     held = false;
     if (event.pointerType !== 'touch' || selecting.value)
         return;
@@ -1045,7 +1076,7 @@ async function bulk(action: 'rating' | 'label' | 'tag' | 'removeTag' | 'discard'
         bulkTag.value = '';
 }
 async function captureAction(action: 'hold' | 'restore' | 'release') {
-    if (view.value !== 'Curation' || !edit.value || busyCapture.value || bulkBusy.value)
+    if (!mayCurate.value || view.value !== 'Curation' || !edit.value || busyCapture.value || bulkBusy.value)
         return;
     const id = activeId.value;
     const value = edit.value;
@@ -1096,7 +1127,7 @@ function navigate(delta: number) {
     }
 }
 function curationKey(event: KeyboardEvent) {
-    if (view.value !== 'Curation') return false;
+    if (view.value !== 'Curation' || !mayCurate.value) return false;
     if (view.value === 'Curation' && ['+', '=', '-', 'Home'].includes(event.key)) {
         event.preventDefault();
         setZoom(event.key === 'Home' ? 1 : zoom.value * (event.key === '-' ? 1 / 1.25 : 1.25));
@@ -1187,6 +1218,7 @@ function verifySingleTrash(id: string) {
     void curationActions.verifyTrashOutcomes(new Set([id]));
 }
 async function submitSingleTrash(id: string, expectedRevision: number) {
+    if (!mayCurate.value) return;
     const ownerView = view.value;
     const ownerSurface = retentionSurface.value;
     const moved = await curationActions.submitTrash(id, expectedRevision);
@@ -1227,7 +1259,7 @@ async function submitSingleTrash(id: string, expectedRevision: number) {
                     {{ view }}
                 </h1>
                 <p>
-                    {{ view === 'Curation' ? 'Choose the photographs you want to send.' : view === 'Gallery' ? 'Your photographs, ready to browse.' : view === 'Sources' ? 'Connect your camera and bring in photographs.' : view === 'Settings' ? 'Make your workspace comfortable and manage shared storage.' : 'See where your photographs are going.' }}
+                    {{ view === 'Curation' ? 'Choose the photographs you want to send.' : view === 'Gallery' ? 'Your photographs, ready to browse.' : view === 'Sources' ? 'Connect your camera and bring in photographs.' : view === 'Settings' ? mayAdminister ? 'Make your workspace comfortable and manage shared storage.' : 'Make your workspace comfortable.' : 'See where your photographs are going.' }}
                 </p>
             </div>
             <div class="live-controls">
@@ -1258,7 +1290,7 @@ async function submitSingleTrash(id: string, expectedRevision: number) {
                                 <button v-for="workflow in workflows" :key="workflow.name" :aria-pressed="filter.workflows.includes(workflow.name)" @click="toggleFilter('workflows', workflow.name)"><UIcon :name="workflow.icon" />{{ workflow.name }}</button>
                             </div>
                         </div>
-                        <div class="filter-category">
+                        <div v-if="mayAdminister" class="filter-category">
                             <span id="source-filter-title" class="filter-title">Source</span>
                             <div class="filter-group" role="group" aria-labelledby="source-filter-title">
                                 <button :aria-pressed="!filter.sourceIds.length" @click="filter.sourceIds = []">All sources</button>
@@ -1317,7 +1349,7 @@ async function submitSingleTrash(id: string, expectedRevision: number) {
                 </details>
                 <span class="spacer" />
                 <div v-if="view === 'Gallery'" class="gallery-toolbar-actions">
-                    <div class="retention-navigation" role="group" aria-label="Gallery views"><button :aria-pressed="retentionSurface === 'photos'" @click="retentionSurface = 'photos'"><UIcon name="i-lucide-grid-2x2" />Photos</button><button :aria-pressed="retentionSurface === 'trash'" @click="retentionSurface = 'trash'"><UIcon name="i-lucide-trash-2" />Trash</button></div>
+                    <div v-if="mayCurate" class="retention-navigation" role="group" aria-label="Gallery views"><button :aria-pressed="retentionSurface === 'photos'" @click="retentionSurface = 'photos'"><UIcon name="i-lucide-grid-2x2" />Photos</button><button :aria-pressed="retentionSurface === 'trash'" @click="retentionSurface = 'trash'"><UIcon name="i-lucide-trash-2" />Trash</button></div>
                     <button class="gallery-fullscreen icon-button" :disabled="!rows.length" aria-label="Fullscreen photographs" title="Fullscreen photographs" @click="openGalleryFull"><UIcon name="i-lucide-maximize" /></button>
                 </div>
                 <template v-if="view === 'Curation'">
@@ -1339,10 +1371,10 @@ async function submitSingleTrash(id: string, expectedRevision: number) {
             :motion-enabled="motionEnabled"
             @dirty-change="dirtyEditors.Delivery = $event"
         />
-        <LazyTrashWorkspace :grid-maximum-dimension="workspacePreferences.gridMaximumDimension" v-else-if="view === 'Gallery' && retentionSurface === 'trash'" :online="live.online.value" :generation="generation" @refresh="refresh()" @erased="afterErasure" @storage-settings="openSettings('Storage')" />
+        <LazyTrashWorkspace :grid-maximum-dimension="workspacePreferences.gridMaximumDimension" v-else-if="mayCurate && view === 'Gallery' && retentionSurface === 'trash'" :online="live.online.value" :generation="generation" @refresh="refresh()" @erased="afterErasure" @storage-settings="openSettings('Storage')" />
         <section v-else-if="view === 'Settings'" class="settings-home" aria-label="Settings">
             <nav class="settings-sections" aria-label="Settings sections">
-                <button v-for="section in (['Workspace', 'Storage'] as const)" :key="section" :aria-current="settingsSection === section ? 'page' : undefined" @click="selectSettingsSection(section)"><UIcon :name="section === 'Workspace' ? 'i-lucide-panels-top-left' : 'i-lucide-hard-drive'" />{{ section }}</button>
+                <button v-for="section in settingsSections" :key="section" :aria-current="settingsSection === section ? 'page' : undefined" @click="selectSettingsSection(section)"><UIcon :name="section === 'Workspace' ? 'i-lucide-panels-top-left' : section === 'Members' ? 'i-lucide-users' : 'i-lucide-hard-drive'" />{{ section }}</button>
             </nav>
             <div class="settings-content">
                 <button class="settings-return" @click="returnFromSettings"><UIcon name="i-lucide-arrow-left" />Return to {{ settingsOrigin }}</button>
@@ -1359,12 +1391,13 @@ async function submitSingleTrash(id: string, expectedRevision: number) {
                             <label v-for="key in (['gridMaximumDimension', 'detailMaximumDimension'] as const)" :key="key" :for="`preference-${key}`">{{ key === 'gridMaximumDimension' ? 'Grid preview size' : 'Photo preview size' }}<span class="muted">Pixels · 64–4096</span><input :id="`preference-${key}`" v-model="previewDrafts[key]" type="number" min="64" max="4096" step="1" :aria-invalid="!!previewErrors[key]" :aria-describedby="previewErrors[key] ? `preference-${key}-error` : undefined" @blur="commitPreview(key)" @keydown.enter.prevent="commitPreview(key)" /><span v-if="previewErrors[key]" :id="`preference-${key}-error`" class="preference-error" role="status">{{ previewErrors[key] }}</span></label>
                         </div>
                     </details>
-                    <div class="workspace-reset"><button @click="resetWorkspace(); flushPreferencesOnInteractionEnd()">Reset workspace preferences</button></div>
+                    <WorkspaceLeave :online="live.online.value" /><div class="workspace-reset"><button @click="resetWorkspace(); flushPreferencesOnInteractionEnd()">Reset workspace preferences</button></div>
                 </template>
-                <div v-show="settingsSection === 'Storage'">
+                <div v-if="mayAdminister" v-show="settingsSection === 'Storage'">
                     <p class="muted">Shared settings for photograph storage and recovery.</p>
                     <LazyRetentionSettings v-if="storageVisited" :online="live.online.value" :generation="generation" @dirty="settingsDirty = $event" />
                 </div>
+                <WorkspaceMembers v-if="mayAdminister && settingsSection === 'Members'" :online="live.online.value" :generation="evidenceGeneration" />
             </div>
         </section>
         <template v-else>
@@ -1374,7 +1407,7 @@ async function submitSingleTrash(id: string, expectedRevision: number) {
                 <button :disabled="bulkBusy" @click="selectLoaded">Select all loaded</button>
                 <button :disabled="bulkBusy" @click="selection = []; selecting = false">Select none</button>
                 <span class="muted">Downloads are not available in this alpha.</span>
-                <CollectionMove :ids="selection" :online="live.online.value" :disabled="bulkBusy || unresolved" @busy="bulkBusy = $event" @refresh="refresh(new Set($event))" @completed="selection = selection.filter(id => !$event.includes(id))" />
+                <CollectionMove v-if="mayCurate" :ids="selection" :online="live.online.value" :disabled="bulkBusy || unresolved" @busy="bulkBusy = $event" @refresh="refresh(new Set($event))" @completed="selection = selection.filter(id => !$event.includes(id))" />
             </div>
             <p v-if="view === 'Gallery' && bulkResult" class="notice" role="status">{{ bulkResult }}</p>
             <p v-if="pendingTrashIds.length || uncertainTrashIds.length" class="notice error" role="status">
@@ -1396,7 +1429,7 @@ async function submitSingleTrash(id: string, expectedRevision: number) {
                     No photographs in this view
                 </h2>
                 <p>
-                    Change filters or connect a Source to send photographs.
+                    {{ mayAdminister ? 'Change filters or connect a Source to send photographs.' : 'Change filters or check again when photographs are available to you.' }}
                 </p>
             </div>
             <div v-if="view === 'Curation' && !expanded && activeId && rows.length" class="curation-layout">
@@ -1511,9 +1544,9 @@ async function submitSingleTrash(id: string, expectedRevision: number) {
                             @remove-tag="edit?.change({ tags: edit.intent.tags.filter(tag => tag !== $event) })"
                             @reset="edit?.reset($event)"
                         >
-                            <template #favorite><FavoriteControl compact :capture-id="activeId" :evidence="capture.retention" :disabled="!live.online.value" @refresh="refresh(new Set([$event]))" /></template>
+                            <template #favorite><FavoriteControl v-if="mayCurate" compact :capture-id="activeId" :evidence="capture.retention" :disabled="!live.online.value" @refresh="refresh(new Set([$event]))" /></template>
                             <template #collection>
-                                <CollectionMove :key="String(capture.id)" :ids="[String(capture.id)]" :online="live.online.value" :disabled="edit?.unresolved || bulkBusy || busyCapture" :current-name="capture.currentCollection?.path ?? capture.currentCollection?.name ?? undefined" :released="!!capture.curation?.releasedAt" @busy="bulkBusy = $event" @refresh="refresh(new Set($event))" />
+                                <CollectionMove v-if="mayCurate" :key="String(capture.id)" :ids="[String(capture.id)]" :online="live.online.value" :disabled="edit?.unresolved || bulkBusy || busyCapture" :current-name="capture.currentCollection?.path ?? capture.currentCollection?.name ?? undefined" :released="!!capture.curation?.releasedAt" @busy="bulkBusy = $event" @refresh="refresh(new Set($event))" />
                             </template>
                         </CurationControls>
                         <div class="actions">
@@ -1532,7 +1565,7 @@ async function submitSingleTrash(id: string, expectedRevision: number) {
                                 Release now
                             </button>
                         </div>
-                        <CaptureResumeAction :capture-id="activeId" :evidence="capture.retention" :disabled="!live.online.value" @refresh="refresh(new Set([$event]))" />
+                        <CaptureResumeAction v-if="mayAdminister" :capture-id="activeId" :evidence="capture.retention" :disabled="!live.online.value" @refresh="refresh(new Set([$event]))" />
                         <p v-if="edit?.server.releaseDueAt && !edit.server.releasedAt && !edit.server.held" class="muted">
                             {{ workflowStatus(capture).title }}
                         </p>
@@ -1545,9 +1578,9 @@ async function submitSingleTrash(id: string, expectedRevision: number) {
                         <details class="photograph-storage section-disclosure">
                             <summary><UIcon name="i-lucide-chevron-right" class="disclosure-chevron" aria-hidden="true" />Storage and recovery</summary>
                             <RetentionDetails :evidence="capture.retention" :stale="!live.online.value" expanded />
-                            <NoDeliveryIntentAction :capture="capture" :disabled="!live.online.value" @refresh="refresh(new Set([$event]))" />
-                        <CaptureTrashAction :capture-id="activeId" :name="capture.displayName ?? 'Photograph'" :evidence="capture.retention" :disabled="!live.online.value || bulkBusy" :uncertain="uncertainTrashIds.includes(activeId)" :pending="pendingTrashIds.includes(activeId)" :verifying="trashVerificationBusy" :verification-message="trashVerificationMessage" @submit="submitSingleTrash" @verify="verifySingleTrash" @refresh="afterTrash" />
-                            <PrivacyErasurePanel :capture-id="activeId" :display-name="capture.displayName ?? 'Photograph'" :evidence="capture.retention" :online="live.online.value" :generation="evidenceGeneration" @requested="afterErasure" />
+                            <NoDeliveryIntentAction v-if="mayAdminister" :capture="capture" :disabled="!live.online.value" @refresh="refresh(new Set([$event]))" />
+                        <CaptureTrashAction v-if="mayCurate" :capture-id="activeId" :name="capture.displayName ?? 'Photograph'" :evidence="capture.retention" :disabled="!live.online.value || bulkBusy" :uncertain="uncertainTrashIds.includes(activeId)" :pending="pendingTrashIds.includes(activeId)" :verifying="trashVerificationBusy" :verification-message="trashVerificationMessage" @submit="submitSingleTrash" @verify="verifySingleTrash" @refresh="afterTrash" />
+                            <PrivacyErasurePanel v-if="mayAdminister" :capture-id="activeId" :display-name="capture.displayName ?? 'Photograph'" :evidence="capture.retention" :online="live.online.value" :generation="evidenceGeneration" @requested="afterErasure" />
                         </details>
                     </template>
                     <div v-else role="status" :aria-busy="!detailError">
@@ -1587,17 +1620,17 @@ async function submitSingleTrash(id: string, expectedRevision: number) {
                         <summary><UIcon name="i-lucide-chevron-right" class="disclosure-chevron" aria-hidden="true" />{{ inspectionMode === 'delivery' ? 'Delivery' : 'About this photograph' }}</summary>
                         <h2>{{ inspectionCapture?.displayName ?? 'Photograph details' }}</h2>
                         <template v-if="inspectionCapture">
-                            <div class="photograph-markers"><CaptureRating :rating="inspectionCapture.curation?.rating" :label="inspectionCapture.curation?.label" /><FavoriteControl compact :capture-id="galleryInspectionId" :evidence="inspectionCapture.retention" :disabled="!live.online.value" @refresh="refresh(new Set([$event]))" /></div>
+                            <div class="photograph-markers"><CaptureRating :rating="inspectionCapture.curation?.rating" :label="inspectionCapture.curation?.label" /><FavoriteControl v-if="mayCurate" compact :capture-id="galleryInspectionId" :evidence="inspectionCapture.retention" :disabled="!live.online.value" @refresh="refresh(new Set([$event]))" /></div>
                             <p class="muted">{{ inspectionCapture.assets?.map(asset => asset.variant).join(' + ') }} · {{ cameraDescription(inspectionCapture) }}</p>
                             <p v-if="inspectionCapture.curation?.tags?.length" class="muted">{{ inspectionCapture.curation.tags.join(' · ') }}</p>
-                            <CaptureResumeAction :capture-id="galleryInspectionId" :evidence="inspectionCapture.retention" :disabled="!live.online.value" @refresh="refresh(new Set([$event]))" />
-                            <CollectionMove v-if="inspectionMode !== 'delivery'" :key="String(inspectionCapture.id)" :ids="[String(inspectionCapture.id)]" :online="live.online.value" :disabled="bulkBusy" :current-name="inspectionCapture.currentCollection?.path ?? inspectionCapture.currentCollection?.name ?? undefined" :released="!!inspectionCapture.curation?.releasedAt" @busy="bulkBusy = $event" @refresh="refresh(new Set($event))" />
+                            <CaptureResumeAction v-if="mayAdminister" :capture-id="galleryInspectionId" :evidence="inspectionCapture.retention" :disabled="!live.online.value" @refresh="refresh(new Set([$event]))" />
+                            <CollectionMove v-if="mayCurate && inspectionMode !== 'delivery'" :key="String(inspectionCapture.id)" :ids="[String(inspectionCapture.id)]" :online="live.online.value" :disabled="bulkBusy" :current-name="inspectionCapture.currentCollection?.path ?? inspectionCapture.currentCollection?.name ?? undefined" :released="!!inspectionCapture.curation?.releasedAt" @busy="bulkBusy = $event" @refresh="refresh(new Set($event))" />
                         <details class="capture-evidence section-disclosure" :open="galleryEvidenceOpen" @toggle="galleryEvidenceOpen = ($event.target as HTMLDetailsElement).open"><summary><UIcon name="i-lucide-chevron-right" class="disclosure-chevron" aria-hidden="true" />{{ inspectionMode === 'delivery' ? 'Delivery details' : 'Details' }}</summary><CaptureEvidence :capture="inspectionCapture" :generation="evidenceGeneration" :online="live.online.value" :active="galleryEvidenceOpen" :read-only="inspectionMode !== 'delivery'" :delivery-only="inspectionMode === 'delivery'" :focus-state="inspectionDeliveryState" @refresh="refresh(new Set([$event]))" /></details>
-                            <details class="photograph-storage section-disclosure"><summary><UIcon name="i-lucide-chevron-right" class="disclosure-chevron" aria-hidden="true" />Storage and recovery</summary>
+                            <details v-if="mayCurate" class="photograph-storage section-disclosure"><summary><UIcon name="i-lucide-chevron-right" class="disclosure-chevron" aria-hidden="true" />Storage and recovery</summary>
                                 <RetentionDetails :evidence="inspectionCapture.retention" :stale="!live.online.value" expanded />
-                                <NoDeliveryIntentAction :capture="inspectionCapture" :disabled="!live.online.value" @refresh="refresh(new Set([$event]))" />
-                                <CaptureTrashAction :capture-id="galleryInspectionId" :name="inspectionCapture.displayName ?? 'Photograph'" :evidence="inspectionCapture.retention" :disabled="!live.online.value || bulkBusy" :uncertain="uncertainTrashIds.includes(galleryInspectionId)" :pending="pendingTrashIds.includes(galleryInspectionId)" :verifying="trashVerificationBusy" :verification-message="trashVerificationMessage" @submit="submitSingleTrash" @verify="verifySingleTrash" @refresh="afterTrash" />
-                                <PrivacyErasurePanel :capture-id="galleryInspectionId" :display-name="inspectionCapture.displayName ?? 'Photograph'" :evidence="inspectionCapture.retention" :online="live.online.value" :generation="evidenceGeneration" @requested="afterErasure" />
+                                <NoDeliveryIntentAction v-if="mayAdminister" :capture="inspectionCapture" :disabled="!live.online.value" @refresh="refresh(new Set([$event]))" />
+                                <CaptureTrashAction v-if="mayCurate" :capture-id="galleryInspectionId" :name="inspectionCapture.displayName ?? 'Photograph'" :evidence="inspectionCapture.retention" :disabled="!live.online.value || bulkBusy" :uncertain="uncertainTrashIds.includes(galleryInspectionId)" :pending="pendingTrashIds.includes(galleryInspectionId)" :verifying="trashVerificationBusy" :verification-message="trashVerificationMessage" @submit="submitSingleTrash" @verify="verifySingleTrash" @refresh="afterTrash" />
+                                <PrivacyErasurePanel v-if="mayAdminister" :capture-id="galleryInspectionId" :display-name="inspectionCapture.displayName ?? 'Photograph'" :evidence="inspectionCapture.retention" :online="live.online.value" :generation="evidenceGeneration" @requested="afterErasure" />
                             </details>
                         </template>
                         <div v-else role="status">
@@ -1633,10 +1666,10 @@ async function submitSingleTrash(id: string, expectedRevision: number) {
                         @open="tileClick"
                     >
                         <template #actions="{ capture: row }">
-                        <FavoriteControl class="photo-favorite-action" :class="{ 'details-visible': appearance.details }" compact :capture-id="String(row.id)" :evidence="row.retention" :disabled="!live.online.value" @refresh="refresh(new Set([$event]))" />
+                        <FavoriteControl v-if="mayCurate" class="photo-favorite-action" :class="{ 'details-visible': appearance.details }" compact :capture-id="String(row.id)" :evidence="row.retention" :disabled="!live.online.value" @refresh="refresh(new Set([$event]))" />
                         <button v-if="appearance.details && view === 'Gallery'" class="tile-delivery-action" :aria-label="deliveryStatus(row).title" :title="deliveryStatus(row).title" @click="inspectDelivery(row)"><UIcon :name="deliveryStatus(row).icon" /></button>
                         <span v-if="view === 'Curation'" class="tile-workflow-state" :class="{ 'without-caption': !appearance.details }" role="img" :aria-label="workflowStatus(row).title" :title="workflowStatus(row).title"><UIcon :name="workflowStatus(row).icon" /></span>
-                        <label v-if="selecting || view === 'Curation' && expanded" class="tile-selection">
+                        <label v-if="mayCurate && (selecting || view === 'Curation' && expanded)" class="tile-selection">
                             <input
                                 type="checkbox"
                                 :checked="selection.includes(String(row.id))"
@@ -1645,7 +1678,7 @@ async function submitSingleTrash(id: string, expectedRevision: number) {
                             />
                         </label>
                         <button
-                            v-else
+                            v-else-if="mayCurate"
                             class="photo-select-action"
                             :aria-label="`Select ${row.displayName}`"
                             @click="selecting = true; toggle(String(row.id))"
@@ -1676,7 +1709,7 @@ async function submitSingleTrash(id: string, expectedRevision: number) {
                         @reset="bulk($event ? 'reset' : 'discard')"
                     >
                         <template #collection>
-                            <CollectionMove :ids="selection" :online="live.online.value" :disabled="bulkBusy" @busy="bulkBusy = $event" @refresh="refresh(new Set($event))" @completed="selection = selection.filter(id => !$event.includes(id))" />
+                            <CollectionMove v-if="mayCurate" :ids="selection" :online="live.online.value" :disabled="bulkBusy" @busy="bulkBusy = $event" @refresh="refresh(new Set($event))" @completed="selection = selection.filter(id => !$event.includes(id))" />
                         </template>
                     </CurationControls>
                     <div class="actions">
@@ -1775,7 +1808,7 @@ async function submitSingleTrash(id: string, expectedRevision: number) {
                         <button :disabled="!live.online.value || !!edit.server.releasedAt" @click="edit.reapply">Reapply my edits</button>
                     </template>
                 </div>
-                <div v-if="view === 'Gallery'" class="viewer-favorite"><FavoriteControl compact :capture-id="activeId" :evidence="capture?.retention" :disabled="!live.online.value" @feedback="viewerFavoriteFeedback = $event" @refresh="refresh(new Set([$event]))" /></div>
+                <div v-if="view === 'Gallery'" class="viewer-favorite"><FavoriteControl v-if="mayCurate" compact :capture-id="activeId" :evidence="capture?.retention" :disabled="!live.online.value" @feedback="viewerFavoriteFeedback = $event" @refresh="refresh(new Set([$event]))" /></div>
                 <div v-if="view === 'Gallery'" class="viewer-playback">
                     <div v-if="slideshow.message || slideshow.photographsOnly" class="slideshow-message" role="status">
                         <span>{{ slideshow.message || 'Slideshow shows photographs only.' }}</span>
@@ -1811,7 +1844,7 @@ async function submitSingleTrash(id: string, expectedRevision: number) {
                         <RatingStar />
                     </button>
                     </div>
-                    <FavoriteControl compact :capture-id="activeId" :evidence="capture?.retention" :disabled="!live.online.value" @feedback="viewerFavoriteFeedback = $event" @refresh="refresh(new Set([$event]))" />
+                    <FavoriteControl v-if="mayCurate" compact :capture-id="activeId" :evidence="capture?.retention" :disabled="!live.online.value" @feedback="viewerFavoriteFeedback = $event" @refresh="refresh(new Set([$event]))" />
                     <div class="viewer-label-group" role="group" aria-label="Color label">
                     <button aria-label="None" :aria-pressed="edit?.intent.label === null" :disabled="!canCurate" @click="edit?.change({ label: null })">
                         <UIcon name="i-lucide-circle-slash" />
