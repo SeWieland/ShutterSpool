@@ -31,32 +31,47 @@ public static class CaptureCollectionEndpoints
 
     private static async Task<IResult> MoveOneAsync(Guid id, MoveCaptureCollectionRequest request,
         CaptureCollectionAssignmentService assignments, ICaptureRetentionReadStore retention,
-        CancellationToken token)
+        ShutterSpool.Application.Security.WorkspaceAccessContext access, CancellationToken token)
     {
         try
         {
             CollectionMoveResult result = (await assignments.MoveAsync(request.CollectionId,
                 [new(id, request.ExpectedRevision)], token))[0];
-            return await ToResultAsync(result, retention, token);
+            return await ToResultAsync(result, retention, access.IsAdministrator, token);
         }
         catch (ArgumentException exception) { return Invalid("request", exception.Message); }
     }
 
     private static async Task<IResult> MoveManyAsync(BulkMoveCaptureCollectionRequest request,
         CaptureCollectionAssignmentService assignments, ICaptureRetentionReadStore retention,
-        CancellationToken token)
+        Microsoft.AspNetCore.Authorization.IAuthorizationService authorization, HttpContext http,
+        ShutterSpool.Application.Security.WorkspaceAccessContext access, CancellationToken token)
     {
         if (request.Items is null || request.Items.Length is < 1 or > 100)
             return Invalid("items", "Provide 1 to 100 Captures.");
         if (request.Items.Any(item => item is null))
             return Invalid("items", "Each item must include a Capture ID and revision.");
+        if (request.TargetCollectionId == Guid.Empty || request.Items.Any(item => item.CaptureId == Guid.Empty || item.ExpectedRevision < 0))
+            return Invalid("items", "Provide an existing target and Capture IDs with non-negative revisions.");
         if (request.Items.Select(item => item.CaptureId).Distinct().Count() != request.Items.Length)
             return Invalid("items", "Capture IDs must be distinct.");
         CollectionMoveResult[] results;
         try
         {
-            results = await assignments.MoveAsync(request.TargetCollectionId,
-                [.. request.Items.Select(item => new CollectionMoveRequest(item.CaptureId, item.ExpectedRevision))], token);
+            var admitted = new List<CollectionMoveResult>();
+            bool denied = false;
+            foreach (BulkMoveCaptureItemRequest item in request.Items)
+            {
+                if (denied || !(await authorization.AuthorizeAsync(http.User, http,
+                    ShutterSpool.Server.Security.SecurityExtensions.ManagementAccessPolicy)).Succeeded)
+                {
+                    denied = true;
+                    admitted.Add(new(item.CaptureId, CollectionMoveStatus.Forbidden, null, null));
+                    continue;
+                }
+                admitted.Add((await assignments.MoveAsync(request.TargetCollectionId, [new(item.CaptureId, item.ExpectedRevision)], token))[0]);
+            }
+            results = [.. admitted];
         }
         catch (ArgumentException exception) { return Invalid("items", exception.Message); }
         Guid[] captureIds = [.. results.Where(result => result.Current is not null).Select(result => result.CaptureId).Distinct()];
@@ -64,16 +79,16 @@ public static class CaptureCollectionEndpoints
             captureIds, DateTimeOffset.UtcNow, token);
         var mapped = new List<CaptureCollectionMoveItemResponse>(results.Length);
         foreach (CollectionMoveResult result in results)
-            mapped.Add(ToResponse(result, summaries));
+            mapped.Add(ToResponse(result, summaries, access.IsAdministrator));
         return Results.Ok(new BulkMoveCaptureCollectionResponse([.. mapped]));
     }
 
     private static async Task<IResult> ToResultAsync(CollectionMoveResult result,
-        ICaptureRetentionReadStore retention, CancellationToken token)
+        ICaptureRetentionReadStore retention, bool includeSourceConfiguration, CancellationToken token)
     {
         CaptureCollectionMoveItemResponse response = ToResponse(result, result.Current is null
             ? new Dictionary<Guid, CaptureRetentionSummary>()
-            : await retention.GetCaptureSummariesAsync([result.CaptureId], DateTimeOffset.UtcNow, token));
+            : await retention.GetCaptureSummariesAsync([result.CaptureId], DateTimeOffset.UtcNow, token), includeSourceConfiguration);
         return result.Status switch
         {
             CollectionMoveStatus.Applied => Results.Ok(response.Current),
@@ -91,11 +106,11 @@ public static class CaptureCollectionEndpoints
     }
 
     private static CaptureCollectionMoveItemResponse ToResponse(CollectionMoveResult result,
-        IReadOnlyDictionary<Guid, CaptureRetentionSummary> summaries)
+        IReadOnlyDictionary<Guid, CaptureRetentionSummary> summaries, bool includeSourceConfiguration)
     {
         CaptureDetailResponse? detail = null;
         if (result.Current is not null)
-            detail = CaptureDetailResponse.From(result.Current, summaries.GetValueOrDefault(result.CaptureId));
+            detail = CaptureDetailResponse.From(result.Current, summaries.GetValueOrDefault(result.CaptureId), includeSourceConfiguration);
         string status = char.ToLowerInvariant(result.Status.ToString()[0]) + result.Status.ToString()[1..];
         return new(result.CaptureId, status, detail);
     }

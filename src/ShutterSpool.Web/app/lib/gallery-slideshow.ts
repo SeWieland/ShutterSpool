@@ -52,6 +52,17 @@ export class GallerySlideshow {
         this.decoded = this.initialized = false;
         Object.assign(this.state, slideshowState());
     }
+    reconcilePage(page: SlidePage) {
+        this.version++;
+        this.request?.abort();
+        this.pendingRead = undefined;
+        this.state.loading = false;
+        this.page = page.items ?? [];
+        this.index = this.page.findIndex(item => String(item.id) === this.current);
+        this.cursor = page.nextCursor ?? undefined;
+        this.initialized = true;
+        if (this.state.playing) this.arm();
+    }
     async play(id: string) {
         if (this.state.playing) return;
         this.state.playing = true;

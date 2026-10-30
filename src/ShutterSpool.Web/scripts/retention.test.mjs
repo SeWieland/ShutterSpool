@@ -66,13 +66,13 @@ test('stale evidence freezes at observation; unknown and unscheduled state get n
     assert.equal(retentionTiming(unknown, now, true).fraction, undefined);
 });
 
-function component(name, props, management, confirm = () => true) {
+function component(name, props, management, confirm = () => true, role = 'Owner') {
     let generation = 0, accessLost; const unmount = [], events = [];
     const scope = vm.createContext({ exports: {}, ref, computed, reactive, nextTick, AbortController, AbortSignal, useId: () => 'synthetic-dialog', watch: (target, callback) => watch(target, callback, { flush: 'sync' }),
         defineProps: () => props, defineEmits: () => (...event) => events.push(event), onMounted() {}, onUnmounted(callback) { unmount.push(callback); },
         window: { confirm, scrollY: 0, scrollTo() {} }, document: { activeElement: undefined }, clearInterval, setInterval,
         crypto: { randomUUID: () => '00000000-0000-0000-0000-000000000001' },
-        require: source => source.endsWith('/storage-presentation') ? presentation.exports : source.endsWith('/workspace-interactions') ? interactions.exports : source.endsWith('/retention') ? context.exports : source.endsWith('/session') ? { accessGeneration: () => generation, onAccessLost(callback) { accessLost = callback; return () => { if (accessLost === callback) accessLost = undefined; }; } } : { api: { management }, cancellable: signal => ({ signal }), handleFailure: failure => failure.status },
+        require: source => source.endsWith('/workspace-access') ? { mayCurate: ref(role !== 'Viewer'), mayAdminister: ref(['Owner', 'Administrator'].includes(role)) } : source.endsWith('/storage-presentation') ? presentation.exports : source.endsWith('/workspace-interactions') ? interactions.exports : source.endsWith('/retention') ? context.exports : source.endsWith('/session') ? { accessGeneration: () => generation, onAccessLost(callback) { accessLost = callback; return () => { if (accessLost === callback) accessLost = undefined; }; } } : { api: { management }, cancellable: signal => ({ signal }), handleFailure: failure => failure.status },
     });
     const script = parse(readFileSync(new URL(`../app/components/${name}.vue`, import.meta.url), 'utf8')).descriptor.scriptSetup.content;
     vm.runInContext(ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, scope);
@@ -150,7 +150,7 @@ test('Capture evidence reads only while active, forwards cancellation, and abort
         actions: { get: options => new Promise(resolve => requests.push({ kind: 'actions', options, resolve })) },
     }) } };
     const scope = vm.createContext({ exports: {}, AbortController, ref, computed, watch: (target, callback) => watch(target, callback, { flush: 'sync' }), nextTick, defineProps: () => props, defineEmits: () => () => {}, onUnmounted: callback => { unmount = callback; },
-        require: name => name.endsWith('/api') ? { api: { management }, cancellable: signal => ({ signal }), handleFailure() {} } : name.endsWith('/session') ? { accessGeneration: () => 0, onAccessLost: callback => { lost = callback; return () => { if (lost === callback) lost = undefined; }; } } : { deliveryPresentation: () => ({ tone: 'neutral', icon: '', label: '' }), formatFileSize: String },
+        require: name => name.endsWith('/workspace-access') ? { mayCurate: ref(true), mayAdminister: ref(true) } : name.endsWith('/api') ? { api: { management }, cancellable: signal => ({ signal }), handleFailure() {} } : name.endsWith('/session') ? { accessGeneration: () => 0, onAccessLost: callback => { lost = callback; return () => { if (lost === callback) lost = undefined; }; } } : { deliveryPresentation: () => ({ tone: 'neutral', icon: '', label: '' }), formatFileSize: String },
     });
     const script = parse(readFileSync(new URL('../app/components/CaptureEvidence.vue', import.meta.url), 'utf8')).descriptor.scriptSetup.content;
     vm.runInContext(ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, scope);
@@ -254,6 +254,22 @@ test('Empty loaded Trash confirms only its frozen loaded scope and reports per-i
     assert.match(prompts[0], /only copies/); assert.match(prompts[0], /Backups and delivered or downloaded copies/); assert.match(prompts[0], /protect files from deletion/);
     fixture.run("items.value = [{captureId:'unknown',captureRevision:1,retention:{asOf:new Date(),isFavorite:false}}]");
     await fixture.run('emptyLoaded()'); assert.equal(commands.length, 2); assert.match(fixture.run('feedback.value'), /could not be checked recently/);
+});
+
+test('Curator Trash restores without reading policy and blocks every permanent-removal path', async () => {
+    let policyReads = 0, restores = 0, purges = 0;
+    const fixture = component('TrashWorkspace', { online: true, generation: 0 }, {
+        retention: { settings: { get: async () => { policyReads++; throw new Error('Forbidden policy'); } } },
+        trash: { get: async () => ({ items: [], nextCursor: null }), byId: () => ({ restore: { post: async () => { restores++; return {}; } }, purge: { post: async () => { purges++; } } }) },
+    }, () => true, 'Curator');
+    await fixture.run('load()');
+    assert.equal(policyReads, 0);
+    await fixture.run("act({ captureId: 'synthetic', captureRevision: 4 }, false)");
+    assert.equal(restores, 1); assert.match(fixture.run('feedback.value'), /administrator to resume/);
+    await fixture.run("act({ captureId: 'synthetic', captureRevision: 4 }, true)");
+    await fixture.run('emptyLoaded()');
+    assert.equal(purges, 0); assert.equal(policyReads, 0);
+    fixture.dispose();
 });
 test('settings require fresh impact acknowledgement and retain drafts during capacity reconciliation', async () => {
     const saved = { settings: { revision: 5, trashRecoveryWindow: '3.00:00:00', restoreProtection: '3.00:00:00', galleryMaximum: '30.00:00:00',

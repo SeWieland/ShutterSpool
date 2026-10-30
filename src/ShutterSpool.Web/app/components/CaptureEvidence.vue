@@ -2,6 +2,7 @@
 import { api, cancellable, handleFailure } from '../lib/api';
 import { accessGeneration, onAccessLost } from '../lib/session';
 import { deliveryPresentation, formatFileSize } from '../lib/workspace-interactions';
+import { mayAdminister, mayCurate } from '../lib/workspace-access';
 import type { CaptureDetailResponse, RoutingDecisionResponse, RoutingDeliveryResponse, RoutingDecisionPageResponse, RoutingDeliveryPageResponse, RoutingActionPageResponse } from '../api/models';
 const props = defineProps<{
     capture: CaptureDetailResponse;
@@ -17,6 +18,10 @@ const evidence = ref<HTMLElement>();
 const decisions = ref<RoutingDecisionPageResponse>();
 const deliveries = ref<RoutingDeliveryPageResponse>();
 const actions = ref<RoutingActionPageResponse>();
+type SafeDeliveryPage = NonNullable<Awaited<ReturnType<ReturnType<typeof api.management.captures.byId>['deliverySummary']['get']>>>;
+const safeDeliveries = ref<SafeDeliveryPage>();
+const retrying = ref('');
+const retryUncertain = ref(false);
 const deliveryReadSequence = ref(0);
 const error = ref('');
 let sequence = 0;
@@ -30,6 +35,8 @@ function clearEvidence() {
     decisions.value = undefined;
     deliveries.value = undefined;
     actions.value = undefined;
+    safeDeliveries.value = undefined;
+    retryUncertain.value = false;
     error.value = '';
 }
 async function read(kind?: 'decisions' | 'deliveries' | 'actions') {
@@ -44,6 +51,11 @@ async function read(kind?: 'decisions' | 'deliveries' | 'actions') {
     const isCurrent = () => request === sequence && captureId === props.capture.id && access === accessGeneration();
     const endpoint = api.management.captures.byId(String(captureId));
     try {
+        if (!mayAdminister.value) {
+            const result = await endpoint.deliverySummary.get({ options: [cancellable(signal)] });
+            if (isCurrent()) { safeDeliveries.value = result; retryUncertain.value = false; error.value = ''; }
+            return;
+        }
         if (!kind) {
             const options = { options: [cancellable(signal)] };
             const pages = await Promise.all([endpoint.routing.get({ queryParameters: { limit: 30 }, ...options }), endpoint.deliveries.get({ queryParameters: { limit: 30 }, ...options }), props.deliveryOnly ? undefined : endpoint.actions.get({ queryParameters: { limit: 30 }, ...options })]);
@@ -75,6 +87,20 @@ async function read(kind?: 'decisions' | 'deliveries' | 'actions') {
             error.value = 'Unable to read delivery evidence. Refresh to retry.';
         }
     }
+}
+async function retrySafeDelivery(id: string) {
+    if (!mayCurate.value || props.readOnly || retrying.value || retryUncertain.value || !props.online || !safeDeliveries.value?.items?.some(item => String(item.id) === id && item.canRetry)) return;
+    const access = accessGeneration(), captureId = props.capture.id;
+    retrying.value = id;
+    retryUncertain.value = true;
+    try {
+        await api.management.deliveries.byId(id).retry.post();
+        if (access === accessGeneration() && captureId === props.capture.id) { error.value = 'Retry requested. Refresh delivery status before another action.'; refreshWork(); }
+    } catch (failure) {
+        if (access !== accessGeneration() || captureId !== props.capture.id) return;
+        handleFailure(failure);
+        error.value = 'Retry outcome could not be confirmed. Refresh delivery status before trying again.';
+    } finally { if (access === accessGeneration()) retrying.value = ''; }
 }
 const stopOnAccessLost = onAccessLost(clearEvidence);
 function refreshWork() { emit('refresh', String(props.capture.id)); }
@@ -149,7 +175,22 @@ onUnmounted(() => { disposed = true; sequence++; controller?.abort(); stopOnAcce
             Refresh evidence
         </button>
     </p>
-        <template v-if="deliveryOnly">
+        <template v-if="!mayAdminister">
+            <dl v-if="!deliveryOnly" class="routing-facts">
+                <dt>Collection</dt><dd>{{ capture.currentCollection?.path ?? capture.currentCollection?.name ?? 'Unavailable' }}</dd>
+                <dt>Rating / color</dt><dd><CaptureRating :rating="capture.curation?.rating" :label="capture.curation?.label" /></dd>
+                <dt>Tags</dt><dd>{{ capture.curation?.tags?.join(' · ') || 'None' }}</dd>
+                <dt>Delivery stage</dt><dd>{{ capture.curation?.releasedAt ? 'Released' : capture.curation?.held ? 'Held' : 'Waiting' }}</dd>
+            </dl>
+            <p v-if="!safeDeliveries && !error" role="status">Loading delivery status…</p>
+            <div v-for="work in safeDeliveries?.items" :key="String(work.id)" class="delivery-route">
+                <div class="delivery-outcome" :class="deliveryPresentation(work.state).tone"><span class="variant-chip">{{ variant(work.assetId) }}</span><UIcon :name="deliveryPresentation(work.state).icon" /><strong>{{ deliveryPresentation(work.state).label }}</strong></div>
+                <button v-if="mayCurate && !readOnly && work.canRetry" :disabled="!online || !!retrying || retryUncertain" @click="retrySafeDelivery(String(work.id))">Retry now</button>
+            </div>
+            <p v-if="safeDeliveries && !safeDeliveries.items?.length" class="muted">No delivery is recorded for this photograph.</p>
+            <p v-if="safeDeliveries?.truncated" class="muted">Only the first 1,000 recorded deliveries are shown.</p>
+        </template>
+        <template v-else-if="deliveryOnly">
             <p v-if="!capture.curation?.releasedAt" class="muted">Release this photograph to apply your delivery rules.</p>
             <p v-else-if="capture.deliverySummary?.waitingForRouting" class="muted">Waiting for delivery rules to be checked.</p>
             <p v-if="!deliveries && !error" role="status">Loading deliveries…</p>
@@ -243,7 +284,7 @@ onUnmounted(() => { disposed = true; sequence++; controller?.abort(); stopOnAcce
             Earlier delivery work
         </button>
     </div>
-    <details class="section-disclosure" v-if="!deliveryOnly">
+    <details class="section-disclosure" v-if="mayAdminister && !deliveryOnly">
         <summary><UIcon name="i-lucide-chevron-right" class="disclosure-chevron" aria-hidden="true" />
             Earlier actions
         </summary>

@@ -51,19 +51,23 @@ test('opens the sole workspace only after complete discovery and leaves multiple
     assert.deepEqual(workspaceSelection([], true, null), { state: 'incomplete' });
 });
 
-function shell(selectedId, result) {
+function shell(selectedId, result, readAccess = async () => ({ role: 'Owner' })) {
     const replacements = [];
+    const access = shallowRef();
+    let accessReads = 0;
     const context = vm.createContext({ exports: {}, ref, shallowRef, computed, AbortController,
         useRoute: () => ({ path: '/captures/photo', fullPath: '/captures/photo?tab=details#preview' }),
         useAppConfig: () => ({ sftpgo: {} }), watch: () => () => {}, onMounted() {}, onUnmounted() {},
         window: { location: { replace: path => replacements.push(path) } },
         require: name => name.endsWith('/session') ? { onAccessLost: () => () => {} }
             : name.endsWith('/workspace-context') ? { pageWorkspaceId: selectedId, workspaceSelection, withWorkspace }
+            : name.endsWith('/workspace-access') ? { workspaceAccess: access, workspaceAccessVersion: ref(0), workspaceAccessError: ref(''), workspaceRevoked: ref(false),
+                refreshWorkspaceAccess: async () => { accessReads++; access.value = await readAccess(); return !!access.value; }, discardWorkspacePrivateState() {} }
             : { api: { workspaces: { get: async () => result } }, cancellable: () => ({}), handleFailure() {} },
     });
     const source = parse(readFileSync(new URL('../app/app.vue', import.meta.url), 'utf8')).descriptor.scriptSetup.content;
     vm.runInContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
-    return { replacements, load: () => vm.runInContext('loadMemberships()', context),
+    return { replacements, load: () => vm.runInContext('loadMemberships()', context), accessReads: () => accessReads, revoke: () => { access.value = undefined; },
         state: () => vm.runInContext('({ mount: canMountOperationalWorkspace.value, selection: activeWorkspaceSelection.value.state })', context) };
 }
 
@@ -74,6 +78,7 @@ test('sole-workspace entry reloads the requested capture route before private st
     assert.deepEqual(app.replacements, [`/captures/photo?tab=details&workspace=${first}#preview`]);
     assert.equal(app.state().mount, false);
     assert.equal(app.state().selection, 'loading');
+    assert.equal(app.accessReads(), 0, 'role checks cannot start before the immutable selected page loads');
     const selected = shell(first, { items: memberships, incomplete: false });
     await selected.load();
     assert.equal(selected.state().mount, true);
@@ -92,7 +97,25 @@ test('discovery never redirects explicit unavailable selections, incomplete memb
         assert.deepEqual(app.replacements, []);
         assert.equal(app.state().mount, false);
         assert.equal(app.state().selection, state);
+        assert.equal(app.accessReads(), 0, 'unconfirmed membership cannot start a scoped role check');
     }
+});
+
+test('confirmed page selection mounts only after role access resolves and closes on permission loss without fallback', async () => {
+    let finish;
+    const app = shell(first, { items: memberships, incomplete: false }, () => new Promise(resolve => { finish = resolve; }));
+    const pending = app.load();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(app.accessReads(), 1);
+    assert.equal(app.state().selection, 'selected');
+    assert.equal(app.state().mount, false, 'membership discovery alone cannot expose operational controls');
+    finish({ role: 'Viewer' });
+    await pending;
+    assert.equal(app.state().mount, true);
+    app.revoke();
+    assert.equal(app.state().mount, false);
+    assert.equal(app.state().selection, 'selected');
+    assert.deepEqual(app.replacements, [], 'permission loss cannot choose another workspace');
 });
 
 test('keeps workspace context on gallery routes and other URL state', () => {

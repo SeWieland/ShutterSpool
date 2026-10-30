@@ -12,6 +12,8 @@ import { CurationRequestBuilderRequestsMetadata, type CurationRequestBuilder } f
 // @ts-ignore
 import { DeliveriesRequestBuilderRequestsMetadata, type DeliveriesRequestBuilder } from './deliveries/index.js';
 // @ts-ignore
+import { DeliverySummaryRequestBuilderRequestsMetadata, type DeliverySummaryRequestBuilder } from './deliverySummary/index.js';
+// @ts-ignore
 import { FavoriteRequestBuilderRequestsMetadata, type FavoriteRequestBuilder } from './favorite/index.js';
 // @ts-ignore
 import { HoldRequestBuilderRequestsMetadata, type HoldRequestBuilder } from './hold/index.js';
@@ -50,6 +52,10 @@ export interface CapturesItemRequestBuilder extends BaseRequestBuilder<CapturesI
      * The deliveries property
      */
     get deliveries(): DeliveriesRequestBuilder;
+    /**
+     * The deliverySummary property
+     */
+    get deliverySummary(): DeliverySummaryRequestBuilder;
     /**
      * The favorite property
      */
@@ -118,6 +124,9 @@ export const CapturesItemRequestBuilderNavigationMetadata: Record<Exclude<keyof 
     },
     deliveries: {
         requestsMetadata: DeliveriesRequestBuilderRequestsMetadata,
+    },
+    deliverySummary: {
+        requestsMetadata: DeliverySummaryRequestBuilderRequestsMetadata,
     },
     favorite: {
         requestsMetadata: FavoriteRequestBuilderRequestsMetadata,

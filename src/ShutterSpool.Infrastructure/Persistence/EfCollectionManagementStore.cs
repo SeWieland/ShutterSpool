@@ -4,15 +4,18 @@ using Npgsql;
 using ShutterSpool.Application.Collections;
 using ShutterSpool.Domain.Collections;
 using System.Text;
+using ShutterSpool.Application.Security;
 
 namespace ShutterSpool.Infrastructure.Persistence;
 
-internal sealed class EfCollectionManagementStore(ShutterSpoolDbContext database) : ICollectionManagementStore
+internal sealed class EfCollectionManagementStore(ShutterSpoolDbContext database, WorkspaceAccessContext? access = null) : ICollectionManagementStore
 {
     public async Task<CollectionPage> ListAsync(string query, int limit, string? afterPath, Guid? afterId,
         CancellationToken token)
     {
         IQueryable<CollectionEntity> rows = database.Collections.AsNoTracking();
+        if (access?.IsViewer == true)
+            rows = rows.Where(item => VisibleCaptures().Any(capture => capture.CollectionId == item.Id));
         if (query.Length > 0)
         {
             string search = query.Normalize(NormalizationForm.FormC).ToUpperInvariant();
@@ -31,6 +34,7 @@ internal sealed class EfCollectionManagementStore(ShutterSpoolDbContext database
     public async Task<CollectionSummary?> GetAsync(Guid id, CancellationToken token)
     {
         CollectionEntity? row = await database.Collections.AsNoTracking().SingleOrDefaultAsync(item => item.Id == id, token);
+        if (row is not null && access?.IsViewer == true && !await VisibleCaptures().AnyAsync(item => item.CollectionId == id, token)) return null;
         return row is null ? null : (await SummariesAsync([row], token))[0];
     }
 
@@ -115,8 +119,8 @@ internal sealed class EfCollectionManagementStore(ShutterSpoolDbContext database
             .Select(collection => new CollectionReferenceCount
             {
                 CollectionId = collection.Id,
-                SourceReferences = database.Sources.Where(source => source.CollectionId == collection.Id).Take(1001).Count(),
-                CaptureReferences = database.Captures.Where(capture => capture.CollectionId == collection.Id).Take(1001).Count()
+                SourceReferences = access != null && !access.IsAdministrator ? 0 : database.Sources.Where(source => source.CollectionId == collection.Id).Take(1001).Count(),
+                CaptureReferences = VisibleCaptures().Where(capture => capture.CollectionId == collection.Id).Take(1001).Count()
             }).ToArrayAsync(token);
         Dictionary<Guid, CollectionReferenceCount> byId = counts.ToDictionary(item => item.CollectionId);
         return [.. rows.Select(item => new CollectionSummary(item.Id, item.Name, item.Path, item.Revision,
@@ -126,6 +130,10 @@ internal sealed class EfCollectionManagementStore(ShutterSpoolDbContext database
 
     private Task<int> LockAssignmentsAsync(CancellationToken token) => database.Database.ExecuteSqlRawAsync(
         "SELECT pg_advisory_xact_lock(hashtextextended('shutterspool-collection-assignment', 0))", token);
+
+    private IQueryable<CaptureEntity> VisibleCaptures() => WorkspaceCaptureVisibility.Apply(database.Captures, access)
+        .Where(capture => !database.PrivacyErasureAssets.Any(erased => database.CaptureAssets.Any(member =>
+            member.CaptureId == capture.Id && member.AssetId == erased.AssetId)));
 
     private static string EncodeCursor(CollectionEntity item) => $"{item.Path}|{item.Id:N}";
 
