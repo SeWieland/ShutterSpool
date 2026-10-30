@@ -1,5 +1,8 @@
 {
   "realm": "shutterspool",
   "enabled": true,
-  "displayName": "ShutterSpool"
+  "displayName": "ShutterSpool",
+  "registrationAllowed": false,
+  "verifyEmail": true,
+  "resetPasswordAllowed": true
 }

@@ -8,7 +8,7 @@ Choose the guide for the task you are doing. These pages describe the implemente
 - [Collections](collections.md): prepare an event, choose incoming defaults, move photographs and use Collection names in delivery folders.
 - [Gallery slideshow](gallery.md): play filtered photographs and resume after interruptions.
 - [Retention and recovery](retention.md): understand lifetimes, Favorites and Trash before removing photographs.
-- [Workspaces and access](workspaces.md): choose a workspace, understand roles, manage members and control Viewer visibility.
+- [Workspaces and access](workspaces.md): join an invited workspace, understand roles, manage members and control Viewer visibility.
 
 ### Choose a workspace
 

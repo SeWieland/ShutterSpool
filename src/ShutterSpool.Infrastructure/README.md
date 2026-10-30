@@ -14,6 +14,7 @@ For transaction/lock ordering, use the [persistence reference](../../docs/archit
 Membership, Owner and Viewer-policy changes instead acquire the tenant access-change lock before checking current actor/target roles and revisions. They commit the change, last-Owner safeguard and audit/result together; this lock does not span media streaming or ordinary workflow transactions.
 Media query adapters apply the current Viewer predicate before projection, filters, counts and paging. Personal filters cannot broaden it; caches are not permission sources.
 The [authorization guide](../../docs/architecture/authentication-and-authorization.md) owns the request boundary and the [packaged operator procedure](../../deploy/operations/README.md#protected-owner-recovery) owns exceptional recovery. Operator evidence remains in the protected external record; tenant audit retains its reference and the bounded grant transition.
+The same store implements `IWorkspaceInvitationStore` for recipient handoffs and local offer transitions. It reads database time after taking the access-change lock and writes membership, offer state and audit/result together. Membership/recovery changes invalidate affected pending offers within their own transaction; native identity setup and email remain outside this adapter.
 
 ## Retention persistence and cleanup
 

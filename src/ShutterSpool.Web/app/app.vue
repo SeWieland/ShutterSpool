@@ -20,6 +20,7 @@ const selectionRequired = shallowRef<boolean | undefined>();
 const hasDiscovery = shallowRef(false);
 const discoveryBusy = shallowRef(false);
 const discoveryError = shallowRef(false);
+const invitationsVisible = shallowRef(false);
 let discoverySequence = 0;
 let discoveryController: AbortController | undefined;
 const activeWorkspaceSelection = computed(() => workspaceSelection(
@@ -44,6 +45,10 @@ function restoreAboutFocus() { aboutTrigger.value?.focus({ preventScroll: true }
 function leaveSession() {
     if (workspace.value?.requestDeparture() === false) return;
     void signOut();
+}
+function openInvitations() {
+    if (workspace.value?.requestDeparture() === false) return;
+    invitationsVisible.value = true;
 }
 function validMemberships(value: unknown): WorkspaceMembership[] {
     if (!Array.isArray(value)) throw new Error('Workspace membership response is invalid.');
@@ -117,6 +122,7 @@ const stopWatchingSession = watch([session, () => route.path], ([value]) => {
         discoveryBusy.value = false;
         discoveryError.value = false;
         selectedWorkspaceId.value = pageWorkspaceId ?? '';
+        invitationsVisible.value = false;
     }
 });
 const unsubscribeAccessLost = onAccessLost(() => {
@@ -175,6 +181,7 @@ onUnmounted(() => { clearInterval(accessTimer); discoveryController?.abort(); st
             <div v-if="session && activeWorkspace" class="workspace-identity">
                 <span>Current workspace</span>
                 <strong>{{ activeWorkspace.name }}</strong>
+                <button v-if="canMountOperationalWorkspace" class="about-access workspace-invitation-access" type="button" @click="openInvitations"><UIcon name="i-lucide-mail" aria-hidden="true" />Invitations</button>
             </div>
             <dialog ref="aboutDialog" class="discard-dialog about-dialog" aria-labelledby="about-title" @close="restoreAboutFocus">
                 <div class="about-heading"><h2 id="about-title">About &amp; licenses</h2><button type="button" @click="aboutDialog?.close()">Close</button></div>
@@ -186,7 +193,11 @@ onUnmounted(() => { clearInterval(accessTimer); discoveryController?.abort(); st
             <NuxtPage v-if="route.path.startsWith('/auth/')" />
             <template v-else>
             <p v-if="session && canMountOperationalWorkspace && (workspaceIncomplete || discoveryError)" class="workspace-incomplete" :role="discoveryError ? 'alert' : 'status'"><template v-if="discoveryError">Workspace memberships could not be refreshed. Access to {{ activeWorkspace?.name ?? 'this workspace' }} remains confirmed.</template><template v-else>Some workspace memberships could not be checked. Access to {{ activeWorkspace?.name ?? 'this workspace' }} is confirmed.</template><button type="button" :disabled="discoveryBusy" @click="loadMemberships">{{ discoveryBusy ? 'Checking…' : 'Retry' }}</button></p>
-            <Suspense v-if="session && canMountOperationalWorkspace">
+            <main v-if="session && invitationsVisible" class="invitation-page">
+                <button v-if="canMountOperationalWorkspace" type="button" class="back" @click="invitationsVisible = false">Back to workspace</button>
+                <LazyWorkspaceInvitations @joined="loadMemberships" />
+            </main>
+            <Suspense v-else-if="session && canMountOperationalWorkspace">
                 <LazyOperationalWorkspace
                     :key="workspaceAccessVersion"
                     ref="workspace"
@@ -198,7 +209,8 @@ onUnmounted(() => { clearInterval(accessTimer); discoveryController?.abort(); st
                     </main>
                 </template>
             </Suspense>
-            <main v-else-if="session && hasSelectedWorkspace && workspaceAccessError" class="empty" role="alert">
+            <main v-else-if="session">
+            <section v-if="hasSelectedWorkspace && workspaceAccessError" class="empty" role="alert">
                 <h1>Workspace access needs checking</h1>
                 <p>{{ workspaceAccessError }}</p>
                 <UButton :disabled="discoveryBusy" @click="loadMemberships">Retry access check</UButton>
@@ -207,22 +219,22 @@ onUnmounted(() => { clearInterval(accessTimer); discoveryController?.abort(); st
                     <select id="workspace-access-choice" v-model="selectedWorkspaceId"><option value="">Choose a workspace</option><option v-for="item in memberships" :key="item.id" :value="item.id">{{ item.name }}</option></select>
                     <UButton type="submit" :disabled="!memberships.some(item => item.id === selectedWorkspaceId)">Open workspace</UButton>
                 </form>
-            </main>
-            <main v-else-if="session && discoveryBusy && !hasDiscovery" class="empty" aria-busy="true" role="status">
+            </section>
+            <section v-else-if="discoveryBusy && !hasDiscovery" class="empty" aria-busy="true" role="status">
                 <h1>Checking workspace access…</h1>
                 <p>Only workspaces assigned to your sign-in can be opened.</p>
-            </main>
-            <main v-else-if="session && discoveryError && !hasDiscovery" class="empty" role="alert">
+            </section>
+            <section v-else-if="discoveryError && !hasDiscovery" class="empty" role="alert">
                 <h1>Workspaces could not be checked</h1>
                 <p>Workspace access could not be confirmed. Retry to continue.</p>
                 <UButton :disabled="discoveryBusy" @click="loadMemberships">{{ discoveryBusy ? 'Checking…' : 'Retry' }}</UButton>
-            </main>
-            <main v-else-if="session && activeWorkspaceSelection.state === 'empty'" class="empty">
+            </section>
+            <section v-else-if="activeWorkspaceSelection.state === 'empty'" class="empty">
                 <h1>No workspace access</h1>
-                <p>No workspace is assigned to this sign-in yet. Contact the operator if you expected access.</p>
+                <p>No workspace is assigned to this sign-in yet. Check your invitations below or contact the operator if you expected access.</p>
                 <UButton :disabled="discoveryBusy" @click="loadMemberships">{{ discoveryBusy ? 'Checking…' : 'Retry' }}</UButton>
-            </main>
-            <main v-else-if="session && activeWorkspaceSelection.state === 'incomplete'" class="empty" role="alert">
+            </section>
+            <section v-else-if="activeWorkspaceSelection.state === 'incomplete'" class="empty" role="alert">
                 <h1>{{ pageWorkspaceId ? 'Workspace access could not be confirmed' : 'Workspace memberships could not be checked' }}</h1>
                 <p>{{ pageWorkspaceId ? 'Retry to check this workspace again. No other workspace has been opened.' : 'No workspace was confirmed in this incomplete check. Retry to continue.' }}</p>
                 <UButton :disabled="discoveryBusy" @click="loadMemberships">{{ discoveryBusy ? 'Checking…' : 'Retry' }}</UButton>
@@ -231,8 +243,8 @@ onUnmounted(() => { clearInterval(accessTimer); discoveryController?.abort(); st
                     <select id="workspace-choice-incomplete" v-model="selectedWorkspaceId"><option value="">Choose a workspace</option><option v-for="item in memberships" :key="item.id" :value="item.id">{{ item.name }}</option></select>
                     <UButton type="submit" :disabled="!memberships.some(item => item.id === selectedWorkspaceId)">Open workspace</UButton>
                 </form>
-            </main>
-            <main v-else-if="session && activeWorkspaceSelection.state === 'unavailable'" class="empty" role="alert">
+            </section>
+            <section v-else-if="activeWorkspaceSelection.state === 'unavailable'" class="empty" role="alert">
                 <h1>This workspace is unavailable</h1>
                 <p>Access to the selected workspace could not be confirmed. Choose one you can access or retry.</p>
                 <UButton :disabled="discoveryBusy" @click="loadMemberships">{{ discoveryBusy ? 'Checking…' : 'Retry' }}</UButton>
@@ -241,8 +253,8 @@ onUnmounted(() => { clearInterval(accessTimer); discoveryController?.abort(); st
                     <select id="workspace-choice-unavailable" v-model="selectedWorkspaceId"><option value="">Choose a workspace</option><option v-for="item in memberships" :key="item.id" :value="item.id">{{ item.name }}</option></select>
                     <UButton type="submit" :disabled="!memberships.some(item => item.id === selectedWorkspaceId)">Open workspace</UButton>
                 </form>
-            </main>
-            <main v-else-if="session && activeWorkspaceSelection.state === 'choose'" class="signin workspace-choice-page">
+            </section>
+            <section v-else-if="activeWorkspaceSelection.state === 'choose'" class="signin workspace-choice-page">
                 <img class="signin-mark" src="/shutter-color.png" alt="" width="112" height="112" />
                 <h1>Choose a workspace</h1>
                 <p>Open a workspace assigned to your sign-in.</p>
@@ -254,9 +266,11 @@ onUnmounted(() => { clearInterval(accessTimer); discoveryController?.abort(); st
                     <UButton type="submit" :disabled="!memberships.some(item => item.id === selectedWorkspaceId)">Open workspace</UButton>
                 </form>
                 <UButton v-if="workspaceIncomplete" variant="ghost" :disabled="discoveryBusy" @click="loadMemberships">{{ discoveryBusy ? 'Checking…' : 'Retry membership check' }}</UButton>
-            </main>
-            <main v-else-if="session" class="empty" aria-busy="true" role="status">
+            </section>
+            <section v-else class="empty" aria-busy="true" role="status">
                 <h1>Checking workspace access…</h1>
+            </section>
+            <LazyWorkspaceInvitations @joined="loadMemberships" />
             </main>
             <main v-else-if="restoring" class="empty" aria-busy="true" role="status">
                 <h1>Restoring your session…</h1>

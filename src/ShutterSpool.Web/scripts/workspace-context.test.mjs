@@ -56,5 +56,7 @@ test('scopes management and preview requests but leaves membership discovery uns
     assert.equal(headers.get('X-ShutterSpool-Workspace'), first);
     assert.equal(workspaceRequestHeaders('/media/previews/id/grid', undefined, first).get('X-ShutterSpool-Workspace'), first);
     assert.equal(workspaceRequestHeaders('/workspaces', undefined, first).has('X-ShutterSpool-Workspace'), false);
+    assert.equal(workspaceRequestHeaders('/workspace-offers', undefined, first).has('X-ShutterSpool-Workspace'), false);
+    assert.equal(workspaceRequestHeaders(`/workspace-offers/${second}/offer/accept`, undefined, first).has('X-ShutterSpool-Workspace'), false, 'own offers use their explicit workspace path rather than the open workspace header');
     assert.equal(workspaceRequestHeaders('/management/sources', undefined, null).has('X-ShutterSpool-Workspace'), false);
 });
