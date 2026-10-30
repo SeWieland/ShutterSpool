@@ -146,6 +146,7 @@ onUnmounted(() => { disposed = true; sequence++; controller?.abort(); pending.va
                 </li>
             </ul>
             <p v-if="!members.length" class="muted">No members were returned. Refresh before changing access.</p>
+            <WorkspaceInvitationManagement :online="online" :generation="generation" />
         </template>
     </section>
 </template>
