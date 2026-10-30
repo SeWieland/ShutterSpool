@@ -10,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Configuration;
+using ShutterSpool.Application.Ingress;
 using ShutterSpool.Application.Sources;
 using ShutterSpool.Application.Workspaces;
 using ShutterSpool.Infrastructure.Persistence;
@@ -21,6 +22,68 @@ public sealed class WorkspaceCameraIngressTests
 {
     private const string CallbackKey = "synthetic-private-camera-key-at-least-32-characters";
     private static CancellationToken Token => TestContext.Current.CancellationToken;
+
+    [Theory]
+    [InlineData("/internal/camera/hook")]
+    [InlineData("/internal/camera/hook/")]
+    [InlineData("/INTERNAL/CAMERA/HOOK/")]
+    public async Task Hook_route_variants_preserve_admitted_transfer_after_credential_replacement(string hookPath)
+    {
+        await using var fixture = await WorkspaceTenancyPostgresTests.WorkspaceFixture.CreateAsync();
+        await fixture.ProvisionAsync();
+        WorkspaceDefinition[] workspaces = await fixture.RegistryAsync();
+        await using WebApplication server = await StartAsync(fixture);
+        CreatedSource created;
+        await using (var scope = fixture.Scope(server.Services, workspaces[0]))
+            created = await scope.ServiceProvider.GetRequiredService<SourceManagementService>().CreateAsync("Synthetic rotated camera", "Delay", 60, Token);
+        using HttpClient client = server.GetTestClient();
+        client.DefaultRequestHeaders.Add("X-API-KEY", CallbackKey);
+        Guid login = await AuthenticateAsync(client, created.Username, created.Secret);
+        string endpoint = $"http://localhost:8081/internal/camera/fs/{login:N}";
+        long admitted = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1_000_000;
+        using (HttpResponseMessage admission = await client.PostAsJsonAsync(hookPath, Event("pre-upload", created.Username, endpoint, admitted), Token))
+            Assert.Equal(HttpStatusCode.OK, admission.StatusCode);
+        await using (var scope = fixture.Scope(server.Services, workspaces[0]))
+            Assert.True((await scope.ServiceProvider.GetRequiredService<SourceManagementService>().RegenerateAsync(created.Id, 0, Token,
+                username: "replacement-" + Guid.NewGuid().ToString("N"))).Applied);
+
+        using (HttpResponseMessage newAdmission = await client.PostAsJsonAsync(hookPath, Event("pre-upload", created.Username, endpoint, admitted + 2_000_000_000), Token))
+            Assert.Equal(HttpStatusCode.Forbidden, newAdmission.StatusCode);
+        using (HttpResponseMessage unmatched = await client.PostAsync($"/internal/camera/fs/{login:N}/create/%2Funmatched.jpg?flags=577", new ByteArrayContent([9]), Token))
+            Assert.Equal(HttpStatusCode.Forbidden, unmatched.StatusCode);
+        using (HttpResponseMessage bytes = await client.PostAsync($"/internal/camera/fs/{login:N}/create/%2Fsynthetic.jpg?flags=577", new ByteArrayContent([4, 5, 6]), Token))
+            Assert.Equal(HttpStatusCode.OK, bytes.StatusCode);
+        using (HttpResponseMessage wrongIdentity = await client.PostAsJsonAsync(hookPath, Event("upload", "unmatched-camera", endpoint, admitted + 1_000_000_000, 3), Token))
+            Assert.Equal(HttpStatusCode.Forbidden, wrongIdentity.StatusCode);
+        using (HttpResponseMessage wrongSize = await client.PostAsJsonAsync(hookPath, Event("upload", created.Username, endpoint, admitted + 1_000_000_000, 4), Token))
+            Assert.Equal(HttpStatusCode.Forbidden, wrongSize.StatusCode);
+        await using (var scope = fixture.Scope(server.Services, workspaces[0]))
+        {
+            ShutterSpoolDbContext database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
+            Assert.Empty(await database.Assets.ToArrayAsync(Token));
+            CameraUploadAdmissionEntity pending = await database.CameraUploadAdmissions.SingleAsync(Token);
+            Assert.Equal(CameraTransferState.Received, pending.State);
+            Assert.Null(pending.CompletionTimestamp);
+            IngestOperationEntity operation = await database.Operations.SingleAsync(Token);
+            Assert.Equal(pending.ReceiveKey, operation.FinalKey);
+            Assert.NotNull(operation.FinalKey);
+            Assert.Equal(new byte[] { 4, 5, 6 }, await File.ReadAllBytesAsync(Path.Combine(workspaces[0].StorageRoot,
+                operation.FinalKey.Replace('/', Path.DirectorySeparatorChar)), Token));
+        }
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            using HttpResponseMessage completion = await client.PostAsJsonAsync(hookPath, Event("upload", created.Username, endpoint, admitted + 1_000_000_000, 3), Token);
+            Assert.Equal(HttpStatusCode.OK, completion.StatusCode);
+        }
+        await AssertCustodyAsync(server, fixture, workspaces);
+        await using (var scope = fixture.Scope(server.Services, workspaces[0]))
+        {
+            CameraUploadAdmissionEntity completed = await scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>().CameraUploadAdmissions.SingleAsync(Token);
+            Assert.Equal(CameraTransferState.Completed, completed.State);
+            Assert.Equal(admitted + 1_000_000_000, completed.CompletionTimestamp);
+        }
+        await server.StopAsync(Token);
+    }
 
     [Fact]
     public async Task Private_callbacks_bind_current_source_credentials_and_preserve_accepted_media_after_restart()

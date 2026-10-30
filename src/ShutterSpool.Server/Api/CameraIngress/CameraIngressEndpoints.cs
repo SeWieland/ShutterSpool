@@ -67,6 +67,8 @@ internal sealed class CameraCallbackEndpointFilter(CameraIngressSettings setting
     }
 }
 
+internal sealed class CameraHookEndpointMetadata;
+
 internal static class CameraIngressEndpoints
 {
     public static void MapCameraIngressEndpoints(this WebApplication app, CameraIngressSettings settings)
@@ -81,7 +83,7 @@ internal static class CameraIngressEndpoints
             CancellationToken token) => AuthenticateAsync(request, ingress, options, logger, SourceConnectionProfile.LegacyFtps, token));
         group.MapPost("/plain-auth", (SftpGoAuthRequest request, CameraIngressService ingress, CameraIngressSettings options, ILogger<CameraIngressService> logger,
             CancellationToken token) => AuthenticateAsync(request, ingress, options, logger, SourceConnectionProfile.PlainFtpLan, token));
-        group.MapPost("/hook", HookAsync);
+        group.MapPost("/hook", HookAsync).WithMetadata(new CameraHookEndpointMetadata());
         group.MapMethods("/fs/{loginId:guid}/{operation}/{**path}", ["GET", "POST", "DELETE", "PATCH"], FileSystemAsync);
 
         app.MapGet("/management/ingress/transfers", async (CameraIngressService ingress, CancellationToken token) =>
