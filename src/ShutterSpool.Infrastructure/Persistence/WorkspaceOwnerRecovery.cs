@@ -46,6 +46,7 @@ internal sealed partial class EfAccessGrantStore
         string beforeState = JsonSerializer.Serialize(new { Representative = representative is null ? null : Membership(representative),
             Target = target is null ? null : Membership(target), policy.AuthorityRevision });
         AccessChangeResult result;
+        Guid[] invalidatedOffers = [];
         if (policy.AuthorityRevision != recovery.ExpectedAuthorityRevision || representative?.IsActive != true
             || representative.Role != WorkspaceRole.Owner || representative.Revision != recovery.ExpectedRepresentativeRevision
             || (target?.Revision ?? -1) != recovery.ExpectedTargetRevision)
@@ -59,6 +60,7 @@ internal sealed partial class EfAccessGrantStore
             }
             else { target.IsActive = true; target.Role = WorkspaceRole.Owner; target.Revision++; }
             if (representative.Id != target.Id) { representative.IsActive = false; representative.Revision++; }
+            invalidatedOffers = await InvalidateInvitationsAsync(representative, token);
             policy.AuthorityRevision++;
             result = new(operation, "applied", Membership(target));
         }
@@ -69,7 +71,7 @@ internal sealed partial class EfAccessGrantStore
             TargetId = target?.Id ?? Guid.Empty, RecordedAt = DateTimeOffset.UtcNow,
             NotificationStatus = result.Status == "applied" ? "pending" : null,
             BeforeState = beforeState, AfterState = JsonSerializer.Serialize(new { Representative = representative is null ? null : Membership(representative),
-                Target = target is null ? null : Membership(target), policy.AuthorityRevision }),
+                Target = target is null ? null : Membership(target), policy.AuthorityRevision, InvalidatedOffers = invalidatedOffers }),
         });
         await database.SaveChangesAsync(token);
         await transaction.CommitAsync(token);

@@ -23,6 +23,10 @@ Access changes serialize current actor/target/revision/last-Owner checks and the
 Ordinary workflow commands use fresh request/item admission and retain their existing feature transactions; admitted work may commit after revocation.
 See [authorization](authentication-and-authorization.md#roles-and-access-changes) for that boundary and the current media predicate.
 
+Recipient references and workspace offers are tenant-local. Offer transitions reuse the access-change lock, authority checks and operation/audit storage; identity-provider operations are separate commits.
+Acceptance reads PostgreSQL's current clock after acquiring the lock, then commits membership and accepted state together. Renewal advances an unaccepted offer's revision/lifetime; accepted membership is never overwritten by a retry.
+Membership changes invalidate affected pending offers in their existing transaction, including removal and exceptional principal replacement. See the [invitation API contract](../../src/ShutterSpool.Server/README.md#workspace-invitations).
+
 Camera ingress keeps login/admission records separate from Sources and Assets.
 Admission checks the login's credential generation under the credential/Source locks; an already admitted transfer may finish after revocation.
 Each Source selects one explicit `ConnectionProfile`; a camera login records the profile supplied by its trusted callback route.

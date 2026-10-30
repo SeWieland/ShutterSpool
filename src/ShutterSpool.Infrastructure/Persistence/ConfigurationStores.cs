@@ -519,6 +519,7 @@ internal sealed partial class EfAccessGrantStore(ShutterSpoolDbContext database)
         string beforeState = JsonSerializer.Serialize(new { Actor = actor is null ? null : Membership(actor),
             Target = target is null ? null : Membership(target), Policy = new WorkspaceViewerPolicy(policy.IncludeUnreleased, policy.Revision), policy.AuthorityRevision });
         AccessChangeResult result;
+        Guid[] invalidatedOffers = [];
         if (actor is null || !Enum.IsDefined(actor.Role)) result = new(change.OperationId, "denied");
         else if (change.Kind == "viewer-policy")
         {
@@ -546,6 +547,7 @@ internal sealed partial class EfAccessGrantStore(ShutterSpoolDbContext database)
             if (change.Kind is "remove" or "leave") target.IsActive = false;
             else target.Role = change.Kind == "promote-owner" ? WorkspaceRole.Owner : change.Role!.Value;
             target.Revision++;
+            invalidatedOffers = await InvalidateInvitationsAsync(target, token);
             result = new(change.OperationId, "applied", Membership(target));
         }
         if (result.Status == "applied") policy.AuthorityRevision++;
@@ -555,7 +557,7 @@ internal sealed partial class EfAccessGrantStore(ShutterSpoolDbContext database)
             ActorIssuer = change.ActorIssuer, ActorSubject = change.ActorSubject, Kind = change.Kind,
             TargetId = target?.Id ?? change.TargetId, RecordedAt = DateTimeOffset.UtcNow,
             BeforeState = beforeState, AfterState = JsonSerializer.Serialize(new { Target = target is null ? null : Membership(target),
-                Policy = new WorkspaceViewerPolicy(policy.IncludeUnreleased, policy.Revision), policy.AuthorityRevision }),
+                Policy = new WorkspaceViewerPolicy(policy.IncludeUnreleased, policy.Revision), policy.AuthorityRevision, InvalidatedOffers = invalidatedOffers }),
         });
         await database.SaveChangesAsync(token);
         await transaction.CommitAsync(token);

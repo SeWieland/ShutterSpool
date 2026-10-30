@@ -28,6 +28,8 @@ public static class WorkspaceEndpointPermissions
     private static readonly HashSet<string> Administrator =
     [
         "GET /management/members", "POST /management/members/{id}/role", "POST /management/members/{id}/remove",
+        "GET /management/invitation-recipients", "GET /management/invitations", "POST /management/invitations",
+        "POST /management/invitations/{id}/renew", "POST /management/invitations/{id}/cancel",
         "POST /management/members/{id}/promote-owner", "PUT /management/viewer-policy",
         "GET /management/sources", "POST /management/sources", "GET /management/sources/{id}",
         "PUT /management/sources/{id}", "DELETE /management/sources/{id}",
