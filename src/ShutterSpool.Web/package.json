@@ -16,7 +16,7 @@
     "generate-client": "dotnet tool run kiota generate --language TypeScript --openapi ../ShutterSpool.Server/openapi/ShutterSpool_Server.json --output app/api --clean-output --class-name ShutterSpoolClient --namespace-name ShutterSpool.Api --structured-mime-types application/json --structured-mime-types text/plain --structured-mime-types application/x-www-form-urlencoded --structured-mime-types multipart/form-data --structured-mime-types image/webp --structured-mime-types image/svg+xml --structured-mime-types text/event-stream && node scripts/trim-generated.mjs"
   },
   "devDependencies": {
-    "nuxt": "4.6.2",
+    "nuxt": "4.6.3",
     "typescript": "5.9.3",
     "vue-tsc": "3.3.13"
   },
