@@ -3987,7 +3987,6 @@ export function deserializeIntoWorkspaceListResponse(workspaceListResponse: Part
     return {
         "incomplete": n => { workspaceListResponse.incomplete = n.getBooleanValue(); },
         "items": n => { workspaceListResponse.items = n.getCollectionOfObjectValues<WorkspaceSummaryResponse>(createWorkspaceSummaryResponseFromDiscriminatorValue); },
-        "selectionRequired": n => { workspaceListResponse.selectionRequired = n.getBooleanValue(); },
     }
 }
 /**
@@ -7367,7 +7366,6 @@ export function serializeWorkspaceListResponse(writer: SerializationWriter, work
     if (!workspaceListResponse || isSerializingDerivedType) { return; }
     writer.writeBooleanValue("incomplete", workspaceListResponse.incomplete);
     writer.writeCollectionOfObjectValues<WorkspaceSummaryResponse>("items", workspaceListResponse.items, serializeWorkspaceSummaryResponse);
-    writer.writeBooleanValue("selectionRequired", workspaceListResponse.selectionRequired);
 }
 /**
  * Serializes information the current object
@@ -8004,10 +8002,6 @@ export interface WorkspaceListResponse extends Parsable {
      * The items property
      */
     items?: WorkspaceSummaryResponse[] | null;
-    /**
-     * The selectionRequired property
-     */
-    selectionRequired?: boolean | null;
 }
 export interface WorkspaceSummaryResponse extends Parsable {
     /**

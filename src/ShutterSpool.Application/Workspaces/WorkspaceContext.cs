@@ -1,7 +1,7 @@
 namespace ShutterSpool.Application.Workspaces;
 
 public sealed record WorkspaceDefinition(Guid Id, string Name, string StorageIdentity, string StorageRoot,
-    long AllocatedBytes, string ConnectionReference);
+    long AllocatedBytes);
 public sealed record WorkspaceIngressRoute(WorkspaceDefinition Workspace, Guid SourceId);
 
 public static class WorkspaceIngressHandle
@@ -11,16 +11,15 @@ public static class WorkspaceIngressHandle
 }
 
 // Bound once before resolving workflow services; child scopes must explicitly inherit this identity.
-public sealed class WorkspaceContext(bool enabled)
+public sealed class WorkspaceContext
 {
-    public bool Enabled { get; } = enabled;
     public WorkspaceDefinition? Selected { get; private set; }
     public WorkspaceDefinition Required => Selected ?? throw new InvalidOperationException("A verified workspace context is required.");
-    public Guid? Id => Enabled ? Required.Id : null;
+    public Guid? Id => Required.Id;
 
     public void Bind(WorkspaceDefinition workspace)
     {
-        if (!Enabled || Selected is not null || workspace.Id == Guid.Empty)
+        if (Selected is not null || workspace.Id == Guid.Empty)
             throw new InvalidOperationException("The workspace context cannot be rebound.");
         Selected = workspace;
     }

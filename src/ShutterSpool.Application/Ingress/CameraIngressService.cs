@@ -243,8 +243,14 @@ public sealed class CameraIngressService(
         return sourceId is null ? (0, 0) : await store.GetDirectorySizeAsync(sourceId.Value, cancellationToken);
     }
 
-    private async Task<Guid?> FindSourceIdAsync(Guid loginId, CancellationToken cancellationToken) =>
-        (await store.FindLoginAsync(loginId, cancellationToken))?.SourceId;
+    private async Task<Guid?> FindSourceIdAsync(Guid loginId, CancellationToken cancellationToken)
+    {
+        CameraLogin? login = await store.FindLoginAsync(loginId, cancellationToken);
+        if (login is null || !await credentials.IsCurrentAsync(login.Username,
+            new(login.SourceId, login.VirtualRoot, login.CredentialGeneration), login.ConnectionProfile, cancellationToken))
+            throw new CameraIngressRejectedException("The camera login is unavailable.");
+        return login.SourceId;
+    }
 
     public Task<CameraLogin?> FindLoginAsync(Guid loginId, CancellationToken cancellationToken) =>
         store.FindLoginAsync(loginId, cancellationToken);

@@ -124,7 +124,7 @@ The quota is an admission budget, not a promise that the controller can always f
 That is why protected Trash can stop new uploads even while its eventual reclamation is already planned.
 
 The spool cap counts Active originals, Trash, upload/transient bytes, quarantine, disk previews and the unwritten remainder of incoming reservations.
-In shared-workspace mode, this cap and its accounting apply only to the selected workspace. Its storage limit is required and cannot exceed the operator-assigned filesystem allocation; another workspace's unused allocation is unavailable.
+This cap and its accounting apply only to the selected workspace. Its storage limit is required and cannot exceed the operator-assigned filesystem allocation; another workspace's unused allocation is unavailable.
 Only the operator can resize that allocation during stopped-writer maintenance. The allocation does not guarantee currently available storage or replace physical free-space checks.
 Written upload bytes count once.
 Favorites and protected bytes are overlapping subsets, not extra occupancy.
@@ -174,14 +174,15 @@ When safe space is unavailable, new admission pauses or fails instead of breakin
 ## Settings and safe activation
 
 Automatic original removal defaults to disabled.
-Single-workspace installations need an explicitly chosen active spool quota and acknowledgement of the settings impact before enabling automatic removal.
-Shared workspaces start with an active quota matching their assigned allocation; they can lower that limit through this settings flow but cannot disable it or raise it above the allocation. Automatic removal still starts disabled.
+Every workspace starts with an active quota matching its assigned allocation, including a personal installation with one workspace.
+You can lower that limit through this settings flow, but cannot disable it or raise it above the allocation.
+Enabling automatic removal requires a complete impact review and acknowledgement.
 Open **Settings → Storage** to inspect capacity, preview the proposed impact and save with the current revisions; incomplete impact evidence cannot enable automatic cleanup.
 The header Settings control opens Workspace first; **Storage settings** in Trash opens Storage directly.
 
 For first-time storage setup in the selected workspace:
 
-1. Open **Settings → Storage**. In single-workspace mode, select **Use a storage limit for new photographs**; in shared mode it is already selected and required. Set or review the limit and cleanup thresholds within the displayed allocation, and leave **Allow automatic cleanup** off. If the saved values already suit your needs, continue with the capacity check in step 3.
+1. Open **Settings → Storage**. **Use a storage limit for new photographs** is required within the assigned allocation. Set or review the limit and cleanup thresholds within the displayed allocation, and leave **Allow automatic cleanup** off. If the saved values already suit your needs, continue with the capacity check in step 3.
 2. Choose **Review changes**, read the changed values and their effects, acknowledge the impact, then **Save settings**. Quota-only activation can be saved with incomplete accounting; uploads may remain paused while usage is checked.
 3. Choose **Refresh capacity** and inspect **Storage details** until usage is confirmed. If usage remains unknown, check that the configured spool root is available and matches this installation; a new **Checked** timestamp alone does not confirm accounting.
 4. If you want automatic cleanup, enable it after the saved limit is active and usage is confirmed. Review the changes again, acknowledge the impact and save; this review must be complete.

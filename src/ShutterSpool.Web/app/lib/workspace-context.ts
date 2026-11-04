@@ -5,7 +5,6 @@ export interface WorkspaceMembership {
 
 export type WorkspaceSelection =
     | { state: 'selected'; workspace: WorkspaceMembership }
-    | { state: 'legacy' }
     | { state: 'choose' }
     | { state: 'empty' }
     | { state: 'incomplete' }
@@ -15,21 +14,22 @@ const workspaceIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-
 
 export function readWorkspaceId(search: string): string | null {
     const values = new URLSearchParams(search).getAll('workspace');
+    if (!values.length) return null;
     const [value] = values;
-    if (values.length !== 1 || !value || !workspaceIdPattern.test(value)) return null;
+    // An invalid explicit selection must not become an automatic workspace choice.
+    if (values.length !== 1 || !value || !workspaceIdPattern.test(value)) return '';
     return value.toLowerCase();
 }
 
 export function workspaceSelection(
     memberships: WorkspaceMembership[],
     incomplete: boolean,
-    selectionRequired: boolean,
     selectedId: string | null,
 ): WorkspaceSelection {
     const workspace = selectedId && memberships.find(item => item.id.toLowerCase() === selectedId);
     if (workspace) return { state: 'selected', workspace };
-    if (selectedId) return { state: incomplete ? 'incomplete' : 'unavailable' };
-    if (!selectionRequired) return { state: 'legacy' };
+    if (selectedId !== null) return { state: incomplete ? 'incomplete' : 'unavailable' };
+    if (!incomplete && memberships.length === 1) return { state: 'selected', workspace: memberships[0]! };
     if (memberships.length) return { state: 'choose' };
     return { state: incomplete ? 'incomplete' : 'empty' };
 }

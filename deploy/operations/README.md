@@ -10,144 +10,157 @@ External-service owners provide equivalent database/role and identity custody du
 Do not stop a shared external IdP or dump unrelated databases: preserve that issuer under its provider's recovery procedure.
 Valkey and previews are disposable; destination storage has separate custody.
 
-For shared-workspace mode, first follow the [workspace provisioning procedure](#shared-workspace-provisioning).
-The single-database capture/restore examples below are not a complete backup of a shared instance: include the control database, every registered tenant database, every allocated storage root, matching keys/configuration and required identity state in the same stopped-writer interval.
-Keep each database dump and storage root identified by its workspace and storage identity; preserve restricted runtime/migration roles and filesystem allocation boundaries on restore.
-Do not restore one tenant independently or restore current registry state beside older tenant state.
+Every installation has a control database and one or more workspace databases and storage allocations.
+Back up all of them, matching keys/configuration and required identity state in the same stopped-writer interval.
+Keep each dump and storage copy identified by workspace name; preserve its internal identity markers, restricted roles and allocation boundary.
+Do not restore one workspace independently or combine registry and tenant state from different recovery points.
 
-## Shared workspace provisioning
+## Workspace provisioning
 
-Shared-workspace mode serves up to 32 workspaces from one Server, with a separate PostgreSQL database, restricted runtime role and fixed filesystem allocation for each.
-It is an explicit deployment choice: set `ShutterSpool:Workspaces:Enabled=true` before provisioning.
-Existing single-workspace data is not adopted or reset. Retain its database, spool and matching keys/configuration when creating a separate installation.
+One Server serves up to 32 workspaces. A personal installation follows the same procedure with one workspace.
+The operator chooses unique names such as `studio`; ShutterSpool generates the internal workspace and storage IDs.
+There is no adoption of an older installation. Keep existing databases, media and keys intact when creating fresh state.
 
-Prepare storage and PostgreSQL with standard operator tools while Server and camera edges are stopped:
+### Prepare the boundaries
 
-1. Create an empty control database and an empty database for each workspace, with separate migration owners and restricted runtime logins. Runtime logins must not own their database/schema, inherit other roles, create objects or hold privileged PostgreSQL attributes.
-2. Revoke `PUBLIC` connection access to these databases; grant connection access only to their intended migration/runtime roles. Do not grant tenant roles access to another tenant or the control database. The CLI grants the needed table/schema privileges within its selected database.
-3. Provision an existing empty, filesystem-enforced storage allocation for each workspace. Use bounded volumes or native filesystem quotas; an ordinary directory or thin-provisioned promise alone is insufficient. Total allocations must fit usable storage after physical reserves and non-workspace overhead.
-4. Establish the first member's verified OIDC issuer and subject from an account they can sign into. An operator identity is not automatically a workspace member.
+Keep Server and camera edges stopped while preparing:
 
-The following settings use standard configuration notation; environment variables replace `:` with `__`.
-Connection references name entries in `ConnectionStrings`, not literal connection strings supplied by a client.
-Any named connection can use a `<reference>File` entry pointing to a mounted secret file instead of an inline connection string.
+1. An empty control database and an empty database per workspace, each with a migration owner and a separate restricted runtime login. Runtime logins must not own databases/schemas, create objects, inherit other roles or hold privileged PostgreSQL attributes.
+2. Database connection grants limited to the intended roles, with `PUBLIC` access revoked. Tenant roles must have no access to the control database or another tenant. The provisioning command grants required schema/table access inside its selected database.
+3. An empty, filesystem-enforced allocation per workspace. Use bounded volumes or native filesystem quotas; a directory or bind mount alone does not enforce a budget. Total allocations must fit usable capacity after reserves and other host data.
+4. The first member's verified OIDC issuer and subject. Deployment administration alone grants no workspace membership.
 
-| Setting | Purpose |
-| --- | --- |
-| `ShutterSpool:Workspaces:UsableCapacityBytes` | Operator's usable total, after reserves and storage needed outside workspace allocations. |
-| `ConnectionStrings:shutterspool-control` | Restricted control registry/routing connection for normal Server operation. |
-| `ConnectionStrings:shutterspool-control-migration` | Separate privileged connection to that same control database, only for operator commands. |
-| `ShutterSpool:Workspaces:Definitions:<workspace-guid>:Name` | Workspace label. |
-| `…:StorageIdentity`, `…:StorageRoot`, `…:AllocatedBytes` | Stable operator storage identity, absolute allocated root and fixed byte budget. |
-| `…:ConnectionReference`, `…:MigrationConnectionReference` | Runtime and migration connection names for the same tenant database, with distinct roles. |
-| `…:OwnerIssuer`, `…:OwnerSubject` | Verified initial member identity bound to the configured OIDC authority. HTTPS is required except for the supported non-packaged loopback development issuer. |
-
-Definitions and migration connections are operator-command inputs; normal Server operation reads activated definitions from the control registry and needs only its restricted control/tenant connections.
-Keep migration secrets out of the normal runtime's mounts/configuration. Preserve the existing deployment encryption key with all tenant recovery sets.
-The control registry stores routing/provisioning facts and connection reference names, not connection secrets or authoritative memberships.
-This tenancy foundation gives provisioned members management access; delegated member roles are not yet available.
-
-### Mount runtime and operator configuration
-
-The package's default Compose graph is single-workspace configuration. Before starting shared mode:
-
-1. In the generated core's `server` service, remove the `ConnectionStrings__shutterspoolFile` environment entry and its `database-connection` service secret. Retain the encryption-key secret and other required service configuration. Do not give normal Server operation a privileged legacy database connection.
-2. Add the restricted control and tenant `<reference>File` settings to `config/server.json`, enable workspace mode and set usable capacity. For example, `ConnectionStrings:shutterspool-controlFile` can point to `/run/workspace-connections/control` and `ConnectionStrings:workspace-oneFile` to `/run/workspace-connections/workspace-one`.
-3. Put only those restricted runtime connection files in `secrets/workspace-runtime`. Each contains its complete Npgsql connection string, using the database's address reachable from the Compose `backend` network (`postgres` for the bundled service). Keep privileged migration connections separately in `secrets/workspace-migration`.
-4. Add a local override such as `config/workspaces.yaml` to the installation's `COMPOSE_FILE` selection. Mount every allocated root and the runtime connection directory into `server`; use the same container paths for operator commands. The example below adds one workspace. Substitute the already provisioned host allocation and repeat the root mount for each workspace.
-
-```yaml
-services:
-  server:
-    volumes:
-      - type: bind
-        source: ./secrets/workspace-runtime
-        target: /run/workspace-connections
-        read_only: true
-        bind:
-          create_host_path: false
-      - type: bind
-        source: /srv/shutterspool/workspace-one
-        target: /var/lib/shutterspool/workspaces/11111111-1111-4111-8111-111111111111
-        bind:
-          create_host_path: false
-```
-
-Bind source paths resolve from the package's base Compose file, even when the override is under `config`.
-Set that workspace's `StorageRoot` to the exact container target above; paths in the registry must match normal runtime and maintenance containers.
-The bind mount exposes an allocation; it does not create or enforce its filesystem quota.
-The image runs as UID/GID 1654. Give that identity write/traverse access to allocated roots and read/traverse access to its restricted connection files/directories; keep other host users out.
-Shared mode enables no destination kinds by default. Set the operator-controlled `ShutterSpool:Destinations:EnabledKinds` array in `config/server.json` to the intended subset of `local` and `webdav`.
-If local destinations are enabled, the operator creates their `destinations` directory inside the allocation before members configure them. WebDAV denies private/local and special-use addresses unless the operator permits the exact required CIDR through `ShutterSpool:Destinations:WebDavEgress:AllowedPrivateNetworks`; normal certificate validation and no-redirect behavior remain required.
-Choose camera listeners through the [package camera profiles](../README.md#camera-profiles); apply capability changes only while writers are stopped. Enabling a type does not qualify its storage or provider.
-
-Create a private `config/workspace-operator.json` containing the same workspace mode/capacity, OIDC security settings and runtime connection file references, plus every exact provisioning definition and migration `<reference>File` setting from the table above.
-For example, `ConnectionStrings:shutterspool-control-migrationFile` can point to `/run/workspace-migration/control`, and the tenant's migration reference to `/run/workspace-migration/workspace-one`.
-Keep the operator file and migration directory readable only by their operator/UID 1654 consumers. Never copy migration secrets into the runtime directory or mount them into the ordinary Server.
-Preserve the verified initial Owner and original provisioning values in this private operator inventory for retries and upgrades.
-
-Validate the complete Compose selection with `docker compose config --quiet`.
-Start only the required database service if it is not already running; keep Server, camera edges and public traffic stopped. Use provider tools for external PostgreSQL.
-From the package directory, define this host-shell function:
+For the bundled PostgreSQL example, `package/workspace-databases.sql` creates `shutterspool_control` and `shutterspool_studio`, the migration owner and the two runtime roles.
+Supply `CONTROL_RUNTIME_PASSWORD`, `STUDIO_RUNTIME_PASSWORD` and `MIGRATION_PASSWORD` as exported environment variables through your private secret-management process; do not place their values in command history.
+Start only PostgreSQL, then prepare the databases:
 
 ```sh
-set -eu
-workspace_operator() {
-  docker compose run --rm --no-deps \
-    --env ASPNETCORE_ENVIRONMENT=WorkspaceOperator \
-    --volume "$PWD/config/workspace-operator.json:/app/appsettings.WorkspaceOperator.json:ro" \
-    --volume "$PWD/secrets/workspace-migration:/run/workspace-migration:ro" \
-    server "$@"
+docker compose up --detach --wait postgres
+docker compose exec -T -e CONTROL_RUNTIME_PASSWORD -e STUDIO_RUNTIME_PASSWORD -e MIGRATION_PASSWORD postgres \
+  sh -c 'exec psql -U "$POSTGRES_USER" -d postgres' < package/workspace-databases.sql
+unset CONTROL_RUNTIME_PASSWORD STUDIO_RUNTIME_PASSWORD MIGRATION_PASSWORD
+```
+
+The script preserves existing passwords and databases. Its example names must match the connection strings in the secret JSON files below.
+Use normal PostgreSQL administration for additional workspaces or an external database server.
+
+### Configure once
+
+The package uses standard .NET configuration with three files:
+
+| File under `config/` | Contents | Consumers |
+| --- | --- | --- |
+| `appsettings.json` | Shared defaults and workspace definitions: allocations, paths and initial identities. | Server and maintenance |
+| `appsettings.Production.json` | Runtime connection strings, application secrets and production-only settings. | Server only |
+| `appsettings.Maintenance.json` | Runtime connections needed for validation, migration connections and the retained encryption key. | Maintenance only |
+
+Edit the supplied files for your installation. Server selects Production; the operator container selects Maintenance.
+.NET loads `appsettings.json` and the selected environment file automatically, with normal environment-variable/command-line overrides.
+There are no custom file readers or configuration-loading hooks.
+Workspace definitions exist once in the shared base. Keep runtime credentials and the encryption key consistent where both environment files need them.
+
+The `studio` definition in `appsettings.json` contains only its allocation and initial identity:
+
+```json
+"Workspaces": {
+  "UsableCapacityBytes": 107374182400,
+  "Definitions": {
+    "studio": {
+      "StorageRoot": "/srv/shutterspool/studio",
+      "AllocatedBytes": 107374182400,
+      "OwnerIssuer": "https://identity.example.invalid/realms/shutterspool",
+      "OwnerSubject": "the-verified-subject"
+    }
+  }
 }
 ```
 
-The one-off container uses the selected image's `dotnet ShutterSpool.Server.dll` entrypoint, inherited runtime mounts/network/encryption key and the additional operator-only configuration/secrets.
-It publishes no service ports and the commands below exit without starting HTTP or workers. No shell or SDK is needed in the image.
+This section belongs inside `ShutterSpool`. `UsableCapacityBytes` is the deployment total after reserves; `AllocatedBytes` is this workspace's fixed share.
+All connection strings belong under `ConnectionStrings`. The Production file uses:
+
+```json
+"ConnectionStrings": {
+  "shutterspool-control": "Host=postgres;Database=shutterspool_control;Username=shutterspool_control_runtime;Password=...",
+  "Workspaces": {
+    "studio": {
+      "Runtime": "Host=postgres;Database=shutterspool_studio;Username=shutterspool_studio_runtime;Password=..."
+    }
+  }
+}
+```
+
+The Maintenance file includes those runtime entries and adds `ConnectionStrings:shutterspool-control-migration` and `ConnectionStrings:Workspaces:studio:Migration`, using the migration owner for those same databases.
+The workspace name is the key in both sections; no connection alias or manually supplied workspace ID is needed.
+Use distinct runtime passwords for the control and each workspace role. The control registry stores provisioning/allocation facts, never connection passwords or authoritative membership grants.
+
+Native Compose secrets mount each environment file at its expected `/app/appsettings.*.json` path.
+Normal Server never receives the Maintenance file. The shared base is an ordinary read-only configuration mount.
+The image runs as UID/GID 1654; protect secret JSON files for that consumer. Compose provides per-service access, not encryption of host files.
+
+To add another workspace, add its shared definition and environment connection entries, then mount its allocation in both services in `components/workspaces.yaml`.
+Keep `StorageRoot` equal to the container mount target. Host paths resolve from the package's base Compose file.
+A bind mount exposes the allocation; it does not create a filesystem quota. Give UID/GID 1654 write/traverse access to the root.
+
+Set `ShutterSpool:Destinations:EnabledKinds` to the intended subset of `local` and `webdav`; none are enabled by default.
+Local delivery uses the operator-created `destinations` directory inside the workspace allocation.
+WebDAV denies private/local and special-use addresses unless the operator permits the required CIDR through `ShutterSpool:Destinations:WebDavEgress:AllowedPrivateNetworks`.
+Certificate validation and no-redirect behavior remain required.
+Choose listeners through [camera profiles](../README.md#camera-profiles); apply capability changes during stopped-writer maintenance.
+
 ### Initialize and provision
 
-Stop on every failed command; do not start the normal graph until provisioning and all identity/key/schema/storage checks succeed:
+Validate Compose, start the required database service, then initialize the registry and named workspace:
 
 ```sh
-workspace_operator --workspace-control-init
-workspace_operator --workspace-provision 11111111-1111-4111-8111-111111111111 22222222-2222-4222-8222-222222222222
+set -eu
+docker compose config --quiet
+docker compose up --detach --wait postgres
+docker compose run --rm --no-deps maintenance --workspace-control-init
+docker compose run --rm --no-deps maintenance --workspace-provision studio
 ```
 
-Replace both example GUIDs: the first identifies the configured workspace and the second identifies this provisioning operation. Retain them for retry.
-Initialization refuses an unknown nonempty database/root. Provisioning records the exact targets and initial identity, establishes schema, keys, defaults and storage markers, and activates only after checks succeed.
-Retry the same operation and inputs after interruption; changed targets/identity are a conflict. Repeating a completed operation does not regrant removed membership.
-Do not erase registry rows, markers or migration history to force a retry.
+For external PostgreSQL, use its normal service procedure instead of starting `postgres`.
+One-off maintenance containers publish no service ports and exit without starting HTTP or workers.
+Only start the normal graph after every workspace provisions successfully.
 
-### Upgrade workspace databases
+Provisioning refuses unknown nonempty databases/roots, creates schema, keys, defaults and identity markers, then activates the workspace.
+Retry the same name and inputs after interruption; changed initial targets or member identity are a conflict.
+Repeating a completed provision never regrants removed membership. Do not erase registry rows, markers or migration history to force a retry.
 
-Only after [stopping every writer](#stop-writers-before-capture) and capturing an eligible complete recovery set, set `ShutterSpool:Workspaces:WritersStopped=true` in `config/workspace-operator.json` for the operator process and run:
+Startup validates database identity, privileges, exact schema, keys and storage markers, then completes recovery.
+Resolved mappings remain fixed until restart. Startup does not migrate schemas or replay the initial grant.
+Moving a validated database/root during recovery requires stopped writers and restart; persistent tenant/storage identities must still match.
+
+### Upgrade databases
+
+After [stopping writers](#stop-writers-before-capture) and capturing an eligible complete backup:
 
 ```sh
-workspace_operator --workspace-upgrade
+docker compose run --rm --no-deps maintenance --workspace-upgrade
 ```
 
-That flag is the operator's declaration, not a mechanism that stops other processes.
-Normal Server operation holds `.shutterspool-writers.lock` in each allocated root for its lifetime; upgrade/allocation commands must acquire those same locks and refuse while the Server holds them.
-Operator commands serialize through the control database. These safeguards do not stop unrelated tools or replace the stopped-writer procedure.
-Keep the instance closed on any failed upgrade or identity/key/recovery check; repair forward or restore a complete eligible set under the [supported recovery boundary](#supported-recovery-boundary).
-Normal startup validates exact schema compatibility and storage identity and completes tenant recovery without migrations or initial-grant replay.
+Server holds `.shutterspool-writers.lock` in each root for its lifetime; maintenance must acquire those same leases.
+Operator changes serialize through the control database, while EF/Npgsql handles migration locking.
+These safeguards do not stop unrelated tools. Keep the instance closed after any failed upgrade, identity, key or recovery check.
+Repair forward or restore a complete eligible set under the [recovery boundary](#supported-recovery-boundary).
 
-### Resize a storage allocation
+### Resize an allocation
 
-To resize an allocation, stop writers, adjust and requalify the native filesystem boundary, then use the same operator settings with `WritersStopped=true`:
+Stop writers, adjust and qualify the filesystem boundary, and change the definition's `AllocatedBytes` to the new value.
+Then record the change, supplying the expected previous value:
 
 ```sh
-# Example: change a 2 GiB allocation to 4 GiB; substitute the workspace and exact byte values.
-workspace_operator --workspace-allocation 11111111-1111-4111-8111-111111111111 2147483648 4294967296
+# Example: grow studio from 2 GiB to 4 GiB.
+docker compose run --rm --no-deps maintenance --workspace-allocation studio 2147483648 4294967296
 ```
 
-The command checks the expected current allocation, known tenant accounting and total deployment capacity; it refuses a size below retained occupancy/reservations or the saved workspace quota.
-Lower that quota through its normal impact-confirmed settings flow before maintenance when shrinking. Never shrink a filesystem beneath retained data.
-An already-applied retry is idempotent. The command changes only the assigned registry budget, not storage, keys, media or the original provisioning tuple; keep original definitions unchanged for provisioning retries.
+The command checks the previous allocation, total capacity, saved workspace quota and retained bytes/reservations; an already-applied retry succeeds.
+Lower the workspace quota through its normal impact-confirmed settings flow before shrinking, and never shrink a filesystem below retained data.
+The command records a budget; it does not resize storage or delete media.
 
-Workspace quota settings cannot exceed the assigned allocation or disable its cap. Receive, original, quarantine, temporary-copy and disk-preview writes stay in that workspace's storage boundary.
-Unused allocation cannot be borrowed from another workspace; fixed budgets do not guarantee that storage is currently available or replace physical free-space checks.
-Platform enforcement and recovery must be qualified on the actual deployment; application tests are not persistent-volume or power-loss evidence.
-This foundation does not provide delegated roles or invitations and does not establish readiness to open a hosted service.
+Workspace quotas cannot exceed their allocation or disable its cap. Receive, original, quarantine, temporary-copy and preview writes stay within that boundary.
+Unused allocation cannot be borrowed; physical free-space checks still apply.
+Application tests do not establish filesystem enforcement, power-loss recovery or hosted readiness; qualify those on the selected platform.
 
 ## Supported recovery boundary
 
@@ -196,20 +209,22 @@ backup=/secure/backups/shutterspool-2026-10-21
 mkdir -m 0700 "$backup"
 server_id=$(docker compose ps --all --quiet server)
 test -n "$server_id"
-docker compose exec -T postgres sh -c 'exec pg_dump -U "$POSTGRES_USER" -Fc shutterspool' > "$backup/shutterspool.dump"
+docker compose exec -T postgres sh -c 'exec pg_dump -U "$POSTGRES_USER" -Fc shutterspool_control' > "$backup/control.dump"
+docker compose exec -T postgres sh -c 'exec pg_dump -U "$POSTGRES_USER" -Fc shutterspool_studio' > "$backup/studio.dump"
 docker compose exec -T postgres sh -c 'exec pg_dump -U "$POSTGRES_USER" -Fc keycloak' > "$backup/keycloak.dump"
 docker compose exec -T postgres sh -c 'exec pg_dumpall -U "$POSTGRES_USER" --globals-only' > "$backup/roles.sql"
-mkdir "$backup/spool"
-docker cp -a "$server_id:/var/lib/shutterspool/spool/." "$backup/spool/"
+mkdir "$backup/studio"
+docker cp -a "$server_id:/srv/shutterspool/studio/." "$backup/studio/"
 tar -czpf "$backup/configuration.tar.gz" .env config secrets certificates compose.yaml profiles components proxies package
 cp release-manifest.json "$backup/"
-docker compose exec -T postgres pg_restore --list < "$backup/shutterspool.dump" > "$backup/shutterspool.contents"
+docker compose exec -T postgres pg_restore --list < "$backup/control.dump" > "$backup/control.contents"
+docker compose exec -T postgres pg_restore --list < "$backup/studio.dump" > "$backup/studio.contents"
 docker compose exec -T postgres pg_restore --list < "$backup/keycloak.dump" > "$backup/keycloak.contents"
 tar -tzf "$backup/configuration.tar.gz" > "$backup/configuration.contents"
 ```
 
 Adjust database names; omit the identity dump for an independently managed issuer.
-For a shared instance, repeat the application database dump/list verification and storage copy for the control database and each tenant/root from the operator inventory; the control database has no media root.
+This example covers the control database and one workspace. Repeat the workspace dump/list verification and root copy for every additional definition; the control database has no media root.
 Use distinct dump and directory names so no workspace copy overwrites another. Include the fixed allocation configuration and native volume/quota setup in the recovery inventory.
 Include all additional Compose overrides, external secret/certificate mounts and local destination mount configuration.
 Inspect the complete copied spool/recovery inventory and numeric ownership.
@@ -235,20 +250,51 @@ Before any Compose command, choose distinct free `BACKEND_SUBNET`, `PROXY_SUBNET
 Supply isolated external databases where applicable; do not retain old explicit volume names or database targets.
 Keep proxy and camera edges stopped throughout validation.
 
-For the bundled layout, start only PostgreSQL and restore its empty application/identity databases:
+Before creating, starting or copying into any candidate container, prepare a fresh qualified empty host allocation for **every workspace**.
+Changing the Compose project name does not change absolute bind sources: the restored `components/workspaces.yaml` still points at the original host roots.
+Change each workspace's bind `source` in **both Server and maintenance**, including any additional overrides. Retain the configuration and secret mounts.
+For example, after preparing a separate bounded allocation at `/srv/shutterspool-restore/studio`, change both allocation entries to:
+
+```yaml
+services:
+  server:
+    volumes:
+      - type: bind
+        source: /srv/shutterspool-restore/studio
+        target: /srv/shutterspool/studio
+        bind:
+          create_host_path: false
+  maintenance:
+    volumes:
+      - type: bind
+        source: /srv/shutterspool-restore/studio
+        target: /srv/shutterspool/studio
+        bind:
+          create_host_path: false
+```
+
+The container target can remain unchanged; otherwise the shared workspace `StorageRoot` must match the new target.
+Inspect the fully resolved mounts privately with `docker compose --profile maintenance config` before creating containers.
+Resolve every original and candidate host allocation with `realpath` and confirm the canonical paths are disjoint: none may equal, contain or be contained by an original allocation or another workspace's allocation.
+Do not use a symlink or bind alias to an original allocation. Verify each candidate allocation is empty, has its qualified limit and grants UID/GID 1654 the required access.
+Do not continue if any mount still reaches original storage; copying a backup into that container would overwrite the retained installation.
+
+Start only PostgreSQL. Review the roles dump and recreate the required roles and empty databases before restoring; use the example setup script only where its names match.
+Never replay cluster-wide role changes blindly into shared PostgreSQL. For the example layout:
 
 ```sh
 docker compose up --detach --wait postgres
-docker compose exec -T postgres sh -c 'exec pg_restore -U "$POSTGRES_USER" --exit-on-error --dbname shutterspool' < "$backup/shutterspool.dump"
+docker compose exec -T postgres sh -c 'exec pg_restore -U "$POSTGRES_USER" --exit-on-error --dbname shutterspool_control' < "$backup/control.dump"
+docker compose exec -T postgres sh -c 'exec pg_restore -U "$POSTGRES_USER" --exit-on-error --dbname shutterspool_studio' < "$backup/studio.dump"
 docker compose exec -T postgres sh -c 'exec pg_restore -U "$POSTGRES_USER" --exit-on-error --dbname keycloak' < "$backup/keycloak.dump"
 docker compose up --no-start --no-deps server
 restore_server_id=$(docker compose ps --all --quiet server)
 test -n "$restore_server_id"
-docker cp -a "$backup/spool/." "$restore_server_id:/var/lib/shutterspool/spool/"
+docker cp -a "$backup/studio/." "$restore_server_id:/srv/shutterspool/studio/"
 ```
 
-Review `roles.sql` and recreate required missing roles/grants before restoring; bundled bootstrap already creates its configured PostgreSQL role.
-Never replay cluster-wide role changes blindly into shared PostgreSQL. Any failed restore leaves the candidate closed.
+Restore every additional workspace database/root during the same interval. Reestablish native allocation limits before startup.
+Any failed restore leaves the candidate closed.
 Compare complete spool inventory and representative original hashes with the backup, including numeric ownership.
 
 Isolate delivery destinations or preserve their original storage identity and account for at-least-once retries before starting Server.
@@ -269,7 +315,7 @@ Open traffic only after validation and deliberate operator cutover. Stop isolate
 
 Use only the release's explicitly named compatible predecessor.
 Drain, capture a verified recovery set, replace package/image/configuration and complete migrations/recovery before reopening traffic.
-Shared-workspace mode requires the explicit [workspace upgrade command](#shared-workspace-provisioning) with operator migration credentials; ordinary startup never migrates tenant databases.
+Use the explicit [workspace upgrade command](#upgrade-databases) with operator migration credentials; ordinary startup never migrates tenant databases.
 Keep the whole instance closed until all registered databases, storage identities, keys, allocation limits and recovery checks pass. A maintenance page alone does not stop writers.
 Never run old and new Servers concurrently against one database/spool.
 Failed initialization leaves the installation closed; preserve diagnostics and the pre-upgrade set.
@@ -279,47 +325,7 @@ The same erasure-history restrictions apply. Explain recovery-point loss and com
 
 ## Moving from an older pre-alpha installation
 
-The initial migration `20261025211318_InitialCreate` requires a fresh application database and empty spool at separately selected locations when moving from an incompatible older installation.
-Every historical migration chain is incompatible, including installations with Source connection profiles and Collections. There is no supported conversion of an older installation. Preserve its database, spool and original configuration/keys together; do not clear or reuse them for the new baseline.
-Preserve shared PostgreSQL storage and identity-provider state as well.
-Startup rejects an incompatible migration history before schema changes, key enrollment or recovery. Unversioned application tables, views and sequences also prevent fresh initialization. Do not edit or erase migration-history rows to bypass this guard, or use `EnsureCreated` to adopt a database.
-
-Recreate Sources on the new baseline and update every device sharing their credentials.
-Rollback uses the previous application with its retained database, spool and keys. Do not reopen the new baseline with the old application;
-there is no downgrade conversion or backward transfer of newly ingested data.
-
-This is a specific pre-alpha transition. Use [upgrade and rollback](#upgrade-and-rollback) for the package's explicitly declared compatible baseline.
-
-## Export current suppression evidence
-
-This first-packaged-key-enrollment procedure applies only to single-workspace mode with a database already on the compatible initial migration baseline. Shared-workspace mode denies these suppression HTTP routes; its fresh provisioning enrolls the key before activation. It cannot bypass historical-schema rejection and does not qualify recovery after later erasure.
-For a compatible Source-only database lacking a protected key check, obtain a current administrator token through the configured Authorization Code + PKCE client.
-Keep it in a private curl configuration, never shell arguments/history/logs:
-
-```sh
-umask 077
-mkdir /secure/evidence-new
-install -m 0600 /dev/null /secure/export-auth.conf
-```
-
-With a trusted editor add `header = "Authorization: Bearer <token>"`, and `cacert` for a private CA; never enable `insecure`.
-Export from the trusted installation:
-
-```sh
-curl --config /secure/export-auth.conf --proto '=https' --fail --silent --show-error \
-  --request POST --output /secure/evidence-new/manifest.json \
-  https://photographs.example.invalid/management/retention/erasures/suppressions/exports
-```
-
-Read only `snapshotId` and `pageCount`, without printing protected payloads.
-Download every index from zero through `pageCount - 1` for the same snapshot:
-
-```sh
-curl --config /secure/export-auth.conf --proto '=https' --fail --silent --show-error \
-  --output /secure/evidence-new/page-000000.json \
-  'https://photographs.example.invalid/management/retention/erasures/suppressions/exports/<snapshot-guid>/pages/0'
-```
-
-Use six-digit filenames for subsequent pages. Check matching snapshot IDs/page indexes; any failed or missing page makes the export incomplete.
-Only Server authenticates the protected payloads with the retained deployment key.
-Preserve the complete export independently with its origin/time, remove the token configuration, and follow first-enrollment instructions in the package guide.
+There is no conversion of older layouts. Use new empty control/workspace databases and allocated roots; recreate Sources and update every device sharing their credentials.
+Preserve the old databases, storage, keys, configuration and identity-provider state together.
+Never edit migration history or erase existing state to force initialization.
+The previous application can reopen only its original retained state; it cannot read newly ingested data from the new installation.

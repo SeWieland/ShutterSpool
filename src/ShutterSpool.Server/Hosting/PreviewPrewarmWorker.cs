@@ -16,12 +16,15 @@ internal sealed class PreviewPrewarmWorker(IServiceScopeFactory scopes, ILogger<
             bool processed = false;
             try
             {
-                await using WorkspaceWorkerScope scope = await tenants.NextAsync(stoppingToken);
-                LiveChangeNotifier changes = scope.ServiceProvider.GetRequiredService<LiveChangeNotifier>();
-                PreviewPrewarmService previews = scope.ServiceProvider.GetRequiredService<PreviewPrewarmService>();
-                processed = await previews.ProcessOneAsync(stoppingToken);
-                if (previews.LastReadyPreview is { } ready)
-                    changes.PreviewReady(ready.CaptureId, ready.AssetId, ready.Profile.ToString().ToLowerInvariant());
+                await using WorkspaceWorkerScope? scope = await tenants.NextAsync(stoppingToken);
+                if (scope is not null)
+                {
+                    LiveChangeNotifier changes = scope.ServiceProvider.GetRequiredService<LiveChangeNotifier>();
+                    PreviewPrewarmService previews = scope.ServiceProvider.GetRequiredService<PreviewPrewarmService>();
+                    processed = await previews.ProcessOneAsync(stoppingToken);
+                    if (previews.LastReadyPreview is { } ready)
+                        changes.PreviewReady(ready.CaptureId, ready.AssetId, ready.Profile.ToString().ToLowerInvariant());
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

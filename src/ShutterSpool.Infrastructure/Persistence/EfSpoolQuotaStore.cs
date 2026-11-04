@@ -91,7 +91,7 @@ internal sealed class EfSpoolQuotaStore(
         bool authorizeStorageMarkerAdoption, CancellationToken cancellationToken)
     {
         settings.Validate();
-        if (workspace?.Enabled == true && (!settings.IsActive || settings.QuotaBytes is not long quota
+        if (workspace is not null && (!settings.IsActive || settings.QuotaBytes is not long quota
             || quota > workspace.Required.AllocatedBytes))
             throw new ArgumentException("Workspace quota admission must remain enabled within its operator allocation.");
         if (database.Database.CurrentTransaction is null)
@@ -638,7 +638,7 @@ internal sealed class EfSpoolQuotaStore(
 
     private SpoolQuotaSettings ToContract(SpoolQuotaSettingsEntity entity)
     {
-        if (workspace?.Enabled == true && (!entity.IsActive || entity.QuotaBytes is not long quota
+        if (workspace is not null && (!entity.IsActive || entity.QuotaBytes is not long quota
             || quota > workspace.Required.AllocatedBytes))
             throw new InvalidOperationException("Saved workspace quota settings exceed or disable the operator allocation.");
         return new(entity.Revision, entity.IsActive, entity.QuotaBytes, entity.HighWatermarkBytes, entity.RecoveryTargetBytes);

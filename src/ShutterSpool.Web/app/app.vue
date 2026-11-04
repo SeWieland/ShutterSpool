@@ -15,20 +15,18 @@ const workspace = ref<{ requestDeparture: () => boolean } | null>(null);
 const memberships = shallowRef<WorkspaceMembership[]>([]);
 const selectedWorkspaceId = shallowRef(pageWorkspaceId ?? '');
 const workspaceIncomplete = shallowRef(false);
-const selectionRequired = shallowRef<boolean | undefined>();
 const hasDiscovery = shallowRef(false);
 const discoveryBusy = shallowRef(false);
 const discoveryError = shallowRef(false);
 let discoverySequence = 0;
 let discoveryController: AbortController | undefined;
-const activeWorkspaceSelection = computed(() => workspaceSelection(
+const activeWorkspaceSelection = computed(() => hasDiscovery.value ? workspaceSelection(
     memberships.value,
     workspaceIncomplete.value,
-    selectionRequired.value === true,
     pageWorkspaceId,
-));
-const canMountOperationalWorkspace = computed(() => hasDiscovery.value &&
-    ['legacy', 'selected'].includes(activeWorkspaceSelection.value.state));
+) : { state: 'loading' } as const);
+const canMountOperationalWorkspace = computed(() => !!pageWorkspaceId &&
+    activeWorkspaceSelection.value.state === 'selected');
 const activeWorkspace = computed(() => activeWorkspaceSelection.value.state === 'selected'
     ? activeWorkspaceSelection.value.workspace
     : undefined);
@@ -60,18 +58,20 @@ async function loadMemberships() {
     discoveryBusy.value = true;
     discoveryError.value = false;
     try {
-        const { api, cancellable, handleFailure } = await import('./lib/api');
+        const { api, cancellable } = await import('./lib/api');
         const result = await api.workspaces.get({ options: [cancellable(controller.signal)] });
         controller.signal.throwIfAborted();
         if (current !== discoverySequence) return;
         const items = validMemberships(result?.items);
-        if (typeof result?.incomplete !== 'boolean' || typeof result.selectionRequired !== 'boolean')
+        if (typeof result?.incomplete !== 'boolean')
             throw new Error('Workspace membership response is invalid.');
-        if (!result.selectionRequired && items.length)
-            throw new Error('Workspace membership response is invalid.');
+        const selection = workspaceSelection(items, result.incomplete, pageWorkspaceId);
+        if (pageWorkspaceId === null && selection.state === 'selected') {
+            window.location.replace(withWorkspace(route.fullPath, selection.workspace.id));
+            return;
+        }
         memberships.value = items;
         workspaceIncomplete.value = result.incomplete;
-        selectionRequired.value = result.selectionRequired;
         hasDiscovery.value = true;
         selectedWorkspaceId.value = items.some(item => item.id === pageWorkspaceId) ? pageWorkspaceId! : '';
     } catch (error) {
@@ -109,7 +109,6 @@ const stopWatchingSession = watch([session, () => route.path], ([value]) => {
         discoverySequence++;
         memberships.value = [];
         workspaceIncomplete.value = false;
-        selectionRequired.value = undefined;
         hasDiscovery.value = false;
         discoveryBusy.value = false;
         discoveryError.value = false;
@@ -121,7 +120,6 @@ const unsubscribeAccessLost = onAccessLost(() => {
     discoverySequence++;
     memberships.value = [];
     workspaceIncomplete.value = false;
-    selectionRequired.value = undefined;
     hasDiscovery.value = false;
 });
 function updateSignInVisibility() { signInVisible.value = !document.hidden; }
@@ -197,8 +195,8 @@ onUnmounted(() => { discoveryController?.abort(); stopWatchingSession(); unsubsc
                 <UButton :disabled="discoveryBusy" @click="loadMemberships">{{ discoveryBusy ? 'Checking…' : 'Retry' }}</UButton>
             </main>
             <main v-else-if="session && activeWorkspaceSelection.state === 'incomplete'" class="empty" role="alert">
-                <h1>{{ pageWorkspaceId ? 'Workspace access could not be confirmed' : 'Workspace memberships could not be checked' }}</h1>
-                <p>{{ pageWorkspaceId ? 'Retry to check this workspace again. No other workspace has been opened.' : 'No workspace was confirmed in this incomplete check. Retry to continue.' }}</p>
+                <h1>{{ pageWorkspaceId !== null ? 'Workspace access could not be confirmed' : 'Workspace memberships could not be checked' }}</h1>
+                <p>{{ pageWorkspaceId !== null ? 'Retry to check this workspace again. No other workspace has been opened.' : 'No workspace was confirmed in this incomplete check. Retry to continue.' }}</p>
                 <UButton :disabled="discoveryBusy" @click="loadMemberships">{{ discoveryBusy ? 'Checking…' : 'Retry' }}</UButton>
                 <form v-if="memberships.length" class="workspace-choice" @submit.prevent="chooseWorkspace">
                     <label for="workspace-choice-incomplete">Or choose a listed workspace</label>

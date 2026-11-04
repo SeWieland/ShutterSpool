@@ -1,4 +1,3 @@
-using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Options;
@@ -9,13 +8,13 @@ using System.Text.Json;
 
 namespace ShutterSpool.IntegrationTests;
 
-public sealed class FoundationTests(WebApplicationFactory<Program> factory)
-    : IClassFixture<WebApplicationFactory<Program>>
+public sealed class FoundationTests(WorkspaceWebApplicationFactory factory)
+    : IClassFixture<WorkspaceWebApplicationFactory>
 {
     [Fact]
     public async Task OpenApi_describes_preview_bytes_and_live_stream_content()
     {
-        using HttpClient client = factory.CreateClient();
+        using HttpClient client = factory.CreateWorkspaceClient();
         using JsonDocument document = JsonDocument.Parse(await client.GetStringAsync("/openapi/v1.json", TestContext.Current.CancellationToken));
         JsonElement paths = document.RootElement.GetProperty("paths");
         foreach (string route in new[] { "/media/previews/{id}", "/media/previews/{id}/{profile}" })
@@ -35,7 +34,7 @@ public sealed class FoundationTests(WebApplicationFactory<Program> factory)
     [Fact]
     public async Task Server_exposes_liveness_health_check()
     {
-        using HttpClient client = factory.CreateClient();
+        using HttpClient client = factory.CreateWorkspaceClient();
 
         HttpResponseMessage response = await client.GetAsync("/health/live", TestContext.Current.CancellationToken);
 

@@ -19,8 +19,8 @@ using System.Text.Json;
 
 namespace ShutterSpool.IntegrationTests;
 
-public sealed class SecurityBoundaryTests(WebApplicationFactory<Program> factory)
-    : IClassFixture<WebApplicationFactory<Program>>
+public sealed class SecurityBoundaryTests(WorkspaceWebApplicationFactory factory)
+    : IClassFixture<WorkspaceWebApplicationFactory>
 {
     [Theory]
     [InlineData("/management/status")]
@@ -32,7 +32,8 @@ public sealed class SecurityBoundaryTests(WebApplicationFactory<Program> factory
     [InlineData("/live/status")]
     public async Task Private_paths_reject_anonymous_requests(string path)
     {
-        using HttpClient client = factory.CreateClient();
+        using WebApplicationFactory<Program> server = factory.WithWebHostBuilder(_ => { });
+        using HttpClient client = factory.CreateWorkspaceClient(server);
 
         HttpResponseMessage response = await client.GetAsync(path, TestContext.Current.CancellationToken);
 
@@ -42,7 +43,8 @@ public sealed class SecurityBoundaryTests(WebApplicationFactory<Program> factory
     [Fact]
     public async Task Public_auth_configuration_contains_only_browser_oidc_settings()
     {
-        using HttpClient client = factory.CreateClient();
+        using WebApplicationFactory<Program> server = factory.WithWebHostBuilder(_ => { });
+        using HttpClient client = factory.CreateWorkspaceClient(server);
         using HttpResponseMessage response = await client.GetAsync("/auth/config", TestContext.Current.CancellationToken);
         using JsonDocument body = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
 
@@ -59,9 +61,6 @@ public sealed class SecurityBoundaryTests(WebApplicationFactory<Program> factory
         var logs = new ConcurrentQueue<string>();
         using WebApplicationFactory<Program> server = factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
         {
-            services.RemoveAll<DbContextOptions<ShutterSpoolDbContext>>();
-            services.RemoveAll<Microsoft.EntityFrameworkCore.Infrastructure.IDbContextOptionsConfiguration<ShutterSpoolDbContext>>();
-            services.AddDbContextFactory<ShutterSpoolDbContext>(options => options.UseInMemoryDatabase(Guid.NewGuid().ToString("N")));
             services.AddLogging(logging => logging.AddProvider(new CapturedLogProvider(logs)));
             services.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options =>
             {
@@ -74,14 +73,17 @@ public sealed class SecurityBoundaryTests(WebApplicationFactory<Program> factory
                 };
             });
         }));
-        await using (AsyncServiceScope scope = server.Services.CreateAsyncScope())
+        await using (AsyncServiceScope scope = factory.CreateWorkspaceScope(server))
         {
             ShutterSpoolDbContext database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
-            database.AuthorizationGrants.Add(new AuthorizationGrant { Issuer = "https://issuer.test", Subject = "operator", IsActive = true });
+            AuthorizationGrant? grant = await database.AuthorizationGrants.SingleOrDefaultAsync(
+                item => item.Issuer == "https://issuer.test" && item.Subject == "operator", TestContext.Current.CancellationToken);
+            if (grant is null) database.AuthorizationGrants.Add(new AuthorizationGrant { Issuer = "https://issuer.test", Subject = "operator", IsActive = true });
+            else grant.IsActive = true;
             await database.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
-        using HttpClient client = server.CreateClient();
+        using HttpClient client = factory.CreateWorkspaceClient(server);
         string token = CreateToken(signingKey, "shutterspool-admin");
         using HttpRequestMessage negotiate = new(HttpMethod.Post,
             $"/live/changes/negotiate?negotiateVersion=1&access_token={Uri.EscapeDataString(token)}");
@@ -96,7 +98,7 @@ public sealed class SecurityBoundaryTests(WebApplicationFactory<Program> factory
     }
 
     [Fact]
-    public async Task Private_paths_reject_authenticated_principals_without_the_administrator_role()
+    public async Task Private_paths_reject_authenticated_principals_without_workspace_membership()
     {
         byte[] signingKey = Encoding.UTF8.GetBytes("test-only-signing-key-must-be-at-least-32-bytes");
         using WebApplicationFactory<Program> server = factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
@@ -116,7 +118,8 @@ public sealed class SecurityBoundaryTests(WebApplicationFactory<Program> factory
                 };
             });
         }));
-        using HttpClient client = server.CreateClient();
+        await DeactivateOperatorGrantAsync(server);
+        using HttpClient client = factory.CreateWorkspaceClient(server);
         client.DefaultRequestHeaders.Authorization = new("Bearer", CreateToken(signingKey, "viewer"));
 
         HttpResponseMessage response = await client.GetAsync("/management/status", TestContext.Current.CancellationToken);
@@ -145,7 +148,8 @@ public sealed class SecurityBoundaryTests(WebApplicationFactory<Program> factory
                 };
             });
         }));
-        using HttpClient client = server.CreateClient();
+        await DeactivateOperatorGrantAsync(server);
+        using HttpClient client = factory.CreateWorkspaceClient(server);
         client.DefaultRequestHeaders.Authorization = new("Bearer", CreateToken(signingKey, "shutterspool-admin"));
 
         HttpResponseMessage response = await client.GetAsync("/management/status", TestContext.Current.CancellationToken);
@@ -177,7 +181,7 @@ public sealed class SecurityBoundaryTests(WebApplicationFactory<Program> factory
                 };
             });
         }));
-        using HttpClient client = server.CreateClient();
+        using HttpClient client = factory.CreateWorkspaceClient(server);
         client.DefaultRequestHeaders.Authorization = new("Bearer", CreateToken(signingKey, "shutterspool-admin", issuer, audience, lifetimeMinutes));
 
         HttpResponseMessage response = await client.GetAsync("/management/status", TestContext.Current.CancellationToken);
@@ -185,17 +189,15 @@ public sealed class SecurityBoundaryTests(WebApplicationFactory<Program> factory
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
-    [Fact]
-    public async Task Private_paths_allow_an_administrator_with_an_active_local_grant()
+    [Theory]
+    [InlineData("shutterspool-admin")]
+    [InlineData("viewer")]
+    public async Task Private_paths_allow_a_member_with_an_active_local_grant(string role)
     {
         byte[] signingKey = Encoding.UTF8.GetBytes("test-only-signing-key-must-be-at-least-32-bytes");
-        string databaseName = Guid.NewGuid().ToString("N");
         var previews = new CachedPreview();
         using WebApplicationFactory<Program> server = factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
         {
-            services.RemoveAll<DbContextOptions<ShutterSpoolDbContext>>();
-            services.RemoveAll<Microsoft.EntityFrameworkCore.Infrastructure.IDbContextOptionsConfiguration<ShutterSpoolDbContext>>();
-            services.AddDbContextFactory<ShutterSpoolDbContext>(options => options.UseInMemoryDatabase(databaseName));
             services.RemoveAll<IPreviewSourceResolver>();
             services.RemoveAll<IPreviewCache>();
             services.RemoveAll<IPreviewGenerator>();
@@ -219,15 +221,18 @@ public sealed class SecurityBoundaryTests(WebApplicationFactory<Program> factory
                 };
             });
         }));
-        await using (AsyncServiceScope scope = server.Services.CreateAsyncScope())
+        await using (AsyncServiceScope scope = factory.CreateWorkspaceScope(server))
         {
             ShutterSpoolDbContext database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
-            database.AuthorizationGrants.Add(new AuthorizationGrant { Issuer = "https://issuer.test", Subject = "operator", IsActive = true });
+            AuthorizationGrant? grant = await database.AuthorizationGrants.SingleOrDefaultAsync(
+                item => item.Issuer == "https://issuer.test" && item.Subject == "operator", TestContext.Current.CancellationToken);
+            if (grant is null) database.AuthorizationGrants.Add(new AuthorizationGrant { Issuer = "https://issuer.test", Subject = "operator", IsActive = true });
+            else grant.IsActive = true;
             await database.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
-        using HttpClient client = server.CreateClient();
-        client.DefaultRequestHeaders.Authorization = new("Bearer", CreateToken(signingKey, "shutterspool-admin"));
+        using HttpClient client = factory.CreateWorkspaceClient(server);
+        client.DefaultRequestHeaders.Authorization = new("Bearer", CreateToken(signingKey, role));
 
         HttpResponseMessage response = await client.GetAsync("/management/status", TestContext.Current.CancellationToken);
 
@@ -263,10 +268,10 @@ public sealed class SecurityBoundaryTests(WebApplicationFactory<Program> factory
         Assert.Null(placeholder.Headers.ETag);
         int authorizedLookups = previews.Lookups;
 
-        await using (AsyncServiceScope scope = server.Services.CreateAsyncScope())
+        await using (AsyncServiceScope scope = factory.CreateWorkspaceScope(server))
         {
             ShutterSpoolDbContext database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
-            (await database.AuthorizationGrants.SingleAsync(TestContext.Current.CancellationToken)).IsActive = false;
+            (await database.AuthorizationGrants.SingleAsync(item => item.Issuer == "https://issuer.test" && item.Subject == "operator", TestContext.Current.CancellationToken)).IsActive = false;
             await database.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
         Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync(previewPath, TestContext.Current.CancellationToken)).StatusCode);
@@ -284,6 +289,14 @@ public sealed class SecurityBoundaryTests(WebApplicationFactory<Program> factory
         var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim("exp", DateTimeOffset.UtcNow.AddSeconds(-1).ToUnixTimeSeconds().ToString())]));
 
         Assert.False(LiveStatusEndpoint.HasUnexpiredToken(principal, DateTimeOffset.UtcNow));
+    }
+
+    private async Task DeactivateOperatorGrantAsync(WebApplicationFactory<Program> server)
+    {
+        await using AsyncServiceScope scope = factory.CreateWorkspaceScope(server);
+        ShutterSpoolDbContext database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
+        await database.AuthorizationGrants.Where(grant => grant.Issuer == "https://issuer.test" && grant.Subject == "operator")
+            .ExecuteUpdateAsync(update => update.SetProperty(grant => grant.IsActive, false), TestContext.Current.CancellationToken);
     }
 
     private static string CreateToken(byte[] signingKey, string role, string issuer = "https://issuer.test", string audience = "shutterspool", int lifetimeMinutes = 5)

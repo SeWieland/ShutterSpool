@@ -12,15 +12,18 @@ internal sealed class CaptureRoutingWorker(IServiceScopeFactory scopes, IDeliver
     {
         while (!stoppingToken.IsCancellationRequested)
         {
-            bool processed;
+            bool processed = false;
             try
             {
-                await using WorkspaceWorkerScope scope = await tenants.NextAsync(stoppingToken);
-                LiveChangeNotifier changes = scope.ServiceProvider.GetRequiredService<LiveChangeNotifier>();
-                CaptureRoutingService routing = scope.ServiceProvider.GetRequiredService<CaptureRoutingService>();
-                processed = await routing.ProcessOneAsync(stoppingToken);
-                if (routing.LastChangedCaptureId is Guid captureId) changes.CaptureChanged(captureId, "routing");
-                if (processed) await signal.NotifyAsync(stoppingToken);
+                await using WorkspaceWorkerScope? scope = await tenants.NextAsync(stoppingToken);
+                if (scope is not null)
+                {
+                    LiveChangeNotifier changes = scope.ServiceProvider.GetRequiredService<LiveChangeNotifier>();
+                    CaptureRoutingService routing = scope.ServiceProvider.GetRequiredService<CaptureRoutingService>();
+                    processed = await routing.ProcessOneAsync(stoppingToken);
+                    if (routing.LastChangedCaptureId is Guid captureId) changes.CaptureChanged(captureId, "routing");
+                    if (processed) await signal.NotifyAsync(stoppingToken);
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch (Exception exception)

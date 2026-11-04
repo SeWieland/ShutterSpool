@@ -4,7 +4,7 @@ namespace ShutterSpool.Infrastructure.Destinations.Local;
 
 internal static class LocalDestinationPaths
 {
-    public static string? AssignedRoot(WorkspaceContext? workspace) => workspace?.Enabled == true
+    public static string? AssignedRoot(WorkspaceContext? workspace) => workspace is not null
         ? Path.Combine(workspace.Required.StorageRoot, "destinations") : null;
 
     public static bool IsAllowed(string root, WorkspaceContext? workspace)

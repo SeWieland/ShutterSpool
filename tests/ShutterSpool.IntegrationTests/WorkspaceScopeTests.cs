@@ -1,6 +1,7 @@
 using ShutterSpool.Application.Workspaces;
 using ShutterSpool.Server.Security;
 using Microsoft.AspNetCore.Http;
+using ShutterSpool.Infrastructure.Workspaces;
 
 namespace ShutterSpool.IntegrationTests;
 
@@ -9,12 +10,35 @@ public sealed class WorkspaceScopeTests
     [Fact]
     public void Workspace_scope_cannot_be_rebound_or_read_without_selection()
     {
-        var context = new WorkspaceContext(true);
+        var context = new WorkspaceContext();
         Assert.Throws<InvalidOperationException>(() => context.Required);
-        var workspace = new WorkspaceDefinition(Guid.NewGuid(), "Studio", "volume-a", "/workspace-a", 100, "tenant-a");
+        var workspace = new WorkspaceDefinition(Guid.NewGuid(), "Studio", "volume-a", "/workspace-a", 100);
         context.Bind(workspace);
         Assert.Same(workspace, context.Required);
         Assert.Throws<InvalidOperationException>(() => context.Bind(workspace with { Id = Guid.NewGuid() }));
+    }
+
+    [Fact]
+    public void Provisioning_proof_compares_named_values_despite_outer_and_target_json_order()
+    {
+        var manifest = new WorkspaceManifest("/allocated/studio", 100, "https://issuer.example", "initial-owner")
+        {
+            ConnectionString = "Host=localhost;Port=5432;Database=studio;Username=runtime;Password=synthetic",
+        };
+        const string reordered = """
+            {
+              "OwnerSubject": "initial-owner",
+              "RuntimeTarget": "{ \"Username\": \"runtime\", \"Database\": \"studio\", \"Port\": 5432, \"Host\": \"localhost\" }",
+              "AllocatedBytes": 100,
+              "OwnerIssuer": "https://issuer.example",
+              "StorageRoot": "/allocated/studio"
+            }
+            """;
+        Assert.True(manifest.MatchesProof(reordered));
+        Assert.True(manifest.MatchesProof(manifest.Proof));
+        Assert.False((manifest with { OwnerSubject = "replacement-owner" }).MatchesProof(reordered));
+        Assert.False((manifest with { AllocatedBytes = 101 }).MatchesProof(reordered));
+        Assert.False((manifest with { ConnectionString = "Host=localhost;Port=5432;Database=other;Username=runtime" }).MatchesProof(reordered));
     }
 
     [Theory]

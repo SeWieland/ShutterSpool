@@ -13,8 +13,11 @@ internal sealed class MetadataWorker(IServiceScopeFactory scopes, ILogger<Metada
             bool processed = false;
             try
             {
-                await using WorkspaceWorkerScope scope = await tenants.NextAsync(stoppingToken);
-                processed = await scope.ServiceProvider.GetRequiredService<MetadataProcessingService>().ProcessOneAsync(stoppingToken);
+                await using WorkspaceWorkerScope? scope = await tenants.NextAsync(stoppingToken);
+                if (scope is not null)
+                {
+                    processed = await scope.ServiceProvider.GetRequiredService<MetadataProcessingService>().ProcessOneAsync(stoppingToken);
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

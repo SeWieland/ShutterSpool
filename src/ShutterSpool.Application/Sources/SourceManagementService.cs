@@ -70,8 +70,7 @@ public interface ISourceAuthenticationObservationRecorder
     void RecordUnassigned(DateTimeOffset observedAt);
 }
 
-public sealed class SourceManagementService(ISourceConfigurationStore store, ICredentialProtector protector, CameraCredentialPolicy policy,
-    ShutterSpool.Application.Workspaces.WorkspaceContext? workspace = null)
+public sealed class SourceManagementService(ISourceConfigurationStore store, ICredentialProtector protector, CameraCredentialPolicy policy)
 {
     private static readonly string[] UsernamePrefixes =
     [
@@ -101,7 +100,7 @@ public sealed class SourceManagementService(ISourceConfigurationStore store, ICr
         if (string.IsNullOrWhiteSpace(name) || name.Trim().Length > 256) throw new ArgumentException("Provide a source name of at most 256 characters.");
         (SourceCurationMode policy, int delay) = ParsePolicy(mode, delaySeconds);
         Guid id = Guid.NewGuid();
-        string username = requestedUsername ?? (workspace?.Enabled == true ? $"camera-{Guid.NewGuid():N}" : GenerateUsername());
+        string username = requestedUsername ?? GenerateUsername();
         ValidateUsername(username);
         string secret = ResolvePassword(passwordMode, requestedPassword);
         string root = $"sources/{Guid.NewGuid():N}";
@@ -113,6 +112,7 @@ public sealed class SourceManagementService(ISourceConfigurationStore store, ICr
             try { await store.CreateAsync(provisioning, cancellationToken); break; }
             catch (SourceUsernameConflictException) when (requestedUsername is null && attempt < 4)
             {
+                if (await store.GetAsync(id, cancellationToken) is not null) throw;
                 username = GenerateUsername();
                 provisioning = provisioning with { Username = username };
             }
@@ -236,6 +236,13 @@ public sealed class SourceCredentialVerifier(ISourceConfigurationStore store, IC
             return new(null, credential.SourceId);
         }
         return new(new(credential.SourceId, credential.VirtualRoot, credential.CredentialGeneration), null);
+    }
+
+    public async Task<bool> IsCurrentAsync(string username, SourceAccess access, SourceConnectionProfile profile, CancellationToken token)
+    {
+        SourceCredential? current = await store.FindCredentialAsync(username, token);
+        return current is { IsIngressEnabled: true } && current.SourceId == access.SourceId
+            && current.CredentialGeneration == access.CredentialGeneration && current.ConnectionProfile == profile;
     }
 
     public void RecordSucceeded(Guid sourceId) => audit.Succeeded(sourceId);

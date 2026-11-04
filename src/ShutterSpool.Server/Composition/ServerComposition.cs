@@ -33,6 +33,11 @@ internal static class ServerComposition
             Console.WriteLine("The explicit workspace operation completed. Validate recovery and storage qualification before opening traffic.");
             return 0;
         }
+        catch (WorkspaceOperator.RefusedException exception)
+        {
+            Console.Error.WriteLine($"Workspace operation refused: {exception.Message}");
+            return 1;
+        }
         catch (Exception exception)
         {
             Console.Error.WriteLine($"Workspace operation failed ({exception.GetType().Name}). Targets remain preserved; inspect operator configuration and reconcile the same operation.");
@@ -92,12 +97,9 @@ internal static class ServerComposition
             options.SerializerOptions.RespectNullableAnnotations = true;
         });
         builder.Services.AddShutterSpoolSecurity(builder.Configuration);
-        bool tenancy = builder.Configuration.GetValue<bool>("ShutterSpool:Workspaces:Enabled");
         builder.Services.AddSingleton<LiveChangeBuffer>();
-        if (tenancy) builder.Services.AddScoped(provider => new LiveChangeNotifier(
+        builder.Services.AddScoped(provider => new LiveChangeNotifier(
             provider.GetRequiredService<LiveChangeBuffer>(), provider.GetRequiredService<WorkspaceContext>()));
-        else builder.Services.AddSingleton(provider => new LiveChangeNotifier(
-            provider.GetRequiredService<LiveChangeBuffer>(), new WorkspaceContext(false)));
         builder.Services.AddSingleton<RetentionTelemetry>();
         builder.Services.AddHostedService(services => services.GetRequiredService<LiveChangeBuffer>());
         builder.Services.AddScoped<ShutterSpool.Application.Ingress.ICameraTransferActivityPublisher>(services =>
@@ -105,11 +107,11 @@ internal static class ServerComposition
         builder.Services.AddScoped<IPreviewActivityPublisher>(services => services.GetRequiredService<LiveChangeNotifier>());
         builder.Services.AddSingleton(provider => new SourceAuthenticationObservationWorker(
             provider.GetRequiredService<IServiceScopeFactory>(), new LiveChangeNotifier(
-                provider.GetRequiredService<LiveChangeBuffer>(), new WorkspaceContext(false)),
+                provider.GetRequiredService<LiveChangeBuffer>(), null),
             provider.GetRequiredService<ILogger<SourceAuthenticationObservationWorker>>()));
         builder.Services.AddScoped<ShutterSpool.Application.Sources.ISourceAuthenticationObservationRecorder, ScopedSourceAuthenticationRecorder>();
         builder.Services.AddShutterSpoolInfrastructure(builder.Configuration);
-        string? databaseConnection = builder.Configuration.GetConnectionString(tenancy ? "shutterspool-control" : "shutterspool");
+        string? databaseConnection = builder.Configuration.GetConnectionString("shutterspool-control");
         if (!string.IsNullOrWhiteSpace(databaseConnection))
             builder.Services.AddHealthChecks().AddCheck("postgres", new PostgresReadinessCheck(databaseConnection), tags: ["ready"]);
         builder.Services.AddHybridCache(options =>
@@ -119,7 +121,7 @@ internal static class ServerComposition
         });
         builder.Services.AddSingleton<SourceDisplayCacheKeys>();
         builder.Services.AddScoped<SourceDisplayCache>();
-        if (tenancy || !string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("shutterspool")))
+        if (System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name != "GetDocument.Insider")
         {
             builder.Services.AddHostedService(services => services.GetRequiredService<SourceAuthenticationObservationWorker>());
             builder.Services.AddHostedService<MetadataWorker>();

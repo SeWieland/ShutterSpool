@@ -1,6 +1,9 @@
 import hashlib
 import importlib.util
 import json
+import os
+import shutil
+import subprocess
 import tempfile
 import unittest
 import zipfile
@@ -61,7 +64,10 @@ class ReleasePackageTests(unittest.TestCase):
                 self.assertEqual(files, set(manifest["files"]))
                 self.assertTrue({".env", ".env.example", "compose.yaml", "profiles/all-camera-edges.yaml",
                                  "README.md", "package/edge-entrypoint.sh", "package/identity-entrypoint.sh",
-                                 "package/postgres-init.sh", "certificates/README.md", "operations/README.md"} <= files)
+                                 "package/postgres-init.sh", "package/workspace-databases.sql", "components/workspaces.yaml",
+                                 "config/appsettings.json", "config/appsettings.Production.json",
+                                 "config/appsettings.Maintenance.json",
+                                 "certificates/README.md", "operations/README.md"} <= files)
                 for directory in ("config/", "package/realms/", "package/theme/", "package/traefik/", "components/", "proxies/"):
                     self.assertTrue(any(name.startswith(directory) for name in files), directory)
                 self.assertEqual((build_release.ROOT / "LICENSE").read_bytes(), bundle.read("LICENSE"))
@@ -87,6 +93,29 @@ class ReleasePackageTests(unittest.TestCase):
                 self.assertEqual({"kind": "fresh-install-only", "publishedRelease": None}, manifest["upgradeBaseline"])
             self.assertEqual(f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n",
                              archive.with_suffix(".zip.sha256").read_text())
+
+    def test_workspace_component_separates_secret_grants_and_uses_existing_canonical_settings(self):
+        if not shutil.which("docker"):
+            self.skipTest("Docker Compose CLI is unavailable; component interpretation check needs no daemon.")
+        compose = build_release.ROOT / "deploy/package/components/workspaces.yaml"
+        result = subprocess.run(["docker", "compose", "-f", str(compose), "--profile", "maintenance", "config", "--no-consistency", "--no-path-resolution", "--format", "json"],
+                                env=dict(os.environ, SERVER_IMAGE="synthetic@" + DIGEST),
+                                capture_output=True, text=True, check=True)
+        services = json.loads(result.stdout)["services"]
+        self.assertEqual({"production-settings"}, {item["source"] for item in services["server"]["secrets"]})
+        self.assertEqual({"maintenance-settings"},
+                         {item["source"] for item in services["maintenance"]["secrets"]})
+        self.assertEqual(["maintenance"], services["maintenance"]["profiles"])
+        self.assertEqual("Maintenance", services["maintenance"]["environment"]["ASPNETCORE_ENVIRONMENT"])
+        self.assertEqual({"/app/appsettings.Maintenance.json"},
+                         {item["target"] for item in services["maintenance"]["secrets"]})
+        self.assertEqual({"/app/appsettings.Production.json"}, {item["target"] for item in services["server"]["secrets"]})
+        for service in services.values():
+            settings = [item for item in service["volumes"] if item["target"].startswith("/app/appsettings")]
+            self.assertEqual({"/app/appsettings.json"}, {item["target"] for item in settings})
+            self.assertTrue(all(item["read_only"] for item in settings))
+            mounts = [item for item in service["volumes"] if item["target"] == "/srv/shutterspool/studio"]
+            self.assertFalse(mounts[0]["bind"].get("create_host_path", False))
 
     def test_invalid_identity_and_existing_output_are_refused(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(build_release, "run", return_value=COMMIT):

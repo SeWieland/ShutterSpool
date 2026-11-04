@@ -37,7 +37,7 @@ public sealed class SourceDisplayCache(ISourceDisplayStore store, HybridCache ca
     public async Task<SourceDisplay?> ReadAsync(Guid id, CancellationToken cancellationToken)
     {
         string? key = keys.Admit(id);
-        if (key is not null && workspace?.Enabled == true) key = $"{workspace.Required.Id:N}:{key}";
+        if (key is not null && workspace is not null) key = $"{workspace.Required.Id:N}:{key}";
         if (key is null) return await store.ReadAsync(id, cancellationToken);
         bool factoryFailed = false;
         try
@@ -64,7 +64,7 @@ public sealed class SourceDisplayCache(ISourceDisplayStore store, HybridCache ca
 
     public async Task InvalidateAsync(Guid id, CancellationToken cancellationToken)
     {
-        try { await cache.RemoveAsync(workspace?.Enabled == true ? $"{workspace.Required.Id:N}:{keys.Key(id)}" : keys.Key(id), cancellationToken); }
+        try { await cache.RemoveAsync(workspace is not null ? $"{workspace.Required.Id:N}:{keys.Key(id)}" : keys.Key(id), cancellationToken); }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception) { /* Absolute expiry bounds a lost display invalidation. */ }
     }

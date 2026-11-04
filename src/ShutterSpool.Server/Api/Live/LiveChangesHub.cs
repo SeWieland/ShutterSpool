@@ -27,7 +27,6 @@ public sealed class LiveChangesHub(IServiceScopeFactory scopes, IOptions<Securit
 
     public override async Task OnConnectedAsync()
     {
-        if (workspace.Enabled)
         {
             if (Context.GetHttpContext()?.Items[typeof(WorkspaceDefinition)] is not WorkspaceDefinition selectedWorkspace)
             {
@@ -286,12 +285,12 @@ public sealed class LiveChangeBuffer(IHubContext<LiveChangesHub> hub, ILogger<Li
 public sealed class LiveChangeNotifier : ICameraTransferActivityPublisher, IPreviewActivityPublisher
 {
     private readonly LiveChangeBuffer buffer;
-    private readonly WorkspaceContext workspace;
-    public LiveChangeNotifier(LiveChangeBuffer buffer, WorkspaceContext workspace)
+    private readonly WorkspaceContext? workspace;
+    public LiveChangeNotifier(LiveChangeBuffer buffer, WorkspaceContext? workspace)
     { this.buffer = buffer; this.workspace = workspace; }
     public LiveChangeNotifier(IHubContext<LiveChangesHub> hub, ILogger<LiveChangeNotifier> logger)
-        : this(new LiveChangeBuffer(hub, logger), new WorkspaceContext(false)) { }
-    private Guid Id => workspace.Id ?? Guid.Empty;
+        : this(new LiveChangeBuffer(hub, logger), null) { }
+    private Guid Id => workspace?.Id ?? Guid.Empty;
     public static string Group(Guid id) => $"workspace:{id:N}";
     public string Epoch => buffer.Epoch;
     public bool ActivityCoverageComplete => buffer.IsActivityCoverageComplete(Id);

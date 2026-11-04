@@ -26,7 +26,7 @@ internal sealed class WorkspaceSelectionMiddleware(RequestDelegate next)
 {
     public async Task InvokeAsync(HttpContext http, WorkspaceContext workspace, IWorkspaceRegistry registry)
     {
-        if (!workspace.Enabled || !WorkspaceSelection.IsPrivatePath(http.Request.Path))
+        if (!WorkspaceSelection.IsPrivatePath(http.Request.Path))
         {
             await next(http);
             return;

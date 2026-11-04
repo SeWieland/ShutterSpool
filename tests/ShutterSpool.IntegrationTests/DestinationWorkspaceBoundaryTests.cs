@@ -60,8 +60,8 @@ public sealed class DestinationWorkspaceBoundaryTests
         Directory.CreateDirectory(destinations);
         Directory.CreateDirectory(Path.Combine(destinations, "child"));
         Directory.CreateDirectory(Path.Combine(root, "originals"));
-        var workspace = new WorkspaceContext(true);
-        workspace.Bind(new(Guid.NewGuid(), "Synthetic", "synthetic", root, 1000, "synthetic"));
+        var workspace = new WorkspaceContext();
+        workspace.Bind(new(Guid.NewGuid(), "Synthetic", "synthetic", root, 1000));
         try
         {
             Assert.True(LocalDestinationPaths.IsAllowed(Path.Combine(destinations, "child"), workspace));
@@ -80,15 +80,15 @@ public sealed class DestinationWorkspaceBoundaryTests
     [Fact]
     public void Enabled_tenancy_without_a_selected_workspace_fails_closed()
     {
-        Assert.Throws<InvalidOperationException>(() => LocalDestinationPaths.AssignedRoot(new WorkspaceContext(true)));
+        Assert.Throws<InvalidOperationException>(() => LocalDestinationPaths.AssignedRoot(new WorkspaceContext()));
     }
 
     [Fact]
     public async Task Delivery_and_reconciliation_reject_recorded_roots_outside_the_selected_workspace()
     {
         string root = Path.Combine(Path.GetTempPath(), $"shutterspool-destination-recorded-{Guid.NewGuid():N}");
-        var workspace = new WorkspaceContext(true);
-        workspace.Bind(new(Guid.NewGuid(), "Synthetic", "synthetic", root, 1000, "synthetic"));
+        var workspace = new WorkspaceContext();
+        workspace.Bind(new(Guid.NewGuid(), "Synthetic", "synthetic", root, 1000));
         var adapter = new LocalDestinationDeliveryAdapter(DestinationCapabilities.All, workspace);
         var request = new DeliveryRequest(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "synthetic.raw", 1,
             new string('0', 64), "synthetic", Configuration: new LocalDestinationDeliveryConfiguration(Path.Combine(root, "originals")));
@@ -112,8 +112,8 @@ public sealed class DestinationWorkspaceBoundaryTests
             try { Directory.CreateSymbolicLink(link, outside); }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
             { Assert.Skip("This host does not permit creating a directory symlink."); }
-            var workspace = new WorkspaceContext(true);
-            workspace.Bind(new(Guid.NewGuid(), "Synthetic", "synthetic", root, 1000, "synthetic"));
+            var workspace = new WorkspaceContext();
+            workspace.Bind(new(Guid.NewGuid(), "Synthetic", "synthetic", root, 1000));
 
             Assert.False(LocalDestinationPaths.IsAllowed(Path.Combine(link, "new-child"), workspace));
             Assert.Null(LocalDirectoryBrowser.Browse(link, CancellationToken.None, destinations).Listing);

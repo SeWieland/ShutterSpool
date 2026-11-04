@@ -14,11 +14,14 @@ internal sealed class CaptureGroupingWorker(IServiceScopeFactory scopes, ILogger
             bool processed = false;
             try
             {
-                await using WorkspaceWorkerScope scope = await tenants.NextAsync(stoppingToken);
-                LiveChangeNotifier changes = scope.ServiceProvider.GetRequiredService<LiveChangeNotifier>();
-                CaptureGroupingService grouping = scope.ServiceProvider.GetRequiredService<CaptureGroupingService>();
-                processed = await grouping.ProcessOneAsync(stoppingToken);
-                if (grouping.LastChangedCaptureId is Guid captureId) changes.CaptureChanged(captureId, "capture");
+                await using WorkspaceWorkerScope? scope = await tenants.NextAsync(stoppingToken);
+                if (scope is not null)
+                {
+                    LiveChangeNotifier changes = scope.ServiceProvider.GetRequiredService<LiveChangeNotifier>();
+                    CaptureGroupingService grouping = scope.ServiceProvider.GetRequiredService<CaptureGroupingService>();
+                    processed = await grouping.ProcessOneAsync(stoppingToken);
+                    if (grouping.LastChangedCaptureId is Guid captureId) changes.CaptureChanged(captureId, "capture");
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

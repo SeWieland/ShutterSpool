@@ -1,30 +1,30 @@
+using ShutterSpool.Infrastructure.Composition;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Npgsql;
 using ShutterSpool.Application.Workspaces;
 
 namespace ShutterSpool.Infrastructure.Workspaces;
 
-internal sealed class PostgresWorkspaceRegistry(IConfiguration configuration, WorkspaceContext context) : IWorkspaceRegistry
+internal sealed class PostgresWorkspaceRegistry(IConfiguration configuration, WorkspaceContext context, WorkspaceInventory? inventory = null) : IWorkspaceRegistry
 {
     internal const int MaximumWorkspaces = 32;
     internal static string ControlConnection(IConfiguration configuration) => new NpgsqlConnectionStringBuilder(
-        configuration.GetConnectionString("shutterspool-control") ?? throw new InvalidOperationException("The workspace control connection is required."))
+        configuration.GetConnectionString("shutterspool-control") ?? throw new WorkspaceOperator.RefusedException("The workspace control connection is required."))
         { MinPoolSize = 0, MaxPoolSize = 4, Timeout = 3, CommandTimeout = 3, IncludeErrorDetail = false }.ConnectionString;
+    internal static WorkspaceControlDbContext Database(string connection) => new(new DbContextOptionsBuilder<WorkspaceControlDbContext>().UseNpgsql(connection).Options);
 
     public async Task<WorkspaceDefinition[]> ListReadyAsync(CancellationToken cancellationToken)
     {
-        if (!context.Enabled) return [];
-        await using var connection = new NpgsqlConnection(ControlConnection(configuration));
-        await connection.OpenAsync(cancellationToken);
-        await using (var version = new NpgsqlCommand("SELECT version FROM workspace_control_version WHERE id=1", connection))
-            if (Convert.ToInt32(await version.ExecuteScalarAsync(cancellationToken)) != 1)
-                throw new InvalidOperationException("The control schema is incompatible; run explicit maintenance.");
-        await using var command = new NpgsqlCommand("SELECT id, name, storage_identity, storage_root, allocated_bytes, connection_reference FROM workspaces WHERE ready ORDER BY id LIMIT 33", connection);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        var items = new List<WorkspaceDefinition>();
-        while (await reader.ReadAsync(cancellationToken)) items.Add(Read(reader));
-        if (items.Count > MaximumWorkspaces) throw new InvalidOperationException("The workspace registry exceeds the supported cohort limit.");
-        return [.. items];
+        if (inventory?.Ready is { } frozen) return frozen;
+        await using var database = Database(ControlConnection(configuration));
+        string[] applied = [.. await database.Database.GetAppliedMigrationsAsync(cancellationToken)];
+        if (!applied.SequenceEqual(database.Database.GetMigrations(), StringComparer.Ordinal))
+            throw new WorkspaceOperator.RefusedException("The control schema is incompatible; run explicit maintenance.");
+        WorkspaceRecord[] records = await database.Workspaces.AsNoTracking().Where(item => item.Ready)
+            .OrderBy(item => item.Name).Take(MaximumWorkspaces + 1).ToArrayAsync(cancellationToken);
+        if (records.Length > MaximumWorkspaces) throw new WorkspaceOperator.RefusedException("The workspace registry exceeds the supported cohort limit.");
+        return [.. records.Select(item => item.Definition with { StorageRoot = WorkspaceManifest.Read(configuration, item.Name).StorageRoot })];
     }
 
     public async Task<WorkspaceDefinition?> FindReadyAsync(Guid id, CancellationToken cancellationToken) =>
@@ -32,31 +32,28 @@ internal sealed class PostgresWorkspaceRegistry(IConfiguration configuration, Wo
 
     public async Task<WorkspaceIngressRoute?> FindIngressAsync(string handle, CancellationToken cancellationToken)
     {
-        if (!context.Enabled || handle.Length is < 1 or > 128) return null;
-        await using var connection = new NpgsqlConnection(ControlConnection(configuration));
-        await connection.OpenAsync(cancellationToken);
-        await using var command = new NpgsqlCommand("SELECT w.id, w.name, w.storage_identity, w.storage_root, w.allocated_bytes, w.connection_reference, r.source_id FROM ingress_routes r JOIN workspaces w ON w.id=r.workspace_id WHERE r.handle=@handle AND w.ready", connection);
-        command.Parameters.AddWithValue("handle", handle);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        return await reader.ReadAsync(cancellationToken) ? new(Read(reader), reader.GetGuid(6)) : null;
+        if (handle.Length is < 1 or > 128) return null;
+        await using var database = Database(ControlConnection(configuration));
+        IngressRouteRecord? route = await database.IngressRoutes.AsNoTracking().SingleOrDefaultAsync(item => item.Handle == handle, cancellationToken);
+        if (route is null) return null;
+        WorkspaceDefinition? workspace = await FindReadyAsync(route.WorkspaceId, cancellationToken);
+        return workspace is null ? null : new(workspace, route.SourceId);
     }
 
     public async Task RegisterIngressAsync(string handle, Guid sourceId, CancellationToken cancellationToken)
     {
-        if (!context.Enabled) return;
         WorkspaceDefinition workspace = context.Required;
-        await using var connection = new NpgsqlConnection(ControlConnection(configuration));
-        await connection.OpenAsync(cancellationToken);
-        await using var command = new NpgsqlCommand("INSERT INTO ingress_routes(handle,workspace_id,source_id) VALUES (@handle,@workspace,@source) ON CONFLICT(handle) DO UPDATE SET source_id=EXCLUDED.source_id WHERE ingress_routes.workspace_id=EXCLUDED.workspace_id AND ingress_routes.source_id=EXCLUDED.source_id", connection);
-        command.Parameters.AddWithValue("handle", handle);
-        command.Parameters.AddWithValue("workspace", workspace.Id);
-        command.Parameters.AddWithValue("source", sourceId);
-        if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+        await using var database = Database(ControlConnection(configuration));
+        var route = new IngressRouteRecord { Handle = handle, WorkspaceId = workspace.Id, SourceId = sourceId };
+        database.IngressRoutes.Add(route);
+        try { await database.SaveChangesAsync(cancellationToken); }
+        catch (DbUpdateException exception) when (exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+        {
+            IngressRouteRecord existing = await database.IngressRoutes.AsNoTracking().SingleAsync(item => item.Handle == handle, cancellationToken);
+            if (existing.WorkspaceId == workspace.Id && existing.SourceId == sourceId) return;
             throw handle.StartsWith("u:", StringComparison.Ordinal)
                 ? new ShutterSpool.Application.Sources.SourceUsernameConflictException()
-                : new InvalidOperationException("The ingress routing handle is unavailable.");
+                : new WorkspaceOperator.RefusedException("The ingress routing handle is unavailable.");
+        }
     }
-
-    internal static WorkspaceDefinition Read(NpgsqlDataReader reader) => new(reader.GetGuid(0), reader.GetString(1),
-        reader.GetString(2), reader.GetString(3), reader.GetInt64(4), reader.GetString(5));
 }

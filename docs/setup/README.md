@@ -10,9 +10,9 @@ Inspect the package manifest for exact artifact identities and its declared comp
 Keep development commands in the owning component guide and camera instructions in [camera compatibility](../camera-compatibility.md).
 The compatibility matrix distinguishes observed physical-camera uploads from manufacturer-documented support.
 
-## Shared workspaces
+## Workspaces
 
-For multiple workspaces on one Server, follow [shared workspace provisioning](../../deploy/operations/README.md#shared-workspace-provisioning).
+Every installation uses one Server with one or more isolated workspaces. Follow [workspace provisioning](../../deploy/operations/README.md#workspace-provisioning).
 Use fresh tenant databases and fixed filesystem allocations; the setup does not convert or adopt existing single-workspace media.
 
 ## Moving from an older pre-alpha installation

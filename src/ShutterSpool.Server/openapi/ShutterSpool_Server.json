@@ -12788,8 +12788,7 @@
       "WorkspaceListResponse": {
         "required": [
           "items",
-          "incomplete",
-          "selectionRequired"
+          "incomplete"
         ],
         "type": "object",
         "properties": {
@@ -12800,9 +12799,6 @@
             }
           },
           "incomplete": {
-            "type": "boolean"
-          },
-          "selectionRequired": {
             "type": "boolean"
           }
         },

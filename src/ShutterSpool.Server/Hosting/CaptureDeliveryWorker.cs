@@ -14,15 +14,18 @@ internal sealed class CaptureDeliveryWorker(IServiceScopeFactory scopes, Deliver
     {
         while (!stoppingToken.IsCancellationRequested)
         {
-            bool processed;
+            bool processed = false;
             try
             {
-                await using WorkspaceWorkerScope scope = await tenants.NextAsync(stoppingToken);
-                LiveChangeNotifier changes = scope.ServiceProvider.GetRequiredService<LiveChangeNotifier>();
-                DeliveryProcessingService delivery = scope.ServiceProvider.GetRequiredService<DeliveryProcessingService>();
-                processed = await delivery.ProcessOneAsync(stoppingToken,
-                    captureId => changes.CaptureChanged(captureId, "delivery"));
-                if (delivery.LastChangedCaptureId is Guid captureId) changes.CaptureChanged(captureId, "delivery");
+                await using WorkspaceWorkerScope? scope = await tenants.NextAsync(stoppingToken);
+                if (scope is not null)
+                {
+                    LiveChangeNotifier changes = scope.ServiceProvider.GetRequiredService<LiveChangeNotifier>();
+                    DeliveryProcessingService delivery = scope.ServiceProvider.GetRequiredService<DeliveryProcessingService>();
+                    processed = await delivery.ProcessOneAsync(stoppingToken,
+                        captureId => changes.CaptureChanged(captureId, "delivery"));
+                    if (delivery.LastChangedCaptureId is Guid captureId) changes.CaptureChanged(captureId, "delivery");
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch (Exception exception)

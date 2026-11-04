@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { parse } from '@vue/compiler-sfc';
+import { computed, ref, shallowRef } from 'vue';
 import { readWorkspaceId, workspaceRequestHeaders, workspaceSelection, withWorkspace } from '../app/lib/workspace-context.ts';
 
 const first = '2f2ed010-2a51-468a-a38a-a2372fba8211';
@@ -12,8 +14,10 @@ const memberships = [{ id: first, name: 'Studio' }];
 test('reads one valid workspace ID from the current page URL', () => {
     assert.equal(readWorkspaceId(`?workspace=${first}`), first);
     assert.equal(readWorkspaceId(`?workspace=${first.toUpperCase()}`), first);
-    assert.equal(readWorkspaceId('?workspace=not-a-guid'), null);
-    assert.equal(readWorkspaceId(`?workspace=${first}&workspace=${second}`), null);
+    assert.equal(readWorkspaceId(''), null);
+    assert.equal(readWorkspaceId('?workspace=not-a-guid'), '');
+    assert.equal(readWorkspaceId('?workspace='), '');
+    assert.equal(readWorkspaceId(`?workspace=${first}&workspace=${second}`), '');
 });
 
 test('auth callback initializes page scope once from its local return target, not callback query data', () => {
@@ -31,17 +35,64 @@ test('auth callback initializes page scope once from its local return target, no
 });
 
 test('requires membership confirmation before the selected workspace can open', () => {
-    assert.deepEqual(workspaceSelection(memberships, false, true, first), { state: 'selected', workspace: memberships[0] });
-    assert.deepEqual(workspaceSelection(memberships, false, true, second), { state: 'unavailable' });
-    assert.deepEqual(workspaceSelection(memberships, true, true, second), { state: 'incomplete' });
-    assert.deepEqual(workspaceSelection([], false, false, second), { state: 'unavailable' });
+    assert.deepEqual(workspaceSelection(memberships, false, first), { state: 'selected', workspace: memberships[0] });
+    assert.deepEqual(workspaceSelection(memberships, true, first), { state: 'selected', workspace: memberships[0] });
+    assert.deepEqual(workspaceSelection(memberships, false, second), { state: 'unavailable' });
+    assert.deepEqual(workspaceSelection(memberships, false, ''), { state: 'unavailable' });
+    assert.deepEqual(workspaceSelection(memberships, true, second), { state: 'incomplete' });
+    assert.deepEqual(workspaceSelection([], false, second), { state: 'unavailable' });
 });
 
-test('distinguishes no memberships from an incomplete membership query', () => {
-    assert.deepEqual(workspaceSelection([], false, true, null), { state: 'empty' });
-    assert.deepEqual(workspaceSelection([], true, true, null), { state: 'incomplete' });
-    assert.deepEqual(workspaceSelection(memberships, false, true, null), { state: 'choose' });
-    assert.deepEqual(workspaceSelection([], false, false, null), { state: 'legacy' });
+test('opens the sole workspace only after complete discovery and leaves multiple memberships to an explicit choice', () => {
+    assert.deepEqual(workspaceSelection(memberships, false, null), { state: 'selected', workspace: memberships[0] });
+    assert.deepEqual(workspaceSelection(memberships, true, null), { state: 'choose' });
+    assert.deepEqual(workspaceSelection([...memberships, { id: second, name: 'Location' }], false, null), { state: 'choose' });
+    assert.deepEqual(workspaceSelection([], false, null), { state: 'empty' });
+    assert.deepEqual(workspaceSelection([], true, null), { state: 'incomplete' });
+});
+
+function shell(selectedId, result) {
+    const replacements = [];
+    const context = vm.createContext({ exports: {}, ref, shallowRef, computed, AbortController,
+        useRoute: () => ({ path: '/captures/photo', fullPath: '/captures/photo?tab=details#preview' }),
+        useAppConfig: () => ({ sftpgo: {} }), watch: () => () => {}, onMounted() {}, onUnmounted() {},
+        window: { location: { replace: path => replacements.push(path) } },
+        require: name => name.endsWith('/session') ? { onAccessLost: () => () => {} }
+            : name.endsWith('/workspace-context') ? { pageWorkspaceId: selectedId, workspaceSelection, withWorkspace }
+            : { api: { workspaces: { get: async () => result } }, cancellable: () => ({}), handleFailure() {} },
+    });
+    const source = parse(readFileSync(new URL('../app/app.vue', import.meta.url), 'utf8')).descriptor.scriptSetup.content;
+    vm.runInContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
+    return { replacements, load: () => vm.runInContext('loadMemberships()', context),
+        state: () => vm.runInContext('({ mount: canMountOperationalWorkspace.value, selection: activeWorkspaceSelection.value.state })', context) };
+}
+
+test('sole-workspace entry reloads the requested capture route before private state can mount', async () => {
+    const app = shell(null, { items: memberships, incomplete: false });
+    assert.equal(app.state().selection, 'loading', 'unconfirmed discovery must not show no access');
+    await app.load();
+    assert.deepEqual(app.replacements, [`/captures/photo?tab=details&workspace=${first}#preview`]);
+    assert.equal(app.state().mount, false);
+    assert.equal(app.state().selection, 'loading');
+    const selected = shell(first, { items: memberships, incomplete: false });
+    await selected.load();
+    assert.equal(selected.state().mount, true);
+    assert.deepEqual(selected.replacements, []);
+});
+
+test('discovery never redirects explicit unavailable selections, incomplete membership lists or accounts without access', async () => {
+    for (const [selectedId, result, state] of [
+        [second, { items: memberships, incomplete: false }, 'unavailable'],
+        ['', { items: memberships, incomplete: false }, 'unavailable'],
+        [null, { items: memberships, incomplete: true }, 'choose'],
+        [null, { items: [], incomplete: false }, 'empty'],
+    ]) {
+        const app = shell(selectedId, result);
+        await app.load();
+        assert.deepEqual(app.replacements, []);
+        assert.equal(app.state().mount, false);
+        assert.equal(app.state().selection, state);
+    }
 });
 
 test('keeps workspace context on gallery routes and other URL state', () => {

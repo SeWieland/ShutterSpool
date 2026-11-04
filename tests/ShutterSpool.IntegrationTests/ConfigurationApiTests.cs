@@ -12,6 +12,9 @@ using ShutterSpool.Application.Ingress;
 using ShutterSpool.Application.Preview;
 using ShutterSpool.Application.Retention;
 using ShutterSpool.Application.Sources;
+using ShutterSpool.Application.Workspaces;
+using Microsoft.Extensions.Hosting;
+using ShutterSpool.Server.Api.Live;
 using ShutterSpool.Infrastructure.Persistence;
 using ShutterSpool.Infrastructure.Security;
 using ShutterSpool.Infrastructure.Spool;
@@ -104,7 +107,7 @@ public sealed partial class ConfigurationApiTests
         regeneratedResponse.EnsureSuccessStatusCode();
         string regenerated = (await regeneratedResponse.Content.ReadFromJsonAsync<RegeneratedSourceSecretResponse>(token))!.Secret!;
         Assert.NotEqual(source.Secret, regenerated);
-        await using (var scope = fixture.Server.Services.CreateAsyncScope())
+        await using (var scope = fixture.Scope())
         {
             var verifier = scope.ServiceProvider.GetRequiredService<SourceCredentialVerifier>();
             Assert.Null(await verifier.VerifyAsync(source.Username, source.Secret!, token));
@@ -257,7 +260,7 @@ public sealed partial class ConfigurationApiTests
             new RegenerateSourceSecretRequest(0, Username: "stale-wont-apply", PasswordMode: "Custom", Password: "CustomCamera!47"), token);
         Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
         Assert.DoesNotContain("CustomCamera!47", await stale.Content.ReadAsStringAsync(token), StringComparison.Ordinal);
-        await using var scope = fixture.Server.Services.CreateAsyncScope();
+        await using var scope = fixture.Scope();
         SourceCredentialVerifier verifier = scope.ServiceProvider.GetRequiredService<SourceCredentialVerifier>();
         Assert.Null(await verifier.VerifyAsync("camera-one", "!A23456789~!", token));
         Assert.Equal(source.Id, (await verifier.VerifyAsync("camera-two", "CustomCamera!43", token))?.SourceId);
@@ -292,7 +295,7 @@ public sealed partial class ConfigurationApiTests
 
             await using var database = new ShutterSpoolDbContext(fixture.Database.Options);
             Assert.Equal(1, await database.SourceCredentials.CountAsync(item => item.Username == "race-replacement", token));
-            await using var scope = fixture.Server.Services.CreateAsyncScope();
+            await using var scope = fixture.Scope();
             SourceCredentialVerifier verifier = scope.ServiceProvider.GetRequiredService<SourceCredentialVerifier>();
             Assert.Equal(firstWon ? null : first.Id,
                 (await verifier.VerifyAsync("camera-two", "CustomCamera!43", token))?.SourceId);
@@ -509,7 +512,7 @@ public sealed partial class ConfigurationApiTests
         long snapshotVersion = staleItem.GetProperty("version").GetInt64();
 
         DateTimeOffset renewedAt = DateTimeOffset.UtcNow;
-        fixture.Server.Services.GetRequiredService<ShutterSpool.Server.Api.Live.LiveChangeNotifier>().Publish(
+        fixture.Services.GetRequiredService<ShutterSpool.Server.Api.Live.LiveChangeNotifier>().Publish(
             new(transferId, source.Id, null, null, CameraTransferPhase.Receiving, renewedAt, 1, false, false));
         using HttpResponseMessage renewedResponse = await fixture.Client.GetAsync(
             $"/management/activity/transfers?sourceIds={source.Id}", token);
@@ -564,7 +567,7 @@ public sealed partial class ConfigurationApiTests
             await database.SaveChangesAsync(token);
         }
 
-        await using AsyncServiceScope cacheScope = fixture.Server.Services.CreateAsyncScope();
+        await using AsyncServiceScope cacheScope = fixture.Scope();
         IPreviewCache cache = cacheScope.ServiceProvider.GetRequiredService<IPreviewCache>();
         byte[] validPreview = Convert.FromBase64String("UklGRi4AAABXRUJQVlA4ICIAAABwAQCdASoCAAMAAUAmJZQCdAFAAAD+/DeBV/fU6D4r4AAA");
         await cache.WriteAsync(oldKey, validPreview, token);
@@ -617,7 +620,7 @@ public sealed partial class ConfigurationApiTests
         Assert.Equal("FailedUnavailable", unavailable.GetProperty("phase").GetString());
         Assert.True(unavailable.GetProperty("accepted").GetBoolean());
 
-        fixture.Server.Services.GetRequiredService<PreviewSettings>().PrewarmMode = PreviewPrewarmMode.Off;
+        fixture.Services.GetRequiredService<PreviewSettings>().PrewarmMode = PreviewPrewarmMode.Off;
         await using (var database = new ShutterSpoolDbContext(fixture.Database.Options))
         {
             PreviewPrewarmEntity job = await database.PreviewPrewarms.SingleAsync(item => item.AssetId == currentAssetId, token);
@@ -628,7 +631,7 @@ public sealed partial class ConfigurationApiTests
         Assert.Equal("AcceptedAwaitingGrouping", prewarmOff.GetProperty("phase").GetString());
 
         DateTimeOffset generationStartedAt = DateTimeOffset.UtcNow;
-        var changes = fixture.Server.Services.GetRequiredService<ShutterSpool.Server.Api.Live.LiveChangeNotifier>();
+        var changes = fixture.Services.GetRequiredService<ShutterSpool.Server.Api.Live.LiveChangeNotifier>();
         changes.Preparing(captureId, currentAssetId, PreviewProfile.Grid, generationStartedAt);
         JsonElement onDemandPreparing = await ReadTransferAsync(currentTransferId);
         Assert.Equal("PreparingPreview", onDemandPreparing.GetProperty("phase").GetString());
@@ -683,7 +686,7 @@ public sealed partial class ConfigurationApiTests
         using HttpResponseMessage created = await fixture.Client.PostAsJsonAsync("/management/sources", CameraRequest("Auth camera"), token);
         CreatedSourceResponse source = (await created.Content.ReadFromJsonAsync<CreatedSourceResponse>(token))!;
         DateTimeOffset observedAt = new(DateTimeOffset.UtcNow.Ticks / 10 * 10, TimeSpan.Zero);
-        await using (AsyncServiceScope scope = fixture.Server.Services.CreateAsyncScope())
+        await using (AsyncServiceScope scope = fixture.Scope())
             await scope.ServiceProvider.GetRequiredService<ISourceAuthenticationObservationStore>().RecordAsync(
                 new(source.Id, SourceAuthenticationOutcome.Rejected, observedAt), token);
 
@@ -743,7 +746,7 @@ public sealed partial class ConfigurationApiTests
         Assert.DoesNotContain("synthetic-destination-secret", destinationBody, StringComparison.Ordinal);
         using (JsonDocument parsed = JsonDocument.Parse(destinationBody))
             Assert.True(parsed.RootElement.GetProperty("secretConfigured").GetBoolean());
-        await using (var scope = fixture.Server.Services.CreateAsyncScope())
+        await using (var scope = fixture.Scope())
         {
             var database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
             var protector = scope.ServiceProvider.GetRequiredService<ShutterSpool.Application.Security.ICredentialProtector>();
@@ -798,8 +801,7 @@ public sealed partial class ConfigurationApiTests
         {
             DestinationCredentialEntity credential = await database.DestinationCredentials.SingleAsync(token);
             Assert.DoesNotContain("synthetic-app-password", credential.EncryptedSecret, StringComparison.Ordinal);
-            Assert.Equal("synthetic-app-password", new SecretProtector(Microsoft.Extensions.Options.Options.Create(
-                new CredentialProtectionOptions { EncryptionKey = Convert.ToBase64String(new byte[32]) })).Unprotect(credential.EncryptedSecret));
+            Assert.Equal("synthetic-app-password", fixture.Services.GetRequiredService<ShutterSpool.Application.Security.ICredentialProtector>().Unprotect(credential.EncryptedSecret));
 
             Guid assetId = Guid.NewGuid(), captureId = Guid.NewGuid(), decisionId = Guid.NewGuid();
             database.Assets.Add(new AssetEntity { Id = assetId, OriginalName = "synthetic.raw", SpoolKey = Guid.NewGuid().ToString("N"),
@@ -876,13 +878,22 @@ public sealed partial class ConfigurationApiTests
     {
         private static readonly byte[] SigningKey = Encoding.UTF8.GetBytes("synthetic-api-test-signing-key-at-least-32-bytes");
 
-        private ConfigurationApiFixture(ArchitectureTestDatabase database, WebApplicationFactory<Program> server, HttpClient client)
+        private ConfigurationApiFixture(WorkspaceTenancyPostgresTests.WorkspaceFixture storage, WorkspaceDefinition workspace, WebApplicationFactory<Program> server, HttpClient client)
         {
-            Database = database;
+            Storage = storage;
+            Workspace = workspace;
+            Database = storage.Database(0);
             Server = server;
             Client = client;
+            BoundScope = storage.Scope(server.Services, workspace);
         }
 
+        private WorkspaceTenancyPostgresTests.WorkspaceFixture Storage { get; }
+        private WorkspaceDefinition Workspace { get; }
+        private AsyncServiceScope BoundScope { get; }
+        public IServiceProvider Services => BoundScope.ServiceProvider;
+        public string RuntimeRole => new Npgsql.NpgsqlConnectionStringBuilder(Storage.Connection(0)).Username!;
+        public AsyncServiceScope Scope() => Storage.Scope(Server.Services, Workspace);
         public ArchitectureTestDatabase Database { get; }
         public WebApplicationFactory<Program> Server { get; }
         public HttpClient Client { get; }
@@ -892,12 +903,19 @@ public sealed partial class ConfigurationApiTests
             CameraIngressSettings? profileSettings = null, string? minimumPasswordLength = null,
             ICameraIngressDirectories? directoriesOverride = null)
         {
-            ArchitectureTestDatabase database = await ArchitectureTestDatabase.CreateAsync();
-            await using (var context = new ShutterSpoolDbContext(database.Options))
-            {
-                await new DatabaseInitializer(context).InitializeAsync(database.SpoolRoot, TestContext.Current.CancellationToken);
-                await new EfAccessGrantStore(context).BootstrapAsync("https://issuer.test", "operator", TestContext.Current.CancellationToken);
-            }
+            var storage = await WorkspaceTenancyPostgresTests.WorkspaceFixture.CreateAsync(workspaceCount: 1);
+            storage.Configuration["Logging:LogLevel:Default"] = "Warning";
+            storage.Configuration["Logging:LogLevel:Microsoft.EntityFrameworkCore.Database.Command"] = "None";
+            storage.Configuration["ShutterSpool:Security:Authority"] = "https://issuer.test";
+            storage.Configuration["ShutterSpool:Workspaces:UsableCapacityBytes"] = "1000000000";
+            storage.Configuration["ShutterSpool:Workspaces:Definitions:studio0:AllocatedBytes"] = "1000000000";
+            storage.Configuration["ShutterSpool:Workspaces:Definitions:studio0:OwnerIssuer"] = "https://issuer.test";
+            storage.Configuration["ShutterSpool:Workspaces:Definitions:studio0:OwnerSubject"] = "operator";
+            storage.Configuration["ShutterSpool:Destinations:EnabledKinds:0"] = "local";
+            storage.Configuration["ShutterSpool:Destinations:EnabledKinds:1"] = "webdav";
+            await storage.ProvisionAsync();
+            ArchitectureTestDatabase database = storage.Database(0);
+            WorkspaceDefinition workspace = Assert.Single(await storage.RegistryAsync());
             CameraIngressSettings ingressSettings = profileSettings ?? new CameraIngressSettings
             {
                 Enabled = true,
@@ -914,6 +932,7 @@ public sealed partial class ConfigurationApiTests
 
             WebApplicationFactory<Program> server = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
             {
+                builder.ConfigureAppConfiguration((_, configuration) => configuration.AddConfiguration(storage.Configuration));
                 builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["ShutterSpool:Spool:RootPath"] = database.SpoolRoot,
@@ -938,9 +957,9 @@ public sealed partial class ConfigurationApiTests
             }
                 builder.ConfigureTestServices(services =>
                 {
-                services.RemoveAll<DbContextOptions<ShutterSpoolDbContext>>();
-                services.RemoveAll<Microsoft.EntityFrameworkCore.Infrastructure.IDbContextOptionsConfiguration<ShutterSpoolDbContext>>();
-                services.AddSingleton(database.Options);
+                services.RemoveAll<IHostedService>();
+                services.AddHostedService(provider => provider.GetRequiredService<LiveChangeBuffer>());
+                services.AddHostedService(provider => provider.GetRequiredService<SourceAuthenticationObservationWorker>());
                 using var connectionContext = new ShutterSpoolDbContext(database.Options);
                 string testConnectionString = connectionContext.Database.GetConnectionString()!;
                 services.RemoveAll<PostgresOriginalAssetLock>();
@@ -952,7 +971,7 @@ public sealed partial class ConfigurationApiTests
                 services.AddScoped<IProtectionAdmissionLock>(provider => new PostgresProtectionAdmissionLock(
                     testConnectionString, provider.GetRequiredService<ShutterSpool.Application.Ingest.ISpool>()));
                 services.AddSingleton(Microsoft.Extensions.Options.Options.Create(new CredentialProtectionOptions
-                { EncryptionKey = invalidEncryptionKey ? "synthetic-invalid-base64" : Convert.ToBase64String(new byte[32]) }));
+                { EncryptionKey = invalidEncryptionKey ? "synthetic-invalid-base64" : storage.Configuration["ShutterSpool:Security:EncryptionKey"]! }));
                 if (minimumPasswordLength is not null)
                 {
                     services.RemoveAll<CameraCredentialPolicy>();
@@ -986,7 +1005,10 @@ public sealed partial class ConfigurationApiTests
                     });
                 });
             });
-            var client = server.CreateClient();
+            HttpClient client;
+            try { client = server.CreateClient(); }
+            catch { await server.DisposeAsync(); await storage.DisposeAsync(); throw; }
+            client.DefaultRequestHeaders.Add(WorkspaceSelection.Header, workspace.Id.ToString("D"));
             var token = new JwtSecurityToken(
                 issuer: "https://issuer.test",
                 audience: "shutterspool",
@@ -994,7 +1016,7 @@ public sealed partial class ConfigurationApiTests
                 expires: DateTime.UtcNow.AddMinutes(5),
                 signingCredentials: new(new SymmetricSecurityKey(SigningKey), SecurityAlgorithms.HmacSha256));
             client.DefaultRequestHeaders.Authorization = new("Bearer", new JwtSecurityTokenHandler().WriteToken(token));
-            return new(database, server, client);
+            return new(storage, workspace, server, client);
         }
 
         private sealed class RevokeBatchAuthorizationHandler(bool failDependency) : AuthorizationHandler<LocalGrantRequirement>
@@ -1019,8 +1041,9 @@ public sealed partial class ConfigurationApiTests
         public async ValueTask DisposeAsync()
         {
             Client.Dispose();
+            await BoundScope.DisposeAsync();
             await Server.DisposeAsync();
-            await Database.DisposeAsync();
+            await Storage.DisposeAsync();
         }
     }
 }

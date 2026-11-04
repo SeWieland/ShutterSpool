@@ -7,7 +7,7 @@ The [Server reference](../../src/ShutterSpool.Server/README.md#local-security-co
 ## The short version
 
 - An external OpenID Connect (OIDC) issuer authenticates a person. ShutterSpool does not store or check management passwords.
-- The Server validates the issuer, audience, signature and expiry. Single-workspace mode additionally requires the `shutterspool-admin` token role; shared-workspace mode does not require that provider role.
+- The Server validates the issuer, audience, signature and expiry. Provider roles do not grant workspace access.
 - The Server then checks an active local grant in PostgreSQL, keyed by the token's stable issuer and subject. Both checks must pass before a management API, private preview/original, or live-status stream can return private data.
 - PostgreSQL is the authority for grants and credential state. Valkey is not in the authorization path and cannot make stale or revoked access valid.
 
@@ -25,11 +25,11 @@ The web client is outside the trusted authorization boundary. It may hide or sho
 
 ## Why there are two decisions
 
-OIDC answers **who presented this token**, while a local grant answers **whether this person may currently access this ShutterSpool deployment**. Keeping those separate makes revocation and recovery local, without making ShutterSpool a password store or coupling media/workflow ownership to an identity-provider database.
+OIDC answers **who presented this token**, while a local grant answers **whether this person may currently access the selected workspace**. Keeping those separate makes revocation and recovery local, without making ShutterSpool a password store or coupling media/workflow ownership to an identity-provider database.
 
 | Decision | Authority | What it proves | Failure result |
 | --- | --- | --- | --- |
-| Authentication | Configured OIDC issuer, verified by Server | A token is from the allowed issuer, for this audience and unexpired; single-workspace mode also checks its coarse role. | No principal; protected endpoint returns no private data. |
+| Authentication | Configured OIDC issuer, verified by Server | A token is from the allowed issuer, for this audience and unexpired. | No principal; protected endpoint returns no private data. |
 | Authorization | PostgreSQL, checked by Server | The `(issuer, subject)` has an active ShutterSpool grant. | Access is denied, including if the database cannot make a safe decision. |
 
 Keycloak is an identity provider here, not the owner of photographic permissions. It does not contain individual Assets, Captures, Routes, Destinations, or Delivery permissions. Those records and workspace grants remain ShutterSpool workflow truth in PostgreSQL.
@@ -39,35 +39,24 @@ Keycloak is an identity provider here, not the owner of photographic permissions
 Every protected HTTP request goes through both checks. A valid token alone is insufficient. This means an operator can be removed by deactivating the local grant even while the token would otherwise remain valid.
 
 Signing metadata and keys come from the configured issuer as needed; token validation does not mean asking the issuer to authorize each photograph.
-The Server verifies signature, issuer, audience and expiry, plus the coarse role in single-workspace mode, then reads the local grant before returning private data.
+The Server verifies signature, issuer, audience and expiry, then reads the selected workspace's local grant before returning private data.
 
 Live status is a long-lived exception only in transport, not in policy. The Server closes the hub connection at token expiry and rechecks its local grant every 30 seconds; a revoked principal therefore loses hub access at the next check. The legacy live-status event stream checks expiry and authorization every 60 seconds. A cache miss, stale cache entry, or lost cache invalidation notification must never preserve access.
 
 ## Bootstrap and recovery
 
-Shared-workspace mode uses [explicit workspace provisioning](../../src/ShutterSpool.Server/README.md#shared-workspace-provisioning) to create its first local grant once, against a verified issuer/subject.
+[Explicit workspace provisioning](../../deploy/operations/README.md#workspace-provisioning) creates the first local grant once, against a verified issuer/subject.
 An ordinary restart never replays that grant or substitutes the deployment operator as a workspace member.
-The following bootstrap reconciliation applies only to single-workspace mode.
+There is no default password, automatic first-login enrollment or unauthenticated recovery endpoint.
 
-In single-workspace mode, the first local grant is explicit deployment configuration: an issuer and subject that the operator has already established in the chosen IdP. On Server startup, that configuration is reconciled into PostgreSQL. Changing it and restarting replaces the prior bootstrap grant. There is no default password, automatic first-login enrollment, or unauthenticated recovery endpoint.
+For an operator without an existing issuer, the supported profile supplies a Keycloak companion. Deployment secrets create its operational bootstrap and initial ShutterSpool administrator; versioned realm, client and audience-mapper configuration is reconciled without requiring a Keycloak-console visit. Keycloak’s own master administrator is deployment plumbing, not a ShutterSpool login.
 
-```mermaid
-flowchart TD
-    Config[Explicit bootstrap issuer and subject] --> Start[Server startup]
-    Start --> Check[Reconcile local grant]
-    Check --> Active[Activate configured grant]
-    Check --> Old[Deactivate replaced bootstrap grant]
-    Change[Operator changes bootstrap identity] --> Restart[Restart Server]
-    Restart --> Check
-```
-
-For an operator without an existing issuer, the supported profile supplies a Keycloak companion. Deployment secrets create its operational bootstrap and initial ShutterSpool administrator; versioned realm, client, role, and mapper configuration is reconciled without requiring a Keycloak-console visit. Keycloak’s own master administrator is deployment plumbing, not a ShutterSpool login.
-
-The companion preserves the explicitly configured subject when provisioning a fresh administrator. For an existing exact username, reconciliation verifies its Keycloak ID against that subject and fails before password/role changes if they differ. Recovery corrects the deployment subject to the verified intended account and recreates the AppHost; it never replaces the existing account or enrolls an arbitrary first login.
+The companion preserves the explicitly configured subject when provisioning a fresh administrator. For an existing exact username, reconciliation verifies its Keycloak ID against that subject and fails before account changes if they differ. Correcting initial account setup requires the verified intended subject; it never replaces the existing account or changes an already provisioned workspace grant.
 
 ## Workspace selection
 
-In shared-workspace mode, a verified identity may discover only workspaces where it has a current local grant.
+A verified identity may discover only workspaces where it has a current local grant.
+When discovery is complete and exactly one workspace is accessible, a page without a selection opens it automatically. Explicit invalid/unavailable selections and incomplete discovery never trigger a fallback.
 The URL selects the workspace for that browser page, and each API request carries its explicit workspace identity.
 The Server resolves the tenant before checking that tenant's local grant; missing or invalid selection never falls back to another database.
 Separate tabs can use separate workspaces under the same OIDC login, without a mutable global workspace session.

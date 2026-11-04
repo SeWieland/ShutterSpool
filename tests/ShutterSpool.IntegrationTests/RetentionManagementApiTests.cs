@@ -45,7 +45,8 @@ public sealed partial class ConfigurationApiTests
             request["quota"]!["highWatermarkBytes"] = quotaBytes - 1;
             request["quota"]!["recoveryTargetBytes"] = quotaBytes - 2;
             using var response = await fixture.Client.PostAsJsonAsync("/management/retention/settings/preview", request, token);
-            response.EnsureSuccessStatusCode();
+            if (active) response.EnsureSuccessStatusCode();
+            else Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
             return JsonNode.Parse(await response.Content.ReadAsStringAsync(token))!;
         }
 
@@ -62,7 +63,8 @@ public sealed partial class ConfigurationApiTests
         JsonNode current = await PreviewAsync(occupancy);
         Assert.Equal(0, current["proposedQuotaHeadroomBytes"]!.GetValue<long>());
         JsonNode inactive = await PreviewAsync(20, active: false);
-        Assert.Null(inactive["proposedQuotaHeadroomBytes"]);
+        Assert.Contains(inactive["errors"]!["settings"]!.AsArray(),
+            error => error!.GetValue<string>() == "Workspace quota admission must remain enabled within its operator allocation.");
 
         string markerPath = Path.Combine(fixture.Database.SpoolRoot, ".shutterspool-root.marker");
         await using (var database = new ShutterSpoolDbContext(fixture.Database.Options))
@@ -261,7 +263,7 @@ public sealed partial class ConfigurationApiTests
         await using var fixture = await ConfigurationApiFixture.CreateAsync();
         CancellationToken token = TestContext.Current.CancellationToken;
         Directory.CreateDirectory(fixture.Database.SpoolRoot);
-        await using (AsyncServiceScope scope = fixture.Server.Services.CreateAsyncScope())
+        await using (AsyncServiceScope scope = fixture.Scope())
             Assert.True((await scope.ServiceProvider.GetRequiredService<ISpoolQuotaStore>().GetSnapshotAsync(token)).IsKnown);
         var saved = JsonNode.Parse(await fixture.Client.GetStringAsync("/management/retention/settings", token))!;
         var request = new JsonObject
@@ -291,63 +293,25 @@ public sealed partial class ConfigurationApiTests
     }
 
     [Fact]
-    public async Task Quota_activation_can_acknowledge_legacy_storage_adoption_without_enabling_removal()
+    public async Task Workspace_quota_cannot_be_disabled_even_with_impact_acknowledgement()
     {
         await using var fixture = await ConfigurationApiFixture.CreateAsync();
         CancellationToken token = TestContext.Current.CancellationToken;
-        _ = await SeedRetentionCaptureAsync(fixture, token);
-        string markerPath = Path.Combine(fixture.Database.SpoolRoot, ".shutterspool-root.marker");
-        await using (var database = new ShutterSpoolDbContext(fixture.Database.Options))
-        {
-            await database.SpoolQuotaObservations.Where(item => item.Id == 1)
-                .ExecuteUpdateAsync(update => update.SetProperty(item => item.StorageMarker, (string?)null), token);
-            await database.SpoolQuotaSettings.Where(item => item.Id == 1)
-                .ExecuteUpdateAsync(update => update.SetProperty(item => item.StorageMarkerAdoptionAuthorized, false), token);
-        }
-        File.Delete(markerPath);
-
-        var saved = JsonNode.Parse(await fixture.Client.GetStringAsync("/management/retention/settings", token))!;
-        Assert.False(saved["settings"]!["automaticRemovalEnabled"]!.GetValue<bool>());
-        Assert.False(saved["quota"]!["isActive"]!.GetValue<bool>());
+        JsonNode saved = JsonNode.Parse(await fixture.Client.GetStringAsync("/management/retention/settings", token))!;
         var request = new JsonObject
         {
             ["expectedSettingsRevision"] = saved["settings"]!["revision"]!.GetValue<int>(),
             ["expectedQuotaRevision"] = saved["quota"]!["revision"]!.GetValue<int>(),
-            ["settings"] = saved["settings"]!.DeepClone(),
-            ["quota"] = saved["quota"]!.DeepClone(),
-            ["previewCache"] = saved["previewCache"]!.DeepClone(),
-            ["acknowledgeImpact"] = false,
+            ["settings"] = saved["settings"]!.DeepClone(), ["quota"] = saved["quota"]!.DeepClone(),
+            ["previewCache"] = saved["previewCache"]!.DeepClone(), ["acknowledgeImpact"] = true,
         };
-        request["quota"]!["isActive"] = true;
-        request["quota"]!["quotaBytes"] = 10 * 1024 * 1024;
-        request["quota"]!["highWatermarkBytes"] = 8 * 1024 * 1024;
-        request["quota"]!["recoveryTargetBytes"] = 5 * 1024 * 1024;
-
-        using var preview = await fixture.Client.PostAsJsonAsync("/management/retention/settings/preview", request, token);
-        preview.EnsureSuccessStatusCode();
-        var impact = JsonNode.Parse(await preview.Content.ReadAsStringAsync(token))!;
-        Assert.False(impact["complete"]!.GetValue<bool>());
-        Assert.True(impact["quotaActivationAcknowledgementRequired"]!.GetValue<bool>());
-
-        using var rejected = await fixture.Client.PutAsJsonAsync("/management/retention/settings", request, token);
-        Assert.Equal(HttpStatusCode.Conflict, rejected.StatusCode);
-        var rejection = JsonNode.Parse(await rejected.Content.ReadAsStringAsync(token))!;
-        Assert.Equal("QUOTA_ACTIVATION_ACKNOWLEDGEMENT_REQUIRED", rejection["errorCode"]!.GetValue<string>());
-
-        request["acknowledgeImpact"] = true;
-        using var accepted = await fixture.Client.PutAsJsonAsync("/management/retention/settings", request, token);
-        accepted.EnsureSuccessStatusCode();
-        var result = JsonNode.Parse(await accepted.Content.ReadAsStringAsync(token))!;
-        Assert.False(result["impact"]!["complete"]!.GetValue<bool>());
-
-        var current = JsonNode.Parse(await fixture.Client.GetStringAsync("/management/retention/settings", token))!;
+        request["quota"]!["isActive"] = false;
+        using HttpResponseMessage rejected = await fixture.Client.PutAsJsonAsync("/management/retention/settings", request, token);
+        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+        JsonNode current = JsonNode.Parse(await fixture.Client.GetStringAsync("/management/retention/settings", token))!;
         Assert.True(current["quota"]!["isActive"]!.GetValue<bool>());
         Assert.False(current["settings"]!["automaticRemovalEnabled"]!.GetValue<bool>());
-        using var capacity = await fixture.Client.GetAsync("/management/retention/capacity", token);
-        capacity.EnsureSuccessStatusCode();
-        var measured = JsonNode.Parse(await capacity.Content.ReadAsStringAsync(token))!;
-        Assert.False(measured["unknownAccounting"]!.GetValue<bool>());
-        Assert.True(File.Exists(markerPath));
+        Assert.Equal(saved["quota"]!["revision"]!.GetValue<int>(), current["quota"]!["revision"]!.GetValue<int>());
     }
 
     [Fact]

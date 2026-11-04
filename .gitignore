@@ -18,6 +18,8 @@ src/ShutterSpool.Server/wwwroot/
 !.env.example
 **/appsettings.Local.json
 **/secrets.json
+/deploy/config/appsettings.Production.json
+/deploy/config/appsettings.Maintenance.json
 *.pfx
 *.p12
 *.key

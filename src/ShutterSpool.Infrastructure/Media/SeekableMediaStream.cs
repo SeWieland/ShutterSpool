@@ -20,7 +20,7 @@ internal static class SeekableMediaStream
         }
 
         Guid operation = Guid.NewGuid();
-        bool tenant = workspace?.Enabled == true;
+        bool tenant = workspace is not null;
         string key = $"incoming/media-temporary/{operation:N}.tmp";
         string path = tenant ? Path.Combine(workspace!.Required.StorageRoot, key.Replace('/', Path.DirectorySeparatorChar))
             : Path.Combine(Path.GetTempPath(), $"shutterspool-media-{operation:N}.tmp");

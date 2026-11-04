@@ -70,7 +70,6 @@ public static class SecurityExtensions
                         string.Equals(issuer, publicIssuer, StringComparison.Ordinal)
                             ? issuer
                             : throw new SecurityTokenInvalidIssuerException("The token issuer does not match the configured public OIDC authority.");
-                    jwt.TokenValidationParameters.RoleClaimType = options.AdministratorRoleClaimType;
                 }
                 else
                 {
@@ -88,7 +87,6 @@ public static class SecurityExtensions
         services.AddAuthorizationBuilder().AddPolicy(ManagementAccessPolicy, policy =>
         {
             policy.RequireAuthenticatedUser();
-            if (!configuration.GetValue<bool>("ShutterSpool:Workspaces:Enabled")) policy.RequireRole(options.AdministratorRole);
             policy.AddRequirements(new LocalGrantRequirement());
         });
         services.AddCors(cors => cors.AddPolicy("live-hub", policy =>

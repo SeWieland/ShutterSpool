@@ -12,27 +12,44 @@ namespace ShutterSpool.IntegrationTests;
 public sealed class WorkspaceWorkerAndLiveTests
 {
     [Fact]
+    public async Task One_workspace_worker_slot_reports_idle_and_becomes_available_after_the_active_pass()
+    {
+        var registry = new Registry { Workspaces = [new(Guid.NewGuid(), "A", "a", "a", 100)] };
+        await using ServiceProvider services = new ServiceCollection().AddScoped(_ => new WorkspaceContext())
+            .AddSingleton<IWorkspaceRegistry>(registry).BuildServiceProvider();
+        var cursor = new WorkspaceWorkerCursor(services.GetRequiredService<IServiceScopeFactory>());
+        Guid workspaceId = registry.Workspaces[0].Id;
+        await using (WorkspaceWorkerScope active = Assert.IsType<WorkspaceWorkerScope>(await cursor.NextAsync(TestContext.Current.CancellationToken)))
+        {
+            Assert.Equal(workspaceId, active.ServiceProvider.GetRequiredService<WorkspaceContext>().Required.Id);
+            Assert.Null(await cursor.NextAsync(TestContext.Current.CancellationToken));
+        }
+        await using WorkspaceWorkerScope resumed = Assert.IsType<WorkspaceWorkerScope>(await cursor.NextAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(workspaceId, resumed.ServiceProvider.GetRequiredService<WorkspaceContext>().Required.Id);
+    }
+
+    [Fact]
     public async Task Shared_worker_cursor_rotates_and_skips_an_active_slow_tenant_with_bounded_scopes()
     {
         var registry = new Registry();
-        await using ServiceProvider services = new ServiceCollection().AddScoped(_ => new WorkspaceContext(true))
+        await using ServiceProvider services = new ServiceCollection().AddScoped(_ => new WorkspaceContext())
             .AddSingleton<IWorkspaceRegistry>(registry).BuildServiceProvider();
         var cursor = new WorkspaceWorkerCursor(services.GetRequiredService<IServiceScopeFactory>());
         var seen = new List<Guid>();
         for (int pass = 0; pass < 10; pass++)
         {
-            await using WorkspaceWorkerScope scope = await cursor.NextAsync(TestContext.Current.CancellationToken);
+            await using WorkspaceWorkerScope scope = Assert.IsType<WorkspaceWorkerScope>(await cursor.NextAsync(TestContext.Current.CancellationToken));
             seen.Add(scope.ServiceProvider.GetRequiredService<WorkspaceContext>().Required.Id);
         }
         Assert.Equal(Enumerable.Range(0, 10).Select(index => registry.Workspaces[index % 2].Id), seen);
-        await using WorkspaceWorkerScope slow = await cursor.NextAsync(TestContext.Current.CancellationToken);
+        await using WorkspaceWorkerScope slow = Assert.IsType<WorkspaceWorkerScope>(await cursor.NextAsync(TestContext.Current.CancellationToken));
         Guid slowId = slow.ServiceProvider.GetRequiredService<WorkspaceContext>().Required.Id;
-        await using (WorkspaceWorkerScope fast = await cursor.NextAsync(TestContext.Current.CancellationToken))
+        await using (WorkspaceWorkerScope fast = Assert.IsType<WorkspaceWorkerScope>(await cursor.NextAsync(TestContext.Current.CancellationToken)))
         {
             Assert.NotEqual(slowId, fast.ServiceProvider.GetRequiredService<WorkspaceContext>().Required.Id);
-            await Assert.ThrowsAsync<InvalidOperationException>(() => cursor.NextAsync(TestContext.Current.CancellationToken));
+            Assert.Null(await cursor.NextAsync(TestContext.Current.CancellationToken));
         }
-        await using WorkspaceWorkerScope nextFast = await cursor.NextAsync(TestContext.Current.CancellationToken);
+        await using WorkspaceWorkerScope nextFast = Assert.IsType<WorkspaceWorkerScope>(await cursor.NextAsync(TestContext.Current.CancellationToken));
         Assert.NotEqual(slowId, nextFast.ServiceProvider.GetRequiredService<WorkspaceContext>().Required.Id);
     }
 
@@ -93,10 +110,10 @@ public sealed class WorkspaceWorkerAndLiveTests
         Assert.False(a.ActivityCoverageComplete);
     }
 
-    private static WorkspaceContext Context(WorkspaceDefinition workspace) { var context = new WorkspaceContext(true); context.Bind(workspace); return context; }
+    private static WorkspaceContext Context(WorkspaceDefinition workspace) { var context = new WorkspaceContext(); context.Bind(workspace); return context; }
     private sealed class Registry : IWorkspaceRegistry
     {
-        public WorkspaceDefinition[] Workspaces { get; } = [new(Guid.NewGuid(), "A", "a", "a", 100, "a"), new(Guid.NewGuid(), "B", "b", "b", 100, "b")];
+        public WorkspaceDefinition[] Workspaces { get; init; } = [new(Guid.NewGuid(), "A", "a", "a", 100), new(Guid.NewGuid(), "B", "b", "b", 100)];
         public Task<WorkspaceDefinition[]> ListReadyAsync(CancellationToken token) => Task.FromResult(Workspaces);
         public Task<WorkspaceDefinition?> FindReadyAsync(Guid id, CancellationToken token) => Task.FromResult(Workspaces.SingleOrDefault(item => item.Id == id));
         public Task<WorkspaceIngressRoute?> FindIngressAsync(string handle, CancellationToken token) => Task.FromResult<WorkspaceIngressRoute?>(null);

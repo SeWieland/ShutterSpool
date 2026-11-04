@@ -172,7 +172,7 @@ internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database,
         var credentialEntity = new SourceCredentialEntity
         {
             SourceId = source.Id, Username = source.Username, VirtualRoot = source.VirtualRoot, SecretVerifier = source.SecretVerifier,
-            IsIngressEnabled = workspace?.Enabled != true,
+            IsIngressEnabled = workspace is null,
         };
         database.Sources.Add(sourceEntity);
         database.SourceCredentials.Add(credentialEntity);
@@ -186,7 +186,7 @@ internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database,
             throw new ConfigurationConflictException();
         }
         await transaction.CommitAsync(cancellationToken);
-        if (workspace?.Enabled == true)
+        if (workspace is not null)
         {
             await transaction.DisposeAsync();
             // A failed control write leaves a visible disabled Source whose credentials can be repaired.
@@ -482,17 +482,5 @@ internal sealed class EfAccessGrantStore(ShutterSpoolDbContext database) : IAcce
     public Task<bool> IsActiveAsync(string issuer, string subject, CancellationToken cancellationToken) =>
         database.AuthorizationGrants.AsNoTracking().AnyAsync(grant => grant.IsActive && grant.Issuer == issuer && grant.Subject == subject, cancellationToken);
 
-    public async Task BootstrapAsync(string issuer, string subject, CancellationToken cancellationToken)
-    {
-        await using var transaction = database.Database.IsRelational() ? await database.Database.BeginTransactionAsync(cancellationToken) : null;
-        if (transaction is not null)
-            await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(hashtextextended('shutterspool-bootstrap', 0))", cancellationToken);
-        var replaced = await database.AuthorizationGrants.Where(grant => grant.IsBootstrap && (grant.Issuer != issuer || grant.Subject != subject)).ToListAsync(cancellationToken);
-        foreach (AuthorizationGrant grant in replaced) grant.IsActive = false;
-        AuthorizationGrant? selected = await database.AuthorizationGrants.SingleOrDefaultAsync(grant => grant.Issuer == issuer && grant.Subject == subject, cancellationToken);
-        if (selected is null) database.AuthorizationGrants.Add(new AuthorizationGrant { Issuer = issuer, Subject = subject, IsActive = true, IsBootstrap = true });
-        else { selected.IsActive = true; selected.IsBootstrap = true; }
-        await database.SaveChangesAsync(cancellationToken);
-        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
-    }
+
 }

@@ -5,7 +5,7 @@ using ShutterSpool.Application.Workspaces;
 namespace ShutterSpool.Server.Api.Workspaces;
 
 public sealed record WorkspaceSummaryResponse(Guid Id, string Name);
-public sealed record WorkspaceListResponse(WorkspaceSummaryResponse[] Items, bool Incomplete, bool SelectionRequired);
+public sealed record WorkspaceListResponse(WorkspaceSummaryResponse[] Items, bool Incomplete);
 
 internal static class WorkspaceEndpoints
 {
@@ -19,11 +19,10 @@ internal static class WorkspaceEndpoints
     private static async Task<IResult> DiscoverAsync(HttpContext http, WorkspaceContext context,
         IWorkspaceRegistry registry, IServiceScopeFactory scopes)
     {
-        if (!context.Enabled) return Results.Ok(new WorkspaceListResponse([], false, false));
         string? issuer = http.User.FindFirstValue("iss");
         string? subject = http.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? http.User.FindFirstValue("sub");
         if (string.IsNullOrWhiteSpace(issuer) || string.IsNullOrWhiteSpace(subject))
-            return Results.Ok(new WorkspaceListResponse([], false, true));
+            return Results.Ok(new WorkspaceListResponse([], false));
         var items = new List<WorkspaceSummaryResponse>();
         bool incomplete = false;
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(http.RequestAborted);
@@ -43,6 +42,6 @@ internal static class WorkspaceEndpoints
             catch (OperationCanceledException) when (http.RequestAborted.IsCancellationRequested) { throw; }
             catch (Exception) { incomplete = true; }
         }
-        return Results.Ok(new WorkspaceListResponse([.. items], incomplete, true));
+        return Results.Ok(new WorkspaceListResponse([.. items], incomplete));
     }
 }

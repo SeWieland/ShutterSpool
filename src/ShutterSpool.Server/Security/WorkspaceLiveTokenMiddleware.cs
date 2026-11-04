@@ -11,7 +11,7 @@ internal sealed class WorkspaceLiveTokenMiddleware(RequestDelegate next, IDataPr
 {
     public async Task InvokeAsync(HttpContext http, WorkspaceContext workspace)
     {
-        if (!workspace.Enabled || !http.Request.Path.StartsWithSegments("/live/changes")) { await next(http); return; }
+        if (!http.Request.Path.StartsWithSegments("/live/changes")) { await next(http); return; }
         IDataProtector protector = protection.CreateProtector("ShutterSpool.LiveWorkspace.v1", workspace.Required.Id.ToString("N"));
         if (http.Request.Path == "/live/changes/negotiate")
         {

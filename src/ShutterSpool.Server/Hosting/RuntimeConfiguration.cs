@@ -2,36 +2,18 @@ namespace ShutterSpool.Server.Hosting;
 
 internal static class RuntimeConfiguration
 {
-    public static void LoadFileSecrets(IConfiguration configuration)
-    {
-        Load(configuration, "ConnectionStrings:shutterspoolFile", "ConnectionStrings:shutterspool");
-        Load(configuration, "ConnectionStrings:valkeyFile", "ConnectionStrings:valkey");
-        Load(configuration, "ShutterSpool:Security:EncryptionKeyFile", "ShutterSpool:Security:EncryptionKey");
-        Load(configuration, "ShutterSpool:CameraIngress:CallbackKeyFile", "ShutterSpool:CameraIngress:CallbackKey");
-        foreach (IConfigurationSection connection in configuration.GetSection("ConnectionStrings").GetChildren().ToArray())
-            if (connection.Key.EndsWith("File", StringComparison.OrdinalIgnoreCase))
-                Load(configuration, connection.Path, "ConnectionStrings:" + connection.Key[..^4]);
-    }
-
     public static void ValidatePackaged(IConfiguration configuration)
     {
         if (!configuration.GetValue<bool>("ShutterSpool:Deployment:Packaged")) return;
 
         string[] required =
         [
-            "ConnectionStrings:shutterspool",
+            "ConnectionStrings:shutterspool-control",
             "ShutterSpool:Security:Authority",
             "ShutterSpool:Security:Audience",
-            "ShutterSpool:Security:BootstrapIssuer",
-            "ShutterSpool:Security:BootstrapSubject",
             "ShutterSpool:Security:EncryptionKey",
-            "ShutterSpool:Spool:RootPath",
         ];
-        bool tenancy = configuration.GetValue<bool>("ShutterSpool:Workspaces:Enabled");
-        if ((tenancy ? required.Where(key => !key.Contains("Bootstrap", StringComparison.Ordinal)
-                && key != "ConnectionStrings:shutterspool" && key != "ShutterSpool:Spool:RootPath")
-                .Append("ConnectionStrings:shutterspool-control") : required)
-            .Any(key => string.IsNullOrWhiteSpace(configuration[key])))
+        if (required.Any(key => string.IsNullOrWhiteSpace(configuration[key])))
             throw new InvalidOperationException("Packaged deployment requires PostgreSQL, identity, encryption-key and spool configuration.");
         string authorityText = configuration["ShutterSpool:Security:Authority"]!;
         if (!Uri.TryCreate(authorityText, UriKind.Absolute, out Uri? authority) || authority.Scheme != Uri.UriSchemeHttps
@@ -45,12 +27,4 @@ internal static class RuntimeConfiguration
             throw new InvalidOperationException("Packaged deployment requires an explicit trusted proxy network.");
     }
 
-    private static void Load(IConfiguration configuration, string pathKey, string valueKey)
-    {
-        string? path = configuration[pathKey];
-        if (string.IsNullOrWhiteSpace(path)) return;
-        string value = File.ReadAllText(path).TrimEnd('\r', '\n');
-        if (string.IsNullOrWhiteSpace(value)) throw new InvalidOperationException($"The configured secret file '{pathKey}' is empty.");
-        configuration[valueKey] = value;
-    }
 }

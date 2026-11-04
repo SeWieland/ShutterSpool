@@ -3,7 +3,6 @@ namespace ShutterSpool.Application.Security;
 public interface IAccessGrantStore
 {
     Task<bool> IsActiveAsync(string issuer, string subject, CancellationToken cancellationToken);
-    Task BootstrapAsync(string issuer, string subject, CancellationToken cancellationToken);
 }
 
 public sealed class AccessGrantService(IAccessGrantStore store)

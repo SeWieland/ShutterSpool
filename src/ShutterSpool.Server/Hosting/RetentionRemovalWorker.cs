@@ -36,7 +36,12 @@ internal sealed class RetentionRemovalWorker(IServiceScopeFactory scopes, Retent
 
     private async Task RunPassAsync(DateTimeOffset startedAt, CancellationToken cancellationToken)
     {
-        await using WorkspaceWorkerScope scope = await tenants.NextAsync(cancellationToken);
+        await using WorkspaceWorkerScope? scope = await tenants.NextAsync(cancellationToken);
+        if (scope is null)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+            return;
+        }
         LiveChangeNotifier changes = scope.ServiceProvider.GetRequiredService<LiveChangeNotifier>();
         RetentionRemovalService service = scope.ServiceProvider.GetRequiredService<RetentionRemovalService>();
         int erasuresExamined = await scope.ServiceProvider.GetRequiredService<PrivacyErasureService>()

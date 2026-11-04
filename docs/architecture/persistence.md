@@ -6,13 +6,13 @@ The details here protect accepted media when an operation races another worker o
 
 ## Persistence and atomic operations
 
-Infrastructure owns one internal `ShutterSpoolDbContext` and migration history. Source identity/policy is independent from its ingress credential; regeneration changes the verifier and generation, while ingress suspension changes enabled state and generation. Identity, root, historical Assets and existing workflow state remain intact. Destination identity has an immutable provider kind and enabled state; routing rules, local root configuration and optional encrypted credentials have separate destination-owned records. Authorization grants use issuer/subject, not source or destination identity.
+Infrastructure owns an internal `ShutterSpoolDbContext` and migration history per workspace, plus a separate `WorkspaceControlDbContext` for registry/routing state. Source identity/policy is independent from its ingress credential; regeneration changes the verifier and generation, while ingress suspension changes enabled state and generation. Identity, root, historical Assets and existing workflow state remain intact. Destination identity has an immutable provider kind and enabled state; routing rules, local root configuration and optional encrypted credentials have separate destination-owned records. Authorization grants use issuer/subject, not source or destination identity.
 
-In shared-workspace mode, this same schema and its database-local locks live separately in each tenant database.
-The scoped context factory selects the verified workspace's runtime connection reference; it never changes a global connection while work is running.
+The workflow schema and its database-local locks live separately in each workspace database.
+The scoped context factory selects the verified workspace's runtime connection; it never changes a global connection while work is running.
 The separate control registry owns routing/provisioning and allocation metadata, while grants and workflow mutations remain tenant-local.
-Provisioning and upgrades use separate migration privileges through the [operator commands](../../src/ShutterSpool.Server/README.md#shared-workspace-provisioning).
-Normal shared-workspace startup checks the exact supported schema and storage identity and completes recovery before admitting tenant work; it does not migrate or repeat the initial grant.
+Provisioning and upgrades use separate migration privileges through the [operator commands](../../deploy/operations/README.md#workspace-provisioning).
+Normal startup checks the exact supported schema and storage identity and completes recovery before admitting tenant work; it does not migrate or repeat the initial grant.
 It holds an exclusive writer-lock file in each allocated root for its lifetime; operator upgrade/allocation commands acquire the same locks before changing state.
 Fixed filesystem allocations preserve tenant-local quota reservations without cross-database upload accounting.
 
@@ -29,7 +29,7 @@ An internal, size-bounded spool continuation lets the admitted Application workf
 
 The initial migration baseline requires a fresh application database and empty spool at separately selected locations when moving from an incompatible older installation.
 Incompatible existing state is rejected before schema or data changes. This does not authorize deleting or reusing the original database/spool.
-See [AppHost data setup](../../src/ShutterSpool.AppHost/README.md#separate-application-data-for-the-initial-migration-baseline); retain original configuration/keys, shared PostgreSQL storage and identity-provider state for the documented rollback boundary.
+See [fresh installation setup](../../deploy/operations/README.md#moving-from-an-older-pre-alpha-installation); retain original configuration/keys, shared PostgreSQL storage and identity-provider state for the documented rollback boundary.
 
 Lock order is explicit: operations needing both advisory locks take `shutterspool-routing` before `shutterspool-collection-assignment`, then acquire their row locks.
 Grouping takes both keys before its claimed Asset, source/stem advisory key and Capture rows; it reads the Source default under a shared Source lock.

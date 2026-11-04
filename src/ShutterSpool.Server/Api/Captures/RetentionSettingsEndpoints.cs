@@ -111,7 +111,7 @@ public static class RetentionSettingsEndpoints
 
     private static async Task<RetentionSettingsDocumentResponse> GetAsync([FromServices] RetentionSettingsService service,
         ShutterSpool.Application.Workspaces.WorkspaceContext workspace, CancellationToken cancellationToken) =>
-        RetentionSettingsDocumentResponse.From(await service.GetAsync(cancellationToken), workspace.Enabled ? workspace.Required.AllocatedBytes : null);
+        RetentionSettingsDocumentResponse.From(await service.GetAsync(cancellationToken), workspace.Required.AllocatedBytes);
 
     private static async Task<IResult> PreviewAsync(RetentionSettingsRequest request,
         [FromServices] RetentionSettingsService service, CancellationToken cancellationToken)
@@ -136,7 +136,7 @@ public static class RetentionSettingsEndpoints
                 request.AcknowledgeImpact, cancellationToken);
         }
         catch (ArgumentException exception) { return Invalid("settings", exception.Message); }
-        RetentionSettingsUpdateResponse response = RetentionSettingsUpdateResponse.From(result, workspace.Enabled ? workspace.Required.AllocatedBytes : null);
+        RetentionSettingsUpdateResponse response = RetentionSettingsUpdateResponse.From(result, workspace.Required.AllocatedBytes);
         return result.Succeeded ? Results.Ok(response) : Results.Conflict(response);
     }
 

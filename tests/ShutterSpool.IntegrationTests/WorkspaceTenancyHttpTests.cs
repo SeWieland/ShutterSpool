@@ -50,7 +50,6 @@ public sealed class WorkspaceTenancyHttpTests
         WorkspaceListResponse original = await DiscoveryAsync(owner);
         Assert.Equal(first.Id, Assert.Single(original.Items).Id);
         Assert.False(original.Incomplete);
-        Assert.True(original.SelectionRequired);
         await fixture.SetGrantAsync(second, first.Name, true);
         Assert.Equal(fixture.Workspaces.Select(item => item.Id).Order(), (await DiscoveryAsync(owner)).Items.Select(item => item.Id).Order());
         await fixture.SetGrantAsync(first, first.Name, false);
@@ -60,15 +59,15 @@ public sealed class WorkspaceTenancyHttpTests
     }
 
     [Fact]
-    public async Task Discovery_marks_unavailable_tenant_membership_as_incomplete_and_control_failure_is_unavailable()
+    public async Task Discovery_marks_unavailable_membership_incomplete_and_frozen_cohort_survives_control_outage()
     {
         await using var fixture = await TenantHttpFixture.CreateAsync();
         WorkspaceDefinition first = fixture.Workspaces[0], second = fixture.Workspaces[1];
         await fixture.SetGrantAsync(second, first.Name, true);
         using HttpClient client = fixture.Client(first.Name);
-        string tenantKey = "ConnectionStrings:" + second.ConnectionReference;
+        string tenantKey = fixture.Storage.ConnectionKey(1);
         string originalTenant = fixture.Storage.Configuration[tenantKey]!;
-        fixture.Storage.Configuration[tenantKey] = new NpgsqlConnectionStringBuilder(originalTenant) { Password = "synthetic-invalid-runtime-password" }.ConnectionString;
+        await fixture.Storage.SetDatabaseAvailableAsync(2, false);
         try
         {
             WorkspaceListResponse unavailable = await DiscoveryAsync(client);
@@ -77,17 +76,18 @@ public sealed class WorkspaceTenancyHttpTests
             using HttpResponseMessage denied = await SendAsync(client, HttpMethod.Get, "/management/captures", second.Id);
             Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
         }
-        finally { fixture.Storage.Configuration[tenantKey] = originalTenant; }
+        finally { await fixture.Storage.SetDatabaseAvailableAsync(2, true); }
 
         string controlKey = "ConnectionStrings:shutterspool-control";
         string originalControl = fixture.Storage.Configuration[controlKey]!;
-        fixture.Storage.Configuration[controlKey] = new NpgsqlConnectionStringBuilder(originalControl) { Password = "synthetic-invalid-control-password" }.ConnectionString;
+        await fixture.Storage.SetDatabaseAvailableAsync(0, false);
         try
         {
             using HttpResponseMessage unavailable = await client.GetAsync("/workspaces", Token);
-            Assert.Equal(HttpStatusCode.ServiceUnavailable, unavailable.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, unavailable.StatusCode);
+            Assert.Equal(2, (await unavailable.Content.ReadFromJsonAsync<WorkspaceListResponse>(Token))!.Items.Length);
         }
-        finally { fixture.Storage.Configuration[controlKey] = originalControl; }
+        finally { await fixture.Storage.SetDatabaseAvailableAsync(0, true); }
     }
 
     [Fact]
@@ -351,16 +351,12 @@ public sealed class WorkspaceTenancyHttpTests
                     });
                 });
             });
-            string? previousTenancy = Environment.GetEnvironmentVariable("ShutterSpool__Workspaces__Enabled");
             try
             {
-                // Program selects tenancy registrations before WebApplicationFactory applies app configuration.
-                Environment.SetEnvironmentVariable("ShutterSpool__Workspaces__Enabled", "true");
                 _ = server.Services;
                 return new(storage, server, await storage.RegistryAsync());
             }
             catch { await server.DisposeAsync(); await storage.DisposeAsync(); throw; }
-            finally { Environment.SetEnvironmentVariable("ShutterSpool__Workspaces__Enabled", previousTenancy); }
         }
 
         public HttpClient Client(string subject)

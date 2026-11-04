@@ -77,19 +77,19 @@ public sealed class WorkspaceTenancyPostgresTests
         await using var fixture = await WorkspaceFixture.CreateAsync();
         await fixture.ProvisionAsync();
         WorkspaceDefinition[] workspaces = await fixture.RegistryAsync();
-        var own = new NpgsqlConnectionStringBuilder(fixture.Configuration.GetConnectionString(workspaces[0].ConnectionReference));
-        own.Database = new NpgsqlConnectionStringBuilder(fixture.Configuration.GetConnectionString(workspaces[1].ConnectionReference)).Database;
+        var own = new NpgsqlConnectionStringBuilder(fixture.Connection(0));
+        own.Database = new NpgsqlConnectionStringBuilder(fixture.Connection(1)).Database;
         await using (var forbidden = new NpgsqlConnection(own.ConnectionString))
             await Assert.ThrowsAsync<PostgresException>(() => forbidden.OpenAsync(TestContext.Current.CancellationToken));
         await using ServiceProvider provider = fixture.Services();
         string markerPath = Path.Combine(workspaces[0].StorageRoot, WorkspaceRuntime.Marker);
         string marker = await File.ReadAllTextAsync(markerPath, TestContext.Current.CancellationToken);
         await File.WriteAllTextAsync(markerPath, marker.Replace(workspaces[0].Id.ToString(), Guid.NewGuid().ToString()), TestContext.Current.CancellationToken);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => provider.InitializeShutterSpoolAsync(fixture.Configuration, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => provider.InitializeShutterSpoolAsync(fixture.Configuration, TestContext.Current.CancellationToken));
         await File.WriteAllTextAsync(markerPath, marker, TestContext.Current.CancellationToken);
         await using (var database = fixture.MigrationDatabase(0))
             await database.Database.ExecuteSqlRawAsync("DELETE FROM \"__EFMigrationsHistory\"", TestContext.Current.CancellationToken);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => provider.InitializeShutterSpoolAsync(fixture.Configuration, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => provider.InitializeShutterSpoolAsync(fixture.Configuration, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -116,7 +116,7 @@ public sealed class WorkspaceTenancyPostgresTests
                 Assert.True((await store.SetIngressEnabledAsync(ids[index], 1, true, TestContext.Current.CancellationToken)).Applied);
             }
         }
-        var registry = new PostgresWorkspaceRegistry(fixture.Configuration, new WorkspaceContext(true));
+        var registry = new PostgresWorkspaceRegistry(fixture.Configuration, new WorkspaceContext());
         WorkspaceIngressRoute? route = await registry.FindIngressAsync(WorkspaceIngressHandle.Username("shared-wire-login"), TestContext.Current.CancellationToken);
         Assert.Equal(workspaces[0].Id, route!.Workspace.Id);
         Assert.Equal(ids[0], route.SourceId);
@@ -151,15 +151,15 @@ public sealed class WorkspaceTenancyPostgresTests
         await using var fixture = await WorkspaceFixture.CreateAsync();
         CancellationToken token = TestContext.Current.CancellationToken;
         await WorkspaceOperator.RunAsync(["--workspace-control-init"], fixture.Configuration, token);
-        string original = fixture.Configuration.GetConnectionString("runtime1")!;
-        fixture.Configuration["ConnectionStrings:runtime1"] = new NpgsqlConnectionStringBuilder(original) { Password = Guid.NewGuid().ToString("N") }.ConnectionString;
+        string original = fixture.Connection(0)!;
+        fixture.Configuration[fixture.ConnectionKey(0)] = new NpgsqlConnectionStringBuilder(original) { Password = Guid.NewGuid().ToString("N") }.ConnectionString;
         await Assert.ThrowsAsync<PostgresException>(() => fixture.ProvisionWorkspaceAsync(0));
         Assert.Empty(await fixture.RegistryAsync());
-        string ownerKey = $"ShutterSpool:Workspaces:Definitions:{fixture.WorkspaceId(0):D}:OwnerSubject";
+        string ownerKey = $"ShutterSpool:Workspaces:Definitions:{fixture.WorkspaceName(0)}:OwnerSubject";
         fixture.Configuration[ownerKey] = "different-owner";
-        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.ProvisionWorkspaceAsync(0));
+        await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => fixture.ProvisionWorkspaceAsync(0));
         fixture.Configuration[ownerKey] = "studio0";
-        fixture.Configuration["ConnectionStrings:runtime1"] = original;
+        fixture.Configuration[fixture.ConnectionKey(0)] = original;
         await fixture.ProvisionAsync();
         await fixture.ProvisionAsync();
         await using var database = fixture.MigrationDatabase(0);
@@ -172,18 +172,19 @@ public sealed class WorkspaceTenancyPostgresTests
     {
         await using var fixture = await WorkspaceFixture.CreateAsync();
         await fixture.ProvisionAsync();
-        fixture.Configuration["ShutterSpool:Workspaces:WritersStopped"] = "true";
         fixture.Configuration["ShutterSpool:Workspaces:UsableCapacityBytes"] = "3000000";
         WorkspaceDefinition workspace = (await fixture.RegistryAsync())[0];
         await using (ServiceProvider provider = fixture.Services())
         {
             await provider.InitializeShutterSpoolAsync(fixture.Configuration, TestContext.Current.CancellationToken);
             await Assert.ThrowsAsync<IOException>(() => WorkspaceOperator.RunAsync(["--workspace-upgrade"], fixture.Configuration, TestContext.Current.CancellationToken));
-            await Assert.ThrowsAsync<IOException>(() => WorkspaceOperator.RunAsync(["--workspace-allocation", workspace.Id.ToString("D"), "1000000", "1500000"], fixture.Configuration, TestContext.Current.CancellationToken));
+            await Assert.ThrowsAsync<IOException>(() => WorkspaceOperator.RunAsync(["--workspace-allocation", workspace.Name, "1000000", "1500000"], fixture.Configuration, TestContext.Current.CancellationToken));
         }
         await WorkspaceOperator.RunAsync(["--workspace-upgrade"], fixture.Configuration, TestContext.Current.CancellationToken);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => WorkspaceOperator.RunAsync(["--workspace-allocation", workspace.Id.ToString("D"), "1000000", "900000"], fixture.Configuration, TestContext.Current.CancellationToken));
-        await WorkspaceOperator.RunAsync(["--workspace-allocation", workspace.Id.ToString("D"), "1000000", "1500000"], fixture.Configuration, TestContext.Current.CancellationToken);
+        fixture.Configuration[$"ShutterSpool:Workspaces:Definitions:{workspace.Name}:AllocatedBytes"] = "900000";
+        await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => WorkspaceOperator.RunAsync(["--workspace-allocation", workspace.Name, "1000000", "900000"], fixture.Configuration, TestContext.Current.CancellationToken));
+        fixture.Configuration[$"ShutterSpool:Workspaces:Definitions:{workspace.Name}:AllocatedBytes"] = "1500000";
+        await WorkspaceOperator.RunAsync(["--workspace-allocation", workspace.Name, "1000000", "1500000"], fixture.Configuration, TestContext.Current.CancellationToken);
         WorkspaceDefinition changed = (await fixture.RegistryAsync()).Single(item => item.Id == workspace.Id);
         Assert.Equal(1_500_000, changed.AllocatedBytes);
         Assert.Equal(workspace.StorageIdentity, changed.StorageIdentity);
@@ -198,10 +199,10 @@ public sealed class WorkspaceTenancyPostgresTests
     public async Task Existing_unowned_storage_is_preserved_and_never_attached_by_provisioning()
     {
         await using var fixture = await WorkspaceFixture.CreateAsync();
-        string root = fixture.Configuration[$"ShutterSpool:Workspaces:Definitions:{fixture.WorkspaceId(0):D}:StorageRoot"]!;
+        string root = fixture.Configuration[$"ShutterSpool:Workspaces:Definitions:{fixture.WorkspaceName(0)}:StorageRoot"]!;
         string original = Path.Combine(root, "unmanaged-original.jpg");
         await File.WriteAllBytesAsync(original, [1, 9, 8], TestContext.Current.CancellationToken);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.ProvisionAsync());
+        await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => fixture.ProvisionAsync());
         Assert.Equal(new byte[] { 1, 9, 8 }, await File.ReadAllBytesAsync(original, TestContext.Current.CancellationToken));
         Assert.Empty(await fixture.RegistryAsync());
     }
@@ -215,7 +216,7 @@ public sealed class WorkspaceTenancyPostgresTests
         fixture.Configuration["ShutterSpool:Workspaces:UsableCapacityBytes"] = "20000000";
         fixture.Configuration["ShutterSpool:Preview:CacheMode"] = mode;
         for (int index = 0; index < 2; index++)
-            fixture.Configuration[$"ShutterSpool:Workspaces:Definitions:{fixture.WorkspaceId(index):D}:AllocatedBytes"] = "10000000";
+            fixture.Configuration[$"ShutterSpool:Workspaces:Definitions:{fixture.WorkspaceName(index)}:AllocatedBytes"] = "10000000";
         await fixture.ProvisionAsync();
         await using ServiceProvider provider = fixture.Services();
         await provider.InitializeShutterSpoolAsync(fixture.Configuration, TestContext.Current.CancellationToken);
@@ -248,24 +249,64 @@ public sealed class WorkspaceTenancyPostgresTests
     }
 
     [Fact]
-    public async Task Wrong_connection_reference_is_rejected_before_querying_another_tenant_and_valid_scopes_remain_reusable()
+    public async Task Runtime_mapping_is_frozen_until_restart_and_wrong_database_identity_is_rejected_on_restart()
     {
         await using var fixture = await WorkspaceFixture.CreateAsync();
         await fixture.ProvisionAsync();
-        await using ServiceProvider provider = fixture.Services();
-        await provider.InitializeShutterSpoolAsync(fixture.Configuration, TestContext.Current.CancellationToken);
         WorkspaceDefinition[] workspaces = await fixture.RegistryAsync();
-        string key = "ConnectionStrings:" + workspaces[0].ConnectionReference;
-        string original = fixture.Configuration[key]!;
-        fixture.Configuration[key] = fixture.Configuration.GetConnectionString(workspaces[1].ConnectionReference);
-        await using (AsyncServiceScope wrong = fixture.Scope(provider, workspaces[0]))
-            await Assert.ThrowsAsync<InvalidOperationException>(() => wrong.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>().Assets.CountAsync(TestContext.Current.CancellationToken));
-        fixture.Configuration[key] = original;
-        foreach (WorkspaceDefinition workspace in workspaces)
+        await using (ServiceProvider provider = fixture.Services())
         {
-            await using AsyncServiceScope valid = fixture.Scope(provider, workspace);
-            Assert.Equal(0, await valid.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>().Assets.CountAsync(TestContext.Current.CancellationToken));
+            await provider.InitializeShutterSpoolAsync(fixture.Configuration, TestContext.Current.CancellationToken);
+            fixture.Configuration[fixture.ConnectionKey(0)] = fixture.Connection(1);
+            await using AsyncServiceScope unchanged = fixture.Scope(provider, workspaces[0]);
+            var database = unchanged.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
+            Assert.Equal(workspaces[0].Id, (await database.WorkspaceIdentities.SingleAsync(TestContext.Current.CancellationToken)).Id);
         }
+        await using ServiceProvider restarted = fixture.Services();
+        await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => restarted.InitializeShutterSpoolAsync(fixture.Configuration, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Restart_accepts_relocated_matching_storage_and_database_endpoint_but_rejects_a_different_workspace_marker()
+    {
+        await using var fixture = await WorkspaceFixture.CreateAsync();
+        await fixture.ProvisionAsync();
+        WorkspaceDefinition[] original = await fixture.RegistryAsync();
+        string restored = original[0].StorageRoot + "-restored";
+        Directory.Move(original[0].StorageRoot, restored);
+        try
+        {
+            fixture.Configuration[$"ShutterSpool:Workspaces:Definitions:{original[0].Name}:StorageRoot"] = restored;
+            foreach (string key in new[] { "ConnectionStrings:shutterspool-control", fixture.ConnectionKey(0), fixture.ConnectionKey(1) })
+                fixture.Configuration[key] = new NpgsqlConnectionStringBuilder(fixture.Configuration[key]) { Host = "localhost" }.ConnectionString;
+            await using (ServiceProvider restarted = fixture.Services())
+            {
+                await restarted.InitializeShutterSpoolAsync(fixture.Configuration, TestContext.Current.CancellationToken);
+                await using var control = restarted.CreateAsyncScope();
+                WorkspaceDefinition relocated = (await control.ServiceProvider.GetRequiredService<IWorkspaceRegistry>().ListReadyAsync(TestContext.Current.CancellationToken))[0];
+                Assert.Equal(original[0].Id, relocated.Id);
+                Assert.Equal(restored, relocated.StorageRoot);
+                await using var tenant = fixture.Scope(restarted, relocated);
+                ShutterSpoolDbContext database = tenant.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
+                Assert.Equal("localhost", new NpgsqlConnectionStringBuilder(database.Database.GetConnectionString()).Host);
+                Assert.Equal(original[0].Id, (await database.WorkspaceIdentities.SingleAsync(TestContext.Current.CancellationToken)).Id);
+            }
+            fixture.Configuration[$"ShutterSpool:Workspaces:Definitions:{original[0].Name}:StorageRoot"] = original[1].StorageRoot;
+            await using ServiceProvider swapped = fixture.Services();
+            await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => swapped.InitializeShutterSpoolAsync(fixture.Configuration, TestContext.Current.CancellationToken));
+        }
+        finally { Directory.Move(restored, original[0].StorageRoot); }
+    }
+
+    [Fact]
+    public async Task Name_case_retries_preserve_generated_identity_and_nested_configuration_names_are_rejected()
+    {
+        await using var fixture = await WorkspaceFixture.CreateAsync();
+        await fixture.ProvisionAsync();
+        WorkspaceDefinition[] before = await fixture.RegistryAsync();
+        await WorkspaceOperator.RunAsync(["--workspace-provision", "STUDIO0"], fixture.Configuration, TestContext.Current.CancellationToken);
+        Assert.Equal(before, await fixture.RegistryAsync());
+        await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => WorkspaceOperator.RunAsync(["--workspace-provision", "studio0:child"], fixture.Configuration, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -315,11 +356,11 @@ public sealed class WorkspaceTenancyPostgresTests
         await using (AsyncServiceScope scope = fixture.Scope(provider, workspaces[1]))
             await scope.ServiceProvider.GetRequiredService<IngestService>().AcceptAsync(new(sourceId, "second.jpg",
                 new MemoryStream(jpeg), jpeg.Length), TestContext.Current.CancellationToken);
-        string connectionKey = "ConnectionStrings:" + workspaces[0].ConnectionReference;
+        string connectionKey = fixture.ConnectionKey(0);
         string original = fixture.Configuration[connectionKey]!;
-        fixture.Configuration[connectionKey] = new NpgsqlConnectionStringBuilder(original) { Password = "synthetic-unavailable-tenant-password" }.ConnectionString;
+        await fixture.SetDatabaseAvailableAsync(1, false);
         try { await RunUntilAsync(workspaces[1], 2); }
-        finally { fixture.Configuration[connectionKey] = original; }
+        finally { await fixture.SetDatabaseAvailableAsync(1, true); }
         await RunUntilAsync(workspaces[0], processedA + 1);
         for (int index = 0; index < 2; index++)
         {
@@ -355,25 +396,23 @@ public sealed class WorkspaceTenancyPostgresTests
     {
         private readonly ArchitectureTestDatabase[] databases;
         private readonly string[] roles;
-        private readonly Guid[] ids = [Guid.NewGuid(), Guid.NewGuid()];
-        private readonly Guid[] operations = [Guid.NewGuid(), Guid.NewGuid()];
         private readonly string adminConnection;
         public IConfiguration Configuration { get; }
         private WorkspaceFixture(ArchitectureTestDatabase[] databases, string[] roles, string adminConnection, IConfiguration configuration)
         { this.databases = databases; this.roles = roles; this.adminConnection = adminConnection; Configuration = configuration; }
 
-        public static async Task<WorkspaceFixture> CreateAsync()
+        public static async Task<WorkspaceFixture> CreateAsync(int workspaceCount = 2)
         {
             var databases = new List<ArchitectureTestDatabase>();
             var createdRoles = new List<string>();
-            string[] roles = ["ws_" + Guid.NewGuid().ToString("N"), "ws_" + Guid.NewGuid().ToString("N"), "ws_" + Guid.NewGuid().ToString("N")];
+            string[] roles = Enumerable.Range(0, workspaceCount + 1).Select(_ => "ws_" + Guid.NewGuid().ToString("N")).ToArray();
             string admin = Environment.GetEnvironmentVariable("SHUTTERSPOOL_INGEST_TEST_CONNECTION")!;
             try
             {
                 for (int index = 0; index < roles.Length; index++) databases.Add(await ArchitectureTestDatabase.CreateAsync());
                 var values = new Dictionary<string, string?>
                 {
-                    ["ShutterSpool:Workspaces:Enabled"] = "true", ["ShutterSpool:Workspaces:UsableCapacityBytes"] = "2000000",
+                    ["ShutterSpool:Workspaces:UsableCapacityBytes"] = "2000000",
                     ["ShutterSpool:Security:Authority"] = "https://identity.example",
                     ["ShutterSpool:Security:EncryptionKey"] = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)),
                     ["ShutterSpool:Spool:ReservedBytes"] = "0",
@@ -390,22 +429,18 @@ public sealed class WorkspaceTenancyPostgresTests
                     var target = new NpgsqlConnectionStringBuilder(db.Database.GetConnectionString());
                     await using var restrict = new NpgsqlCommand($"REVOKE CONNECT,TEMPORARY ON DATABASE \"{target.Database}\" FROM PUBLIC; GRANT CONNECT ON DATABASE \"{target.Database}\" TO \"{roles[index]}\"", connection);
                     await restrict.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
-                    string reference = index == 0 ? "shutterspool-control" : "runtime" + index;
-                    values["ConnectionStrings:" + reference + (index == 0 ? "-migration" : "-migration")] = target.ConnectionString;
+                    string prefix = index == 0 ? "ConnectionStrings:shutterspool-control" : $"ConnectionStrings:Workspaces:studio{index - 1}:Runtime";
+                    values[index == 0 ? prefix + "-migration" : $"ConnectionStrings:Workspaces:studio{index - 1}:Migration"] = target.ConnectionString;
                     target.Username = roles[index]; target.Password = password;
-                    values["ConnectionStrings:" + reference] = target.ConnectionString;
+                    values[prefix] = target.ConnectionString;
                     Directory.CreateDirectory(databases[index].SpoolRoot);
                 }
                 var fixture = new WorkspaceFixture([.. databases], roles, admin, new ConfigurationBuilder().AddInMemoryCollection(values).Build());
-                for (int index = 0; index < 2; index++)
+                for (int index = 0; index < workspaceCount; index++)
                 {
-                    string prefix = $"ShutterSpool:Workspaces:Definitions:{fixture.ids[index]:D}:";
-                    fixture.Configuration[prefix + "Name"] = "studio" + index;
-                    fixture.Configuration[prefix + "StorageIdentity"] = "synthetic-volume-" + fixture.ids[index].ToString("N");
+                    string prefix = $"ShutterSpool:Workspaces:Definitions:{fixture.WorkspaceName(index)}:";
                     fixture.Configuration[prefix + "StorageRoot"] = databases[index + 1].SpoolRoot;
                     fixture.Configuration[prefix + "AllocatedBytes"] = "1000000";
-                    fixture.Configuration[prefix + "ConnectionReference"] = "runtime" + (index + 1);
-                    fixture.Configuration[prefix + "MigrationConnectionReference"] = "runtime" + (index + 1) + "-migration";
                     fixture.Configuration[prefix + "OwnerIssuer"] = "https://identity.example";
                     fixture.Configuration[prefix + "OwnerSubject"] = "studio" + index;
                 }
@@ -440,16 +475,38 @@ public sealed class WorkspaceTenancyPostgresTests
         public async Task ProvisionAsync()
         {
             await WorkspaceOperator.RunAsync(["--workspace-control-init"], Configuration, TestContext.Current.CancellationToken);
-            for (int index = 0; index < ids.Length; index++)
-                await WorkspaceOperator.RunAsync(["--workspace-provision", ids[index].ToString("D"), operations[index].ToString("D")], Configuration, TestContext.Current.CancellationToken);
+            for (int index = 0; index < databases.Length - 1; index++)
+                await WorkspaceOperator.RunAsync(["--workspace-provision", WorkspaceName(index)], Configuration, TestContext.Current.CancellationToken);
         }
-        public Guid WorkspaceId(int index) => ids[index];
-        public Task ProvisionWorkspaceAsync(int index) => WorkspaceOperator.RunAsync(["--workspace-provision", ids[index].ToString("D"), operations[index].ToString("D")], Configuration, TestContext.Current.CancellationToken);
-        public Task<WorkspaceDefinition[]> RegistryAsync() => new PostgresWorkspaceRegistry(Configuration, new WorkspaceContext(true)).ListReadyAsync(TestContext.Current.CancellationToken);
+        public ArchitectureTestDatabase Database(int index) => databases[index + 1];
+        public string WorkspaceName(int index) => "studio" + index;
+        public string ConnectionKey(int index) => $"ConnectionStrings:Workspaces:{WorkspaceName(index)}:Runtime";
+        public string Connection(int index) => Configuration[ConnectionKey(index)]!;
+        public Task ProvisionWorkspaceAsync(int index) => WorkspaceOperator.RunAsync(["--workspace-provision", WorkspaceName(index)], Configuration, TestContext.Current.CancellationToken);
+        public Task<WorkspaceDefinition[]> RegistryAsync() => new PostgresWorkspaceRegistry(Configuration, new WorkspaceContext()).ListReadyAsync(TestContext.Current.CancellationToken);
         public ServiceProvider Services() => new ServiceCollection().AddLogging().AddShutterSpoolInfrastructure(Configuration).BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
         public AsyncServiceScope Scope(IServiceProvider provider, WorkspaceDefinition workspace)
         { AsyncServiceScope scope = provider.CreateAsyncScope(); scope.ServiceProvider.GetRequiredService<WorkspaceContext>().Bind(workspace); return scope; }
         public ShutterSpoolDbContext MigrationDatabase(int index) => new(databases[index + 1].Options);
+        public async Task SetDatabaseAvailableAsync(int index, bool available)
+        {
+            await using var connection = new NpgsqlConnection(adminConnection);
+            await connection.OpenAsync(TestContext.Current.CancellationToken);
+            string target = index == 0 ? Configuration.GetConnectionString("shutterspool-control")! : Connection(index - 1);
+            string database = new NpgsqlConnectionStringBuilder(target).Database!;
+            string privilege = available ? "GRANT CONNECT" : "REVOKE CONNECT";
+            string direction = available ? "TO" : "FROM";
+            await using var permission = new NpgsqlCommand($"{privilege} ON DATABASE \"{database}\" {direction} \"{roles[index]}\"", connection);
+            await permission.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+            if (!available)
+            {
+                await using var terminate = new NpgsqlCommand("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=@database AND usename=@role", connection);
+                terminate.Parameters.AddWithValue("database", database);
+                terminate.Parameters.AddWithValue("role", roles[index]);
+                await terminate.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+            }
+            NpgsqlConnection.ClearAllPools();
+        }
         public async ValueTask DisposeAsync()
         {
             foreach (ArchitectureTestDatabase database in databases) await database.DisposeAsync();

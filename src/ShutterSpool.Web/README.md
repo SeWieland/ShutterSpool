@@ -41,7 +41,9 @@ Keep photographs and curation controls prominent; disclose operational evidence 
 [PRODUCT.md](../../PRODUCT.md) explains the intended experience, [DESIGN.md](../../DESIGN.md) the established visual system.
 
 The SPA uses same-origin `/auth/config`, generated Kiota requests and `/live/changes` hints.
-After sign-in, the shell loads the authenticated user's workspace memberships. In tenancy mode, choose a listed workspace before it mounts; a URL selection is confirmed against that membership list on every full page load. An incomplete membership query stays retryable and permits explicitly choosing a listed, confirmed workspace; it never opens an unconfirmed workspace or silently replaces a URL selection. The legacy single-workspace mode is used only when the Server explicitly reports that workspace selection is not required.
+After sign-in, the shell loads the authenticated user's workspace memberships and confirms any URL selection before mounting private content.
+Complete discovery with exactly one accessible workspace and no explicit selection opens that workspace automatically.
+Otherwise, choose a listed workspace. An incomplete query stays retryable and permits explicitly choosing a confirmed workspace; it never opens an unconfirmed workspace or replaces an invalid or unavailable URL selection.
 The selected workspace ID stays in the page URL as `?workspace=<guid>` and is sent as `X-ShutterSpool-Workspace` on scoped API and authenticated preview requests. The live hub receives the same ID in its URL because WebSocket handshakes cannot set the scope header. Server membership checks remain authoritative; a URL value never grants access.
 The shell retains one selected workspace across `/` and `/captures/:id`; explicit Capture links open the requested photograph in Gallery. Switching workspaces confirms the existing unsaved-work departure guard, then reloads the shell so private drafts, previews and live state cannot cross workspace boundaries.
 Paged Capture reads and a bounded tile window keep browsing independent of original media size.
@@ -140,8 +142,8 @@ The exact local callbacks are `http://localhost:5089/auth/callback` and
 `http://localhost:5089/auth/signout`; the browser origin is `http://localhost:5089` and PKCE S256 is required.
 
 For a physical phone, use trusted HTTPS for both Server and the issuer, with certificates valid for their exact hosts.
-Configure Kestrel's URL/certificate outside Git and set Server authority/bootstrap issuer to the externally advertised issuer;
-preserve the subject, audience, grants and persistent signing/encryption keys.
+Configure Kestrel's URL/certificate outside Git and use the externally advertised issuer for Server authority and each new workspace definition's `OwnerIssuer`.
+Preserve the subject, audience, grants and persistent signing/encryption keys. An existing workspace's grants do not change with configuration; an issuer change requires deliberate verified rebinding.
 Provision the public client's redirect and post-logout allowlists with exactly `<Server origin>/auth/callback`
 and `<Server origin>/auth/signout`, its browser origin with that same origin, and PKCE S256.
 A separate browser origin also requires its exact HTTPS origin in `ShutterSpool:Security:AllowedOrigins`.

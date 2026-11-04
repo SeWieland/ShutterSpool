@@ -822,7 +822,7 @@ function requestDeparture() {
 }
 defineExpose({ requestDeparture });
 const removeRouteGuard = router.beforeEach(to => {
-    const targetWorkspaceId = readWorkspaceId(`?workspace=${encodeURIComponent(String(to.query.workspace ?? ''))}`);
+    const targetWorkspaceId = readWorkspaceId(to.query.workspace === undefined ? '' : `?workspace=${encodeURIComponent(String(to.query.workspace ?? ''))}`);
     if (targetWorkspaceId !== pageWorkspaceId) {
         if (!requestDeparture()) return false;
         window.location.assign(to.fullPath);

@@ -15,11 +15,14 @@ internal sealed class CaptureReleaseWorker(IServiceScopeFactory scopes, TimeProv
             bool processed = false;
             try
             {
-                await using WorkspaceWorkerScope scope = await tenants.NextAsync(stoppingToken);
-                LiveChangeNotifier changes = scope.ServiceProvider.GetRequiredService<LiveChangeNotifier>();
-                CaptureCurationService curation = scope.ServiceProvider.GetRequiredService<CaptureCurationService>();
-                processed = await curation.ReleaseDueOneAsync(clock.GetUtcNow(), stoppingToken);
-                if (curation.LastReleasedCaptureId is Guid captureId) changes.CaptureChanged(captureId, "release");
+                await using WorkspaceWorkerScope? scope = await tenants.NextAsync(stoppingToken);
+                if (scope is not null)
+                {
+                    LiveChangeNotifier changes = scope.ServiceProvider.GetRequiredService<LiveChangeNotifier>();
+                    CaptureCurationService curation = scope.ServiceProvider.GetRequiredService<CaptureCurationService>();
+                    processed = await curation.ReleaseDueOneAsync(clock.GetUtcNow(), stoppingToken);
+                    if (curation.LastReleasedCaptureId is Guid captureId) changes.CaptureChanged(captureId, "release");
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

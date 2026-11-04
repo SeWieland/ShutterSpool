@@ -23,7 +23,7 @@ If **No workspace access** appears after a complete check, contact the operator 
 
 - [Packaged installation](../deploy/README.md#tldr): configure the bundled single-host installation or select external dependencies.
 - [Operator setup](setup/README.md): installation navigation and the incompatible older-data transition.
-- [Shared workspace provisioning](../deploy/operations/README.md#shared-workspace-provisioning): separate databases, fixed storage allocations, explicit setup and upgrades on one Server.
+- [Workspace provisioning](../deploy/operations/README.md#workspace-provisioning): separate databases, fixed storage allocations, explicit setup and upgrades on one Server.
 - [Certificates](../deploy/certificates/README.md): supply, validate and replace HTTPS/FTPS material.
 - [Maintenance and recovery](../deploy/operations/README.md): stop writers, preserve matching state, restore, upgrade and roll back.
 - [Storage policy](retention.md#settings-and-safe-activation): capacity, admission, safe activation and privacy-erasure limits.
