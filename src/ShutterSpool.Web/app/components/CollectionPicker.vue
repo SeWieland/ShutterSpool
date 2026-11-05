@@ -2,6 +2,7 @@
 import { api, handleFailure } from '../lib/api';
 import { accessGeneration, onAccessLost } from '../lib/session';
 import type { CollectionResponse } from '../api/models';
+import { mayAdminister } from '../lib/workspace-access';
 const props = defineProps<{ modelValue: string[]; multiple?: boolean; disabled?: boolean; currentName?: string; label?: string; compact?: boolean }>();
 const emit = defineEmits<{ 'update:modelValue': [ids: string[]] }>();
 const items = ref<CollectionResponse[]>([]);
@@ -60,18 +61,18 @@ onUnmounted(() => { active = false; clearTimeout(searchTimer); sequence++; nameS
 
 <template>
     <div class="collection-picker" :class="{ 'collection-picker-compact': compact }" :aria-busy="loading">
-        <div v-if="!compact" class="collection-heading"><strong>{{ label ?? 'Collection' }}</strong><button type="button" :disabled="disabled" @click="manager = true">Manage</button></div>
+        <div v-if="!compact" class="collection-heading"><strong>{{ label ?? 'Collection' }}</strong><button v-if="mayAdminister" type="button" :disabled="disabled" @click="manager = true">Manage</button></div>
         <p v-if="currentName" class="muted">{{ currentName }}</p>
         <div v-if="modelValue.length" class="collection-choices" aria-label="Selected Collections"><button v-for="id in modelValue" :key="id" type="button" :disabled="disabled" :aria-label="multiple ? `Remove ${selectedNames[id] ?? 'Collection'} filter` : `Selected Collection: ${selectedNames[id] ?? 'Loading'}`" @click="multiple && choose(id)">{{ selectedNames[id] ?? 'Loading Collection…' }}<span v-if="multiple"> · Remove</span></button></div>
-        <div class="actions"><input v-model="search" type="search" aria-label="Search collections" placeholder="Search collections" maxlength="128" :disabled="disabled" @keydown.enter.prevent="read()" /><button v-if="compact" type="button" :disabled="disabled" @click="manager = true">Manage</button></div>
+        <div class="actions"><input v-model="search" type="search" aria-label="Search collections" placeholder="Search collections" maxlength="128" :disabled="disabled" @keydown.enter.prevent="read()" /><button v-if="compact && mayAdminister" type="button" :disabled="disabled" @click="manager = true">Manage</button></div>
         <div v-if="search.trim()" class="collection-choices collection-suggestions" role="group" :aria-label="label ?? 'Collection'">
             <button v-if="multiple" type="button" :aria-pressed="!modelValue.length" :disabled="disabled" @click="emit('update:modelValue', [])">All Collections</button>
             <button v-for="item in items" :key="String(item.id)" type="button" :aria-pressed="modelValue.includes(String(item.id))" :disabled="disabled || multiple && modelValue.length >= 30 && !modelValue.includes(String(item.id))" @click="choose(String(item.id))">{{ item.path ?? item.name }}</button>
         </div>
         <p v-if="loading" role="status">Loading Collections…</p>
-        <p v-else-if="search.trim() && !items.length && !error" class="muted">No matching Collections. Manage Collections to create one before shooting.</p>
+        <p v-else-if="search.trim() && !items.length && !error" class="muted">No matching Collections.<template v-if="mayAdminister"> Manage Collections to create one before shooting.</template></p>
         <p v-if="error" class="notice error" role="alert">{{ error }} <button type="button" @click="read()">Retry</button></p>
         <button v-if="cursor && search.trim()" type="button" :disabled="loading || disabled" @click="read(true)">More Collections</button>
-        <CollectionManager v-if="manager" @close="manager = false; read()" />
+        <CollectionManager v-if="manager && mayAdminister" @close="manager = false; read()" />
     </div>
 </template>

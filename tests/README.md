@@ -43,6 +43,7 @@ Successful password and PKCE login need separate runtime qualification. PostgreS
 
 The database suite checks tenant/control migration models, fresh provisioning/restart, writer exclusion, database/storage identity, key custody and Collection constraints, and non-destructive refusal of incompatible histories and unversioned objects.
 It does not qualify conversion of older installation layouts or native filesystem allocation enforcement.
+Role checks cover permission/visibility boundaries and atomic membership, Owner, policy and setup audit changes.
 
 Preserve meaningful regression expectations when changing implementation boundaries. Tests supply evidence for the request and documented safety constraints, rather than replacing them.
 

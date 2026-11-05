@@ -30,6 +30,15 @@ function fixture(pages) {
     return { state, player, displayed, reads, timers, async tick(ms) { const timer = [...timers].find(([, t]) => t.ms === ms); assert.ok(timer, `expected ${ms}ms timer`); timers.delete(timer[0]); await timer[1].fn(); } };
 }
 const frame = id => ({ id });
+test('authoritative Viewer reconciliation replaces cached sequence metadata and retains its current playback anchor', async () => {
+    const f = fixture({ first: { items: [frame('a'), frame('now-forbidden'), frame('b')] } });
+    await f.player.play('a'); f.player.preview('ready');
+    f.player.reconcilePage({ items: [frame('a'), frame('b')], nextCursor: undefined });
+    assert.equal(f.state.playing, true);
+    await f.tick(5000);
+    assert.deepEqual(f.displayed, ['a', 'b'], 'a formerly cached forbidden photograph is never offered again');
+    f.player.stop();
+});
 test('explicit playback starts at the viewed capture and times decoded images only', async () => {
     const f = fixture({ first: { items: [frame('b'), frame('c')] } });
     assert.equal(f.state.playing, false);
