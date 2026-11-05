@@ -6,6 +6,7 @@ using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
@@ -337,6 +338,7 @@ public sealed class WorkspaceTenancyHttpTests
             storage.Configuration["Logging:LogLevel:Default"] = "Warning";
             var server = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
             {
+                builder.UseEnvironment("Testing");
                 builder.ConfigureAppConfiguration((_, configuration) => configuration.AddConfiguration(storage.Configuration));
                 builder.ConfigureTestServices(services =>
                 {

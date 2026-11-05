@@ -163,7 +163,7 @@ public sealed class WorkspaceCameraIngressTests
 
     private static async Task<WebApplication> StartAsync(WorkspaceTenancyPostgresTests.WorkspaceFixture fixture)
     {
-        WebApplicationBuilder builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Development" });
+        WebApplicationBuilder builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Testing" });
         builder.Configuration.AddConfiguration(fixture.Configuration);
         builder.Configuration["Logging:LogLevel:Default"] = "Warning";
         foreach ((string key, string value) in new Dictionary<string, string>

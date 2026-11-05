@@ -54,8 +54,9 @@ Preview tuning parameters are `Parameters:preview-max-concurrent-generations` (d
 ## Development workspace
 
 AppHost uses the same control/workspace architecture as packaged installations.
-On first start it creates `.data/workspaces-dev/appsettings.json` with a `studio` workspace and a storage root beneath that directory.
-The example assigns 10 GiB; ordinary development directories exercise application accounting but do not establish native filesystem quota enforcement.
+Server's checked-in `appsettings.Development.json` defines a `studio` workspace with a 10 GiB allocation.
+AppHost creates its storage directory at `.data/workspaces-dev/studio` and supplies its absolute path and the current Keycloak Owner issuer and subject through environment configuration.
+Ordinary development directories exercise application accounting but do not establish native filesystem quota enforcement.
 
 A PostgreSQL setup job creates separate `shutterspool_control` and `shutterspool_studio` databases with restricted runtime roles.
 One-off Server resources initialize the control schema and provision `studio` before the normal Server starts.
@@ -64,8 +65,9 @@ Normal Server receives only runtime credentials.
 
 The development endpoints are stable: PostgreSQL uses port 54329 and Keycloak uses port 8082.
 Override them before initial setup with `ShutterSpool:Development:DatabasePort` and `IdentityPort` if occupied.
-`ShutterSpool:Development:RootPath` selects a different absolute configuration/storage directory.
-The generated configuration is retained on restart; changing deployment parameters never silently rewrites its initial Owner.
+`ShutterSpool:Development:RootPath` selects a different storage parent; AppHost resolves it to an absolute path and creates the `studio` directory without changing existing contents.
+Standard .NET environment configuration supplies the dynamic path and initial Owner values; preserve the same parameters and PostgreSQL volume for an existing development workspace.
+An earlier generated `.data/workspaces-dev/appsettings.json` is no longer read and can be left in place; this pre-alpha change does not migrate workspace data.
 For additional workspaces, use the same [configuration and operator commands](../../deploy/operations/README.md#workspace-provisioning), with development connection values supplied outside Git.
 
 Fresh workspace databases and roots are separate from older development state.

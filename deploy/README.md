@@ -226,3 +226,71 @@ This pre-alpha package requires fresh workspace/control state; it does not conve
 Provisioning enrolls a protected key check before activation. Normal startup validates the retained key before recovery.
 Keep each previous installation's databases, media, keys and configuration intact; never erase them to bypass an incompatible-schema error.
 The [maintenance guide](operations/README.md) explains complete recovery and compatible upgrades.
+
+## Integrate Server into an existing Swarm stack
+
+Server uses the same image and .NET settings in Swarm. This example covers one replica on the node holding its workspace storage; it does not convert the bundled Compose stack or its maintenance commands.
+Swarm runtime behavior and storage remain unqualified; qualify them on the selected deployment before relying on this example.
+Provision the databases, identity and storage first using the [maintenance procedure](operations/README.md#workspace-provisioning), and supply reachable dependency addresses in the settings.
+Set `ShutterSpool:ForwardedHeaders:KnownNetworks` to your dedicated proxy network's CIDR and `AllowedHosts` to the application hostname plus `server;localhost`.
+Attach Server to your existing private backend and HTTPS proxy overlay networks; forward the application to port 8080.
+
+Create versioned resources from the configured files on a Swarm manager:
+
+```sh
+docker config create shutterspool-settings-v1 config/appsettings.json
+docker secret create shutterspool-production-v1 config/appsettings.Production.json
+```
+
+Merge this Server service into your existing stack, replacing the image, node and external network names:
+
+```yaml
+version: "3.8"
+services:
+  server:
+    image: ${SERVER_IMAGE:?Use the release image pinned by digest}
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+      ShutterSpool__Deployment__Packaged: "true"
+    networks: [backend, proxy]
+    configs:
+      - source: shutterspool-settings-v1
+        target: /app/appsettings.json
+    secrets:
+      - source: shutterspool-production-v1
+        target: /app/appsettings.Production.json
+        uid: "1654"
+        gid: "1654"
+        mode: 0400
+    volumes:
+      - type: bind
+        source: /srv/shutterspool/studio
+        target: /srv/shutterspool/studio
+    stop_grace_period: 150s
+    healthcheck:
+      test: [CMD, dotnet, ShutterSpool.Server.dll, --health-check]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.hostname == YOUR_STORAGE_NODE]
+      update_config:
+        order: stop-first
+configs:
+  shutterspool-settings-v1:
+    external: true
+secrets:
+  shutterspool-production-v1:
+    external: true
+networks:
+  backend:
+    external: true
+  proxy:
+    external: true
+```
+
+Export `SERVER_IMAGE` before using `docker stack deploy`; Swarm does not load Compose's `.env` automatically.
+Keep one replica and the storage-node constraint. The mount must already exist with the configured allocation and UID/GID 1654 access; a replica count or bind mount does not enforce its storage budget.
+For maintenance, stop camera admission, scale Server to zero and wait for its task to stop before running operator commands against the same configuration and mounts. Never grant the runtime service the Maintenance secret.
+Settings changes use new config/secret resource names at the same target paths. Database, allocation and image upgrades still require the stopped-writer procedure; `stop-first` alone does not perform it.
+The example leaves camera edges and other services to your existing stack. See [Docker's configs](https://docs.docker.com/engine/swarm/configs/) and [service deployment](https://docs.docker.com/engine/swarm/services/) documentation for their lifecycle.

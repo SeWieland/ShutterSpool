@@ -93,8 +93,8 @@ The Maintenance file includes those runtime entries and adds `ConnectionStrings:
 The workspace name is the key in both sections; no connection alias or manually supplied workspace ID is needed.
 Use distinct runtime passwords for the control and each workspace role. The control registry stores provisioning/allocation facts, never connection passwords or authoritative membership grants.
 
-Native Compose secrets mount each environment file at its expected `/app/appsettings.*.json` path.
-Normal Server never receives the Maintenance file. The shared base is an ordinary read-only configuration mount.
+Native Compose configs mount the non-secret base at `/app/appsettings.json`; secrets mount each environment file at its expected `/app/appsettings.*.json` path.
+Normal Server never receives the Maintenance file. Keep credentials out of the shared base.
 The image runs as UID/GID 1654; protect secret JSON files for that consumer. Compose provides per-service access, not encryption of host files.
 
 To add another workspace, add its shared definition and environment connection entries, then mount its allocation in both services in `components/workspaces.yaml`.

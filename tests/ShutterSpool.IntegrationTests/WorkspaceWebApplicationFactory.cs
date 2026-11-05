@@ -26,6 +26,7 @@ public sealed class WorkspaceWebApplicationFactory : WebApplicationFactory<Progr
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        builder.UseEnvironment("Testing");
         builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(fixture.Configuration.AsEnumerable()));
         builder.ConfigureLogging(logging =>
         {

@@ -94,7 +94,9 @@ var server = builder.AddProject<Projects.ShutterSpool_Server>("server")
     .WithEnvironment("ShutterSpool__Preview__PrewarmMode", previewPrewarmMode);
 if (!builder.ExecutionContext.IsPublishMode)
 {
-    string contentRoot = WorkspaceRuntimeConfiguration.PrepareDevelopment(builder.Configuration, identityPort);
+    string storageRoot = Path.GetFullPath(Path.Combine(
+        builder.Configuration["ShutterSpool:Development:RootPath"] ?? "../../.data/workspaces-dev", "studio"));
+    Directory.CreateDirectory(storageRoot);
     var controlRuntimePassword = builder.AddParameter("control-runtime-password", new GenerateParameterDefault
     {
         MinLength = 32, Lower = true, Upper = true, Numeric = true, Special = false,
@@ -122,10 +124,12 @@ if (!builder.ExecutionContext.IsPublishMode)
 
     void ConfigureWorkspace(IResourceBuilder<ProjectResource> resource, bool maintenance)
     {
-        resource.WithEnvironment("ASPNETCORE_CONTENTROOT", contentRoot)
-            .WithEnvironment("ASPNETCORE_WEBROOT", Path.GetFullPath("../ShutterSpool.Server/wwwroot"))
+        resource.WithEnvironment("ASPNETCORE_ENVIRONMENT", "Development")
             .WithEnvironment("ShutterSpool__Security__Authority", keycloakAuthority)
             .WithEnvironment("ShutterSpool__Security__EncryptionKey", securityEncryptionKey)
+            .WithEnvironment("ShutterSpool__Workspaces__Definitions__studio__StorageRoot", storageRoot)
+            .WithEnvironment("ShutterSpool__Workspaces__Definitions__studio__OwnerIssuer", keycloakAuthority)
+            .WithEnvironment("ShutterSpool__Workspaces__Definitions__studio__OwnerSubject", shutterspoolAdministratorSubject)
             .WithEnvironment("ConnectionStrings__shutterspool-control", ReferenceExpression.Create(
                 $"Host={postgresEndpoint.Property(EndpointProperty.Host)};Port={postgresEndpoint.Property(EndpointProperty.Port)};Database=shutterspool_control;Username=shutterspool_control_runtime;Password={controlRuntimePassword}"))
             .WithEnvironment("ConnectionStrings__Workspaces__studio__Runtime", ReferenceExpression.Create(

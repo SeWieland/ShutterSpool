@@ -101,7 +101,9 @@ class ReleasePackageTests(unittest.TestCase):
         result = subprocess.run(["docker", "compose", "-f", str(compose), "--profile", "maintenance", "config", "--no-consistency", "--no-path-resolution", "--format", "json"],
                                 env=dict(os.environ, SERVER_IMAGE="synthetic@" + DIGEST),
                                 capture_output=True, text=True, check=True)
-        services = json.loads(result.stdout)["services"]
+        component = json.loads(result.stdout)
+        services = component["services"]
+        self.assertEqual("./config/appsettings.json", component["configs"]["appsettings"]["file"])
         self.assertEqual({"production-settings"}, {item["source"] for item in services["server"]["secrets"]})
         self.assertEqual({"maintenance-settings"},
                          {item["source"] for item in services["maintenance"]["secrets"]})
@@ -111,9 +113,7 @@ class ReleasePackageTests(unittest.TestCase):
                          {item["target"] for item in services["maintenance"]["secrets"]})
         self.assertEqual({"/app/appsettings.Production.json"}, {item["target"] for item in services["server"]["secrets"]})
         for service in services.values():
-            settings = [item for item in service["volumes"] if item["target"].startswith("/app/appsettings")]
-            self.assertEqual({"/app/appsettings.json"}, {item["target"] for item in settings})
-            self.assertTrue(all(item["read_only"] for item in settings))
+            self.assertEqual([{"source": "appsettings", "target": "/app/appsettings.json"}], service["configs"])
             mounts = [item for item in service["volumes"] if item["target"] == "/srv/shutterspool/studio"]
             self.assertFalse(mounts[0]["bind"].get("create_host_path", False))
 
