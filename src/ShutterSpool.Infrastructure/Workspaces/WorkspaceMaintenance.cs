@@ -18,7 +18,7 @@ internal sealed class WorkspaceMaintenance(IConfiguration configuration)
 
     internal async Task RunAsync(string[] args, CancellationToken token)
     {
-        if (args.Length >= 2 && args[0] is "--workspace-access" or "--workspace-recover-owner" or "--workspace-recovery-notification")
+        if (args.Length >= 2 && args[0] is "--workspace-access" or "--workspace-recover-owner" or "--workspace-recovery-notification" or "--workspace-recipient")
         {
             await AccessAsync(args, token);
             return;
@@ -43,7 +43,7 @@ internal sealed class WorkspaceMaintenance(IConfiguration configuration)
         else if (args is ["--workspace-allocation", var selected, var expectedText, var nextText]
             && long.TryParse(expectedText, out long expected) && long.TryParse(nextText, out long next) && next >= 10)
             await ChangeAllocationAsync(control, ready, selected, expected, next, token);
-        else throw new ArgumentException("Use --workspace-control-init, --workspace-provision <name>, --workspace-upgrade, --workspace-allocation <name> <expected bytes> <new bytes>, --workspace-access <name>, --workspace-recover-owner <name> <operation GUID> <protected request-file path>, or --workspace-recovery-notification <name> <operation GUID> <success|failed>.");
+        else throw new ArgumentException("Use --workspace-control-init, --workspace-provision <name>, --workspace-upgrade, --workspace-allocation <name> <expected bytes> <new bytes>, --workspace-access <name>, --workspace-recipient <name> <operation GUID> <protected request-file path>, --workspace-recover-owner <name> <operation GUID> <protected request-file path>, or --workspace-recovery-notification <name> <operation GUID> <success|failed>.");
     }
 
     private async Task AccessAsync(string[] args, CancellationToken token)
@@ -64,6 +64,19 @@ internal sealed class WorkspaceMaintenance(IConfiguration configuration)
         }
         if (args.Length == 4 && Guid.TryParseExact(args[2], "D", out Guid operation) && operation != Guid.Empty)
         {
+            if (args[0] == "--workspace-recipient")
+            {
+                string path = Path.GetFullPath(args[3]);
+                if (!Path.IsPathFullyQualified(args[3]) || !File.Exists(path) || new FileInfo(path).Length > 16_384
+                    || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                    throw new ArgumentException("Use a protected absolute recipient request-file path of at most 16 KiB.");
+                WorkspaceRecipientHandoff handoff = JsonSerializer.Deserialize<WorkspaceRecipientHandoff>(await File.ReadAllTextAsync(path, token),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)) ?? throw new ArgumentException("The recipient handoff is required.");
+                if (!string.Equals(handoff.Issuer, configuration["ShutterSpool:Security:Authority"]?.TrimEnd('/'), StringComparison.Ordinal))
+                    throw new ArgumentException("The verified recipient must use the configured public OIDC issuer.");
+                Console.WriteLine(JsonSerializer.Serialize(await store.RecordRecipientAsync(operation, handoff, token), display));
+                return;
+            }
             if (args[0] == "--workspace-recover-owner")
             {
                 string path = Path.GetFullPath(args[3]);
