@@ -1,5 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using ShutterSpool.Application.Ingress;
+using ShutterSpool.Application.Security;
+using ShutterSpool.Application.Workspaces;
+using Microsoft.Extensions.DependencyInjection;
 using ShutterSpool.Domain.Sources;
 using ShutterSpool.Infrastructure.Persistence;
 using ShutterSpool.Infrastructure.Security;
@@ -21,8 +24,7 @@ public sealed partial class ConfigurationApiTests
         await using var fixture = await ConfigurationApiFixture.CreateAsync(enableCameraIngress: true,
             directoriesOverride: new FailingCameraRootDirectories());
         Guid sourceId = Guid.NewGuid();
-        var protector = new SecretProtector(Microsoft.Extensions.Options.Options.Create(
-            new CredentialProtectionOptions { EncryptionKey = Convert.ToBase64String(new byte[32]) }));
+        var protector = fixture.Services.GetRequiredService<ICredentialProtector>();
         await using (var database = new ShutterSpoolDbContext(fixture.Database.Options))
         {
             database.Sources.Add(new SourceEntity { Id = sourceId, Name = "root failure endpoint camera" });
@@ -36,6 +38,8 @@ public sealed partial class ConfigurationApiTests
             await database.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
+        await fixture.Services.GetRequiredService<IWorkspaceRegistry>().RegisterIngressAsync(
+            WorkspaceIngressHandle.Username(username), sourceId, TestContext.Current.CancellationToken);
         using var callbackHandler = fixture.Server.Server.CreateHandler(context => context.Connection.LocalPort = 8081);
         using var callbackClient = new HttpClient(callbackHandler) { BaseAddress = new Uri("http://localhost") };
         callbackClient.DefaultRequestHeaders.Add("X-API-KEY", CameraCallbackKey);
@@ -71,8 +75,7 @@ public sealed partial class ConfigurationApiTests
         await using var fixture = await ConfigurationApiFixture.CreateAsync(enableCameraIngress: true);
         CancellationToken token = TestContext.Current.CancellationToken;
         Guid sourceId = Guid.NewGuid();
-        var protector = new SecretProtector(Microsoft.Extensions.Options.Options.Create(
-            new CredentialProtectionOptions { EncryptionKey = Convert.ToBase64String(new byte[32]) }));
+        var protector = fixture.Services.GetRequiredService<ICredentialProtector>();
         await using (var database = new ShutterSpoolDbContext(fixture.Database.Options))
         {
             database.Sources.Add(new SourceEntity { Id = sourceId, Name = "synthetic SFTP source" });
@@ -86,6 +89,8 @@ public sealed partial class ConfigurationApiTests
             await database.SaveChangesAsync(token);
         }
 
+        await fixture.Services.GetRequiredService<IWorkspaceRegistry>().RegisterIngressAsync(
+            WorkspaceIngressHandle.Username("cam_protocol"), sourceId, TestContext.Current.CancellationToken);
         using var callbackHandler = fixture.Server.Server.CreateHandler(context => context.Connection.LocalPort = 8081);
         using var callbackClient = new HttpClient(callbackHandler) { BaseAddress = new Uri("http://localhost") };
         callbackClient.DefaultRequestHeaders.Add("X-API-KEY", CameraCallbackKey);

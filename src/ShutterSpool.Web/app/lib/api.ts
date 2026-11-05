@@ -4,6 +4,7 @@ import { createShutterSpoolClient } from "../api/shutterSpoolClient";
 import { clearAccess, token, onAccessLost } from "./session";
 import { withPreviewSlot } from "./preview-queue";
 import type { SourceActivity } from './source-activity';
+import { pageWorkspaceId, workspaceRequestHeaders } from './workspace-context';
 
 const requests = new Set<AbortController>();
 onAccessLost(() => {
@@ -21,6 +22,7 @@ const http = new HttpClient(undefined, {
         try {
             const response = await fetch(url, {
                 ...init,
+                headers: workspaceRequestHeaders(url, init.headers, pageWorkspaceId),
                 signal: AbortSignal.any([controller.signal, ...(init.signal ? [init.signal] : []), ...(signal ? [signal] : [])]),
             });
             if (response.status === 401 || response.status === 403)
@@ -111,9 +113,12 @@ export async function derivative(
 ) {
     return withPreviewSlot(async () => {
         signal.throwIfAborted();
-        const headers = new Headers({
-            Authorization: `Bearer ${await token()}`,
-        });
+        const headers = workspaceRequestHeaders(
+            `/media/previews/${encodeURIComponent(captureId)}/${profile === "thumbnail" ? "grid" : "detail"}`,
+            undefined,
+            pageWorkspaceId,
+        );
+        headers.set('Authorization', `Bearer ${await token()}`);
         if (etag) headers.set("If-None-Match", etag);
         const response = await fetch(
             `/media/previews/${encodeURIComponent(captureId)}/${profile === "thumbnail" ? "grid" : "detail"}${maximumDimension ? `?maximumDimension=${maximumDimension}` : ''}`,

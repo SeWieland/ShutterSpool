@@ -35,10 +35,11 @@ Follow the [release policy](../../docs/release-policy.md) for version stability,
 ## Start the development environment
 
 Before the first run, set a local database password with `aspire secret set Parameters:postgres-password <password>`; it is stored in AppHost User Secrets, never in the repository. The PostgreSQL volume and that password must be retained or reset together.
-Set `Parameters:keycloak-administrator`, `Parameters:keycloak-administrator-password`, `Parameters:shutterspool-administrator`, `Parameters:shutterspool-administrator-password`, `Parameters:shutterspool-administrator-subject`, and `Parameters:security-encryption-key` as AppHost User Secrets before starting the default local Keycloak companion. The subject must be a UUID and is used for both the Keycloak account and Server bootstrap grant; the encryption key must be a base64-encoded 32-byte persistent deployment secret. Keycloak stores its state in PostgreSQL; the reconciliation job applies the realm, clients, role, and initial administrator without requiring its console.
+Set `Parameters:keycloak-administrator`, `Parameters:keycloak-administrator-password`, `Parameters:shutterspool-administrator`, `Parameters:shutterspool-administrator-password`, `Parameters:shutterspool-administrator-subject`, and `Parameters:security-encryption-key` as AppHost User Secrets before starting the default local Keycloak companion. The subject must be a UUID and is used for the Keycloak account and the initial workspace grant; the encryption key must be a base64-encoded 32-byte persistent deployment secret. Keycloak stores its state in PostgreSQL; the reconciliation job applies the realm, clients and initial administrator without requiring its console.
 The companion mounts the native [ShutterSpool login theme](Themes/README.md) read-only; realm reconciliation validates its local resources before selecting it. Authentication forms and messages remain inherited from Keycloak. The theme guide records compatibility, complete-artifact upgrades and the bundled fallback configuration.
 
-Fresh administrator provisioning preserves the configured subject. An existing exact username must have that same Keycloak ID; otherwise reconciliation fails before changing its password or role. Recovery updates the explicit subject parameter to the verified existing account ID and recreates the AppHost so the Server receives the new bootstrap configuration. Keep the existing account, Keycloak database and signing/encryption keys.
+Fresh administrator provisioning preserves the configured subject and creates a username/password account without an email address. New realms use optional contact fields, so initial Owner sign-in needs no SMTP or email verification. Existing realm profile requirements, credentials and account security settings are preserved; resolve an existing account's required actions through trusted native administration.
+An existing exact username must have that same Keycloak ID; otherwise reconciliation fails before changing its password. Correct initial setup to use the verified existing account ID; changing that parameter does not replace a grant in an already provisioned workspace. Keep the existing account, Keycloak database and signing/encryption keys.
 Run `aspire start --non-interactive` in this directory, then `aspire wait server`.
 The local browser client permits the exact `/auth/callback` and `/auth/signout` redirects at `http://localhost:5089`,
 matching Server's launch profile, and requires PKCE S256. If that origin changes, update
@@ -47,20 +48,31 @@ See the [Web README](../ShutterSpool.Web/README.md#run-and-sign-in) for browser 
 `aspire wait --timeout` takes whole seconds, for example `aspire wait server --timeout 60`.
 Use `aspire resource server stop` before a direct `dotnet build` on Windows; the running process locks its executable.
 After a Web build, use `aspire resource server rebuild` before checking Server static files.
-Imaginary has no spool mount or remote URL source; the Server sends selected JPEG bytes over its private endpoint. Its disposable cache is under `.data/previews` in the local AppHost configuration.
+Imaginary has no spool mount or remote URL source; the Server sends selected JPEG bytes over its private endpoint. Each workspace keeps its disposable cache under its allocated storage root.
 Preview tuning parameters are `Parameters:preview-max-concurrent-generations` (default 32), `Parameters:preview-queue-timeout-seconds` (60), `Parameters:preview-generation-timeout-seconds` (90), and `Parameters:preview-prewarm-mode` (`Off`, `GridOnly` by default, or `Full`). They bound each Server replica's concurrent source streams, queue wait and generation time; prewarming uses one background worker per replica. Imaginary uses separate `Parameters:imaginary-concurrency` (20 requests per second), `Parameters:imaginary-cpus` (2, also enforced as a local container CPU quota) and `Parameters:imaginary-http-timeout-seconds` (120 for both read and write). Set these through AppHost configuration or User Secrets for the host's capacity; increasing the Server limit does not raise Imaginary's CPU allocation. Kubernetes deployments must set their own CPU limit.
 
-## Separate application data for the initial migration baseline
+## Development workspace
 
-An incompatible older installation requires a fresh application database and empty spool at separately selected locations.
-Set `ShutterSpool:DatabaseName` to a new database name and `ShutterSpool:Spool:RootPath` to a new empty absolute directory
-before `aspire start --non-interactive`. Environment equivalents are `ShutterSpool__DatabaseName` and `ShutterSpool__Spool__RootPath`.
-Incompatible existing databases fail startup before schema/data mutation. Recreate Sources explicitly and update every sharing device's credentials/settings.
+AppHost uses the same control/workspace architecture as packaged installations.
+Server's checked-in `appsettings.Development.json` defines a `studio` workspace with a 10 GiB allocation.
+AppHost creates its storage directory at `.data/workspaces-dev/studio` and supplies its absolute path and the current Keycloak Owner issuer and subject through environment configuration.
+Ordinary development directories exercise application accounting but do not establish native filesystem quota enforcement.
 
-Keep the original database and spool together and untouched, with their original encryption/signing keys and configuration.
-Retain the shared PostgreSQL volume and Keycloak state. Startup never deletes or resets them.
-Rollback runs the previous application against that original pair; do not open the new baseline with the old application.
-There is no supported downgrade conversion or backward transfer of newly accepted media.
+A PostgreSQL setup job creates separate `shutterspool_control` and `shutterspool_studio` databases with restricted runtime roles.
+One-off Server resources initialize the control schema and provision `studio` before the normal Server starts.
+Generated `Parameters:control-runtime-password`, `Parameters:studio-runtime-password` and `Parameters:workspace-migration-password` persist in AppHost User Secrets; retain them with the PostgreSQL volume.
+Normal Server receives only runtime credentials.
+
+The development endpoints are stable: PostgreSQL uses port 54329 and Keycloak uses port 8082.
+Override them before initial setup with `ShutterSpool:Development:DatabasePort` and `IdentityPort` if occupied.
+`ShutterSpool:Development:RootPath` selects a different storage parent; AppHost resolves it to an absolute path and creates the `studio` directory without changing existing contents.
+Standard .NET environment configuration supplies the dynamic path and initial Owner values; preserve the same parameters and PostgreSQL volume for an existing development workspace.
+An earlier generated `.data/workspaces-dev/appsettings.json` is no longer read and can be left in place; this pre-alpha change does not migrate workspace data.
+For additional workspaces, use the same [configuration and operator commands](../../deploy/operations/README.md#workspace-provisioning), with development connection values supplied outside Git.
+
+Fresh workspace databases and roots are separate from older development state.
+Keep previous databases, spool, encryption/signing keys and Keycloak state intact; startup neither converts nor deletes them.
+See the [recovery boundary](../../deploy/operations/README.md#supported-recovery-boundary) before copying or restoring accepted media.
 
 ## Camera ingress
 

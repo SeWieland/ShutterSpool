@@ -24,8 +24,8 @@ using System.Text.Json;
 
 namespace ShutterSpool.IntegrationTests;
 
-public sealed class LiveChangesHubTests(WebApplicationFactory<Program> factory)
-    : IClassFixture<WebApplicationFactory<Program>>
+public sealed class LiveChangesHubTests(WorkspaceWebApplicationFactory factory)
+    : IClassFixture<WorkspaceWebApplicationFactory>
 {
     private static readonly byte[] SigningKey = Encoding.UTF8.GetBytes("test-only-signing-key-must-be-at-least-32-bytes");
     private const string Issuer = "https://issuer.test";
@@ -157,7 +157,8 @@ public sealed class LiveChangesHubTests(WebApplicationFactory<Program> factory)
             CreateHubUri(CreateToken(TimeSpan.FromMinutes(5))), TestContext.Current.CancellationToken);
         await CompleteHandshakeAsync(renewed, TestContext.Current.CancellationToken);
         Guid captureId = Guid.NewGuid();
-        server.Services.GetRequiredService<ShutterSpool.Server.Api.Live.LiveChangeNotifier>()
+        using AsyncServiceScope workspaceScope = factory.CreateWorkspaceScope(server);
+        workspaceScope.ServiceProvider.GetRequiredService<ShutterSpool.Server.Api.Live.LiveChangeNotifier>()
             .CaptureChanged(captureId, "delivery");
         string hint = await ReadTextAsync(renewed, TestContext.Current.CancellationToken);
         Assert.Contains("captureChanged", hint, StringComparison.Ordinal);
@@ -171,7 +172,8 @@ public sealed class LiveChangesHubTests(WebApplicationFactory<Program> factory)
         using WebSocket socket = await CreateWebSocketClient(server)
             .ConnectAsync(CreateHubUri(CreateToken(TimeSpan.FromMinutes(5))), TestContext.Current.CancellationToken);
         await CompleteHandshakeAsync(socket, TestContext.Current.CancellationToken);
-        var changes = server.Services.GetRequiredService<ShutterSpool.Server.Api.Live.LiveChangeNotifier>();
+        using AsyncServiceScope workspaceScope = factory.CreateWorkspaceScope(server);
+        var changes = workspaceScope.ServiceProvider.GetRequiredService<ShutterSpool.Server.Api.Live.LiveChangeNotifier>();
 
         Guid repeatedCapture = Guid.NewGuid();
         changes.CaptureChanged(repeatedCapture, "curation");
@@ -225,7 +227,8 @@ public sealed class LiveChangesHubTests(WebApplicationFactory<Program> factory)
     public async Task Receiving_observation_registry_stays_bounded_and_marks_incomplete_coverage()
     {
         using WebApplicationFactory<Program> server = await CreateServerAsync();
-        var changes = server.Services.GetRequiredService<ShutterSpool.Server.Api.Live.LiveChangeNotifier>();
+        using AsyncServiceScope workspaceScope = factory.CreateWorkspaceScope(server);
+        var changes = workspaceScope.ServiceProvider.GetRequiredService<ShutterSpool.Server.Api.Live.LiveChangeNotifier>();
         DateTimeOffset now = DateTimeOffset.UtcNow;
         Guid[] transfers = [.. Enumerable.Range(0, 300).Select(_ => Guid.NewGuid())];
 
@@ -244,7 +247,8 @@ public sealed class LiveChangesHubTests(WebApplicationFactory<Program> factory)
     public async Task Transfer_hint_versions_increase_across_phase_changes_within_the_same_epoch()
     {
         using WebApplicationFactory<Program> server = await CreateServerAsync();
-        var changes = server.Services.GetRequiredService<ShutterSpool.Server.Api.Live.LiveChangeNotifier>();
+        using AsyncServiceScope workspaceScope = factory.CreateWorkspaceScope(server);
+        var changes = workspaceScope.ServiceProvider.GetRequiredService<ShutterSpool.Server.Api.Live.LiveChangeNotifier>();
         Guid transferId = Guid.NewGuid();
         Guid sourceId = Guid.NewGuid();
         DateTimeOffset now = DateTimeOffset.UtcNow;
@@ -264,7 +268,8 @@ public sealed class LiveChangesHubTests(WebApplicationFactory<Program> factory)
     public async Task Preview_activity_registry_renews_at_thirty_seconds_expires_and_stays_bounded()
     {
         using WebApplicationFactory<Program> server = await CreateServerAsync();
-        var changes = server.Services.GetRequiredService<ShutterSpool.Server.Api.Live.LiveChangeNotifier>();
+        using AsyncServiceScope workspaceScope = factory.CreateWorkspaceScope(server);
+        var changes = workspaceScope.ServiceProvider.GetRequiredService<ShutterSpool.Server.Api.Live.LiveChangeNotifier>();
         DateTimeOffset startedAt = DateTimeOffset.UtcNow;
         Guid captureId = Guid.NewGuid();
         Guid assetId = Guid.NewGuid();
@@ -294,7 +299,7 @@ public sealed class LiveChangesHubTests(WebApplicationFactory<Program> factory)
     public async Task LongPolling_fallback_completes_negotiate_and_hub_handshake_with_query_bearer()
     {
         using WebApplicationFactory<Program> server = await CreateServerAsync();
-        using HttpClient client = server.CreateClient();
+        using HttpClient client = factory.CreateWorkspaceClient(server);
         string token = CreateToken(TimeSpan.FromMinutes(5));
         using HttpRequestMessage negotiate = CreateHubRequest(HttpMethod.Post,
             $"{HubPath}/negotiate?negotiateVersion=1&access_token={Uri.EscapeDataString(token)}");
@@ -329,7 +334,7 @@ public sealed class LiveChangesHubTests(WebApplicationFactory<Program> factory)
     public async Task LongPolling_connection_rejects_requests_after_the_grant_is_revoked()
     {
         using WebApplicationFactory<Program> server = await CreateServerAsync();
-        using HttpClient client = server.CreateClient();
+        using HttpClient client = factory.CreateWorkspaceClient(server);
         string pollPath = await StartLongPollingAsync(client, CreateToken(TimeSpan.FromMinutes(5)));
         await SetGrantActiveAsync(server, false);
 
@@ -342,7 +347,7 @@ public sealed class LiveChangesHubTests(WebApplicationFactory<Program> factory)
     public async Task LongPolling_connection_rejects_requests_after_the_bearer_expires()
     {
         using WebApplicationFactory<Program> server = await CreateServerAsync();
-        using HttpClient client = server.CreateClient();
+        using HttpClient client = factory.CreateWorkspaceClient(server);
         string pollPath = await StartLongPollingAsync(client, CreateToken(TimeSpan.FromSeconds(3)));
         await Task.Delay(TimeSpan.FromSeconds(4), TestContext.Current.CancellationToken);
 
@@ -354,12 +359,8 @@ public sealed class LiveChangesHubTests(WebApplicationFactory<Program> factory)
     private async Task<WebApplicationFactory<Program>> CreateServerAsync(ConcurrentQueue<string>? logs = null,
         BaseExporter<Activity>? exporter = null, IAccessGrantStore? grantStore = null)
     {
-        string databaseName = Guid.NewGuid().ToString("N");
         WebApplicationFactory<Program> server = factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
         {
-            services.RemoveAll<DbContextOptions<ShutterSpoolDbContext>>();
-            services.RemoveAll<Microsoft.EntityFrameworkCore.Infrastructure.IDbContextOptionsConfiguration<ShutterSpoolDbContext>>();
-            services.AddDbContextFactory<ShutterSpoolDbContext>(options => options.UseInMemoryDatabase(databaseName));
             if (grantStore is not null)
             {
                 services.RemoveAll<IAccessGrantStore>();
@@ -384,14 +385,17 @@ public sealed class LiveChangesHubTests(WebApplicationFactory<Program> factory)
             });
         }));
 
-        await using AsyncServiceScope scope = server.Services.CreateAsyncScope();
-        scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>().AuthorizationGrants.Add(
-            new AuthorizationGrant { Issuer = Issuer, Subject = "operator", IsActive = true });
-        await scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>().SaveChangesAsync(TestContext.Current.CancellationToken);
+        await using AsyncServiceScope scope = factory.CreateWorkspaceScope(server);
+        ShutterSpoolDbContext database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
+        AuthorizationGrant? grant = await database.AuthorizationGrants.SingleOrDefaultAsync(
+            item => item.Issuer == Issuer && item.Subject == "operator", TestContext.Current.CancellationToken);
+        if (grant is null) database.AuthorizationGrants.Add(new AuthorizationGrant { Issuer = Issuer, Subject = "operator", IsActive = true });
+        else grant.IsActive = true;
+        await database.SaveChangesAsync(TestContext.Current.CancellationToken);
         return server;
     }
 
-    private static async Task<int> SendNegotiateAsync(WebApplicationFactory<Program> server, string token)
+    private async Task<int> SendNegotiateAsync(WebApplicationFactory<Program> server, string token)
     {
         HttpContext response = await server.Server.SendAsync(context =>
         {
@@ -399,22 +403,27 @@ public sealed class LiveChangesHubTests(WebApplicationFactory<Program> factory)
             context.Request.Path = $"{HubPath}/negotiate";
             context.Request.QueryString = new QueryString($"?negotiateVersion=1&access_token={Uri.EscapeDataString(token)}");
             context.Request.Headers.Origin = Origin;
+            context.Request.Headers[ShutterSpool.Server.Security.WorkspaceSelection.Header] = factory.Workspace.Id.ToString();
         }, TestContext.Current.CancellationToken);
         return response.Response.StatusCode;
     }
 
-    private static async Task SetGrantActiveAsync(WebApplicationFactory<Program> server, bool active)
+    private async Task SetGrantActiveAsync(WebApplicationFactory<Program> server, bool active)
     {
-        await using AsyncServiceScope scope = server.Services.CreateAsyncScope();
+        await using AsyncServiceScope scope = factory.CreateWorkspaceScope(server);
         ShutterSpoolDbContext database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
-        (await database.AuthorizationGrants.SingleAsync(TestContext.Current.CancellationToken)).IsActive = active;
+        (await database.AuthorizationGrants.SingleAsync(item => item.Issuer == "https://issuer.test" && item.Subject == "operator", TestContext.Current.CancellationToken)).IsActive = active;
         await database.SaveChangesAsync(TestContext.Current.CancellationToken);
     }
 
-    private static WebSocketClient CreateWebSocketClient(WebApplicationFactory<Program> server, string? origin = Origin)
+    private WebSocketClient CreateWebSocketClient(WebApplicationFactory<Program> server, string? origin = Origin)
     {
         WebSocketClient client = server.Server.CreateWebSocketClient();
-        if (origin is not null) client.ConfigureRequest = request => request.Headers["Origin"] = origin;
+        client.ConfigureRequest = request =>
+        {
+            request.Headers[ShutterSpool.Server.Security.WorkspaceSelection.Header] = factory.Workspace.Id.ToString();
+            if (origin is not null) request.Headers["Origin"] = origin;
+        };
         return client;
     }
 
@@ -444,7 +453,7 @@ public sealed class LiveChangesHubTests(WebApplicationFactory<Program> factory)
         return pollPath;
     }
 
-    private static Uri CreateHubUri(string token) => new($"ws://localhost{HubPath}?access_token={Uri.EscapeDataString(token)}");
+    private Uri CreateHubUri(string token) => new($"ws://localhost{HubPath}?workspace={factory.Workspace.Id}&access_token={Uri.EscapeDataString(token)}");
 
     private static HttpRequestMessage CreateHubRequest(HttpMethod method, string path)
     {
@@ -535,7 +544,6 @@ public sealed class LiveChangesHubTests(WebApplicationFactory<Program> factory)
         public bool Unavailable { get; set; }
         public Task<bool> IsActiveAsync(string issuer, string subject, CancellationToken cancellationToken) =>
             Unavailable ? throw new InvalidOperationException("synthetic authority store outage") : Task.FromResult(true);
-        public Task BootstrapAsync(string issuer, string subject, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
     private sealed class CapturedActivityExporter : BaseExporter<Activity>

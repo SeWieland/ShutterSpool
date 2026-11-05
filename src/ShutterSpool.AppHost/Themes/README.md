@@ -36,8 +36,8 @@ rerunning account bootstrap, resetting credentials or replacing issuer state. It
 
 Persist `ShutterSpool:Keycloak:LoginTheme=keycloak.v2` in AppHost configuration
 (environment `ShutterSpool__Keycloak__LoginTheme=keycloak.v2`) so subsequent reconciliation keeps the fallback.
-An AppHost restart runs the existing full bootstrap, which applies the configured initial administrator password;
-it is not a credential-preserving theme-only operation. Use direct selection when that reset is unwanted.
+An AppHost restart runs full identity reconciliation and preserves existing credentials, realm profile rules and account security settings.
+The configured initial administrator password is assigned only when creating that account. Use direct selection when only the theme should change.
 The setting is passed to the selection script as `SHUTTERSPOOL_LOGIN_THEME`.
 Set it back to `shutterspool` after installing and checking a complete compatible artifact, then select it directly.
 

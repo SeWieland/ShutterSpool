@@ -17,7 +17,9 @@ internal sealed class PreviewGenerationGate(PreviewSettings settings) : IDisposa
 }
 
 internal sealed class ImaginaryPreviewGenerator(ICommittedOriginalReader originals, HttpClient imaginary,
-    PreviewSettings settings, PreviewGenerationGate generationGate) : IPreviewGenerator
+    PreviewSettings settings, PreviewGenerationGate generationGate,
+    ShutterSpool.Application.Workspaces.WorkspaceContext? workspace = null,
+    ShutterSpool.Application.Retention.ISpoolQuotaStore? quota = null) : IPreviewGenerator
 {
     private const long MaximumInputBytes = 64L * 1024 * 1024;
     private const int MaximumOutputBytes = 4 * 1024 * 1024;
@@ -42,7 +44,7 @@ internal sealed class ImaginaryPreviewGenerator(ICommittedOriginalReader origina
                 ? await originals.OpenReadAsync(source.SpoolKey, deadline.Token)
                 : await originals.OpenReadAsync(source.AssetId, source.SpoolKey, sharedLease, deadline.Token);
             SeekableMedia seekable;
-            try { seekable = await SeekableMediaStream.OpenAsync(original, source.Size, MaximumInputBytes, deadline.Token); }
+            try { seekable = await SeekableMediaStream.OpenAsync(original, source.Size, MaximumInputBytes, deadline.Token, workspace, quota); }
             catch (Exception error) when (error is MediaUnreadableException or MediaSizeLimitException or MediaSizeMismatchException or InvalidDataException or EndOfStreamException)
             {
                 throw new PreviewPermanentException("Preview source size does not match its committed metadata.", error);

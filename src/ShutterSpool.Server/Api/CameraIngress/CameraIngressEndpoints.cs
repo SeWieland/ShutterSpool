@@ -53,19 +53,7 @@ internal static class SftpGoOpenFlags
     public const int UploadOverwrite = O_WRONLY | O_CREAT | O_TRUNC;
 }
 
-internal sealed class CameraCallbackEndpointFilter(CameraIngressSettings settings) : IEndpointFilter
-{
-    public ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
-    {
-        HttpContext http = context.HttpContext;
-        string suppliedKey = http.Request.Headers["X-API-KEY"].ToString();
-        byte[] expected = Encoding.UTF8.GetBytes(settings.CallbackKey);
-        byte[] supplied = Encoding.UTF8.GetBytes(suppliedKey);
-        bool valid = http.Connection.LocalPort == settings.InternalPort && supplied.Length == expected.Length
-            && CryptographicOperations.FixedTimeEquals(supplied, expected);
-        return valid ? next(context) : ValueTask.FromResult<object?>(Results.StatusCode(StatusCodes.Status403Forbidden));
-    }
-}
+internal sealed class CameraHookEndpointMetadata;
 
 internal static class CameraIngressEndpoints
 {
@@ -73,7 +61,6 @@ internal static class CameraIngressEndpoints
     {
         if (!settings.Enabled) return;
         RouteGroupBuilder group = app.MapGroup("/internal/camera")
-            .AddEndpointFilter(new CameraCallbackEndpointFilter(settings))
             .ExcludeFromDescription();
         group.MapPost("/auth", (SftpGoAuthRequest request, CameraIngressService ingress, CameraIngressSettings options, ILogger<CameraIngressService> logger,
             CancellationToken token) => AuthenticateAsync(request, ingress, options, logger, SourceConnectionProfile.ModernFtps, token));
@@ -81,7 +68,7 @@ internal static class CameraIngressEndpoints
             CancellationToken token) => AuthenticateAsync(request, ingress, options, logger, SourceConnectionProfile.LegacyFtps, token));
         group.MapPost("/plain-auth", (SftpGoAuthRequest request, CameraIngressService ingress, CameraIngressSettings options, ILogger<CameraIngressService> logger,
             CancellationToken token) => AuthenticateAsync(request, ingress, options, logger, SourceConnectionProfile.PlainFtpLan, token));
-        group.MapPost("/hook", HookAsync);
+        group.MapPost("/hook", HookAsync).WithMetadata(new CameraHookEndpointMetadata());
         group.MapMethods("/fs/{loginId:guid}/{operation}/{**path}", ["GET", "POST", "DELETE", "PATCH"], FileSystemAsync);
 
         app.MapGet("/management/ingress/transfers", async (CameraIngressService ingress, CancellationToken token) =>
@@ -162,6 +149,11 @@ internal static class CameraIngressEndpoints
 
         try
         {
+            if (!(HttpMethods.IsPost(context.Request.Method) && operation == "create"))
+            {
+                CameraLogin? login = await ingress.FindLoginAsync(loginId, cancellationToken);
+                if (login is null || !settings.IsEnabled(login.ConnectionProfile)) return Results.StatusCode(403);
+            }
             switch (context.Request.Method, operation)
             {
                 case ("POST", "create"):
@@ -225,7 +217,7 @@ internal static class CameraIngressEndpoints
         return Uri.UnescapeDataString(raw[(pathIndex + prefix.Length)..]);
     }
 
-    private static bool TryLoginId(string? endpoint, CameraIngressSettings settings, out Guid loginId)
+    internal static bool TryLoginId(string? endpoint, CameraIngressSettings settings, out Guid loginId)
     {
         loginId = default;
         if (!Uri.TryCreate(endpoint, UriKind.Absolute, out Uri? actual)

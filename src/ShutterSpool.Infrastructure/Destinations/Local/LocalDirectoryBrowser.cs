@@ -6,11 +6,12 @@ internal static class LocalDirectoryBrowser
 {
     private const int MaximumEntries = 200;
 
-    public static LocalDirectoryListingResult Browse(string? path, CancellationToken cancellationToken)
+    public static LocalDirectoryListingResult Browse(string? path, CancellationToken cancellationToken, string? assignedRoot = null)
     {
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (assignedRoot is not null && string.IsNullOrWhiteSpace(path)) path = assignedRoot;
             if (string.IsNullOrWhiteSpace(path))
             {
                 LocalDirectoryEntry[] roots = DriveInfo.GetDrives()
@@ -25,6 +26,8 @@ internal static class LocalDirectoryBrowser
                 return new(null, "Enter an absolute directory path.");
 
             string fullPath = Path.GetFullPath(path);
+            if (assignedRoot is not null && !WithinRoot(fullPath, assignedRoot))
+                return new(null, "The directory is outside the workspace destination root.");
             if (!Directory.Exists(fullPath)) return new(null, "The directory does not exist or cannot be read.");
             EnsureSafeDirectoryPath(fullPath);
             FileAttributes currentAttributes = File.GetAttributes(fullPath);
@@ -45,6 +48,7 @@ internal static class LocalDirectoryBrowser
             }
             entries.Sort((left, right) => StringComparer.OrdinalIgnoreCase.Compare(left.Name, right.Name));
             string? parent = Directory.GetParent(fullPath)?.FullName;
+            if (assignedRoot is not null && parent is not null && !WithinRoot(parent, assignedRoot)) parent = null;
             return new(new LocalDirectoryListing(fullPath, parent is null ? null : Path.GetFullPath(parent), entries, truncated), null);
         }
         catch (OperationCanceledException) { throw; }
@@ -56,6 +60,13 @@ internal static class LocalDirectoryBrowser
         {
             return new(null, "The directory does not exist or cannot be read.");
         }
+    }
+
+    private static bool WithinRoot(string path, string root)
+    {
+        root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        return PathEquals(path, root) || path.StartsWith(root + Path.DirectorySeparatorChar,
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
     }
 
     internal static string NormalizePath(string path)

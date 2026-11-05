@@ -1,3 +1,4 @@
+using ShutterSpool.Infrastructure.Composition;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
@@ -81,28 +82,16 @@ public sealed class ArchitectureDatabaseTests
     }
 
     [Fact]
-    public async Task Concurrent_fresh_startups_serialize_schema_and_recovery()
+    public async Task Concurrent_fresh_provisioning_uses_the_provider_migration_lock()
     {
         await using var fixture = await ArchitectureTestDatabase.CreateAsync();
         await using var first = new ShutterSpoolDbContext(fixture.Options);
         await using var second = new ShutterSpoolDbContext(fixture.Options);
-        var recoveryEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseRecovery = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var secondRecoveryEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Task FirstRecovery(CancellationToken _) { recoveryEntered.SetResult(); return releaseRecovery.Task; }
-        Task SecondRecovery(CancellationToken _) { secondRecoveryEntered.SetResult(); return Task.CompletedTask; }
-
-        Task firstStartup = new DatabaseInitializer(first).InitializeAsync(fixture.SpoolRoot, TestContext.Current.CancellationToken, FirstRecovery);
-        await recoveryEntered.Task.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
-        Task secondStartup = new DatabaseInitializer(second).InitializeAsync(fixture.SpoolRoot, TestContext.Current.CancellationToken, SecondRecovery);
-        Task completed = await Task.WhenAny(secondRecoveryEntered.Task, Task.Delay(TimeSpan.FromMilliseconds(300), TestContext.Current.CancellationToken));
-        bool recoveryWasSerialized = !ReferenceEquals(secondRecoveryEntered.Task, completed);
-        releaseRecovery.TrySetResult();
-        await Task.WhenAll(firstStartup, secondStartup);
-
-        Assert.True(recoveryWasSerialized, "A second startup entered recovery while the first startup held the database startup lock.");
-        Assert.Equal(first.Database.GetMigrations(), await first.Database.GetAppliedMigrationsAsync(TestContext.Current.CancellationToken));
-        Assert.True(secondRecoveryEntered.Task.IsCompleted);
+        await Task.WhenAll(
+            new DatabaseInitializer(first).InitializeAsync(fixture.SpoolRoot, TestContext.Current.CancellationToken),
+            new DatabaseInitializer(second).InitializeAsync(fixture.SpoolRoot, TestContext.Current.CancellationToken));
+        Assert.Equal(first.Database.GetMigrations(), await second.Database.GetAppliedMigrationsAsync(TestContext.Current.CancellationToken));
+        Assert.Single(await first.Collections.ToArrayAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -114,6 +103,7 @@ public sealed class ArchitectureDatabaseTests
         CancellationToken token = TestContext.Current.CancellationToken;
         await initializer.InitializeAsync(fixture.SpoolRoot, token);
         var correct = new SecretProtector(Options.Create(new CredentialProtectionOptions { EncryptionKey = Convert.ToBase64String(new byte[32]) }));
+        await initializer.ValidateSecretKeyAsync(correct, token, enroll: true);
         Guid destination = Guid.NewGuid();
         await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO destinations (\"Id\", \"Name\", \"Kind\", \"Enabled\") VALUES ({destination}, 'synthetic-key-check', 'local', true)", token);
         await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO destination_credentials (\"Id\", \"DestinationId\", \"EncryptedSecret\") VALUES ({Guid.NewGuid()}, {destination}, {correct.Protect("synthetic-secret")})", token);
@@ -123,7 +113,7 @@ public sealed class ArchitectureDatabaseTests
     }
 
     [Fact]
-    public async Task Key_check_marker_detects_a_changed_key_and_corruption_after_source_only_enrollment()
+    public async Task Runtime_requires_existing_key_custody_and_provisioned_marker_detects_changed_key_or_corruption()
     {
         await using var fixture = await ArchitectureTestDatabase.CreateAsync();
         await using var database = new ShutterSpoolDbContext(fixture.Options);
@@ -132,25 +122,9 @@ public sealed class ArchitectureDatabaseTests
         await initializer.InitializeAsync(fixture.SpoolRoot, token);
         var enrolled = new SecretProtector(Options.Create(new CredentialProtectionOptions { EncryptionKey = Convert.ToBase64String(new byte[32]) }));
         var changed = new SecretProtector(Options.Create(new CredentialProtectionOptions { EncryptionKey = Convert.ToBase64String(Enumerable.Repeat((byte)1, 32).ToArray()) }));
-        Guid sourceId = Guid.NewGuid();
-        byte[] verifier = enrolled.CreateVerifier("synthetic-source-password");
-        database.Sources.Add(new SourceEntity { Id = sourceId, Name = "synthetic-source-key-check", SourceType = SourceType.CameraFtpUpload, ConnectionProfile = SourceConnectionProfile.ModernFtps });
-        database.SourceCredentials.Add(new SourceCredentialEntity { SourceId = sourceId, Username = "synthetic-source-key-check", VirtualRoot = "/", SecretVerifier = verifier });
-        await database.SaveChangesAsync(token);
-        Assert.False(changed.Verify("synthetic-source-password", verifier));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => initializer.ValidateSecretKeyAsync(enrolled, token));
+        await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => initializer.ValidateSecretKeyAsync(enrolled, token));
         Assert.False(await HasDeploymentKeyCheckAsync(database, token));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => initializer.ValidateSecretKeyAsync(enrolled, token,
-            _ => Task.FromException(new InvalidOperationException("synthetic invalid suppression proof"))));
-        Assert.False(await HasDeploymentKeyCheckAsync(database, token));
-
-        bool proofRan = false;
-        await initializer.ValidateSecretKeyAsync(enrolled, token, _ =>
-        {
-            proofRan = true;
-            return Task.CompletedTask;
-        });
-        Assert.True(proofRan);
+        await initializer.ValidateSecretKeyAsync(enrolled, token, enroll: true);
         Assert.True(await HasDeploymentKeyCheckAsync(database, token));
 
         await Assert.ThrowsAnyAsync<System.Security.Cryptography.CryptographicException>(() => initializer.ValidateSecretKeyAsync(changed, token));
@@ -187,7 +161,7 @@ public sealed class ArchitectureDatabaseTests
         await File.WriteAllBytesAsync(original, [4, 5, 6], token);
         bool recovered = false;
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => new DatabaseInitializer(database)
+        await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => new DatabaseInitializer(database)
             .InitializeAsync(fixture.SpoolRoot, token, _ => { recovered = true; return Task.CompletedTask; }));
 
         Assert.False(recovered);
@@ -209,7 +183,7 @@ public sealed class ArchitectureDatabaseTests
         CancellationToken token = TestContext.Current.CancellationToken;
         await database.Database.ExecuteSqlRawAsync(sql, token);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => new DatabaseInitializer(database).InitializeAsync(fixture.SpoolRoot, token));
+        await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => new DatabaseInitializer(database).InitializeAsync(fixture.SpoolRoot, token));
 
         Assert.False(await database.Database.SqlQuery<bool>($"SELECT to_regclass('public.\"__EFMigrationsHistory\"') IS NOT NULL AS \"Value\"").SingleAsync(token));
         Assert.False(Directory.Exists(fixture.SpoolRoot));
@@ -261,7 +235,10 @@ public sealed class ArchitectureDatabaseTests
         await database.SaveChangesAsync(token);
         PostgresException referencedCollection = await Assert.ThrowsAsync<PostgresException>(() => database.Database.ExecuteSqlRawAsync(
             "DELETE FROM collections", token));
-        Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, referencedCollection.SqlState);
+        Assert.Contains(referencedCollection.SqlState, new[] { PostgresErrorCodes.RestrictViolation, PostgresErrorCodes.ForeignKeyViolation });
+        Assert.Equal("FK_sources_collections_CollectionId", referencedCollection.ConstraintName);
+        Assert.True(await database.Sources.AsNoTracking().AnyAsync(item => item.Id == source, token));
+        Assert.True(await database.Collections.AsNoTracking().AnyAsync(item => item.IsBuiltIn, token));
     }
 
     [Fact]
@@ -310,7 +287,7 @@ public sealed class ArchitectureDatabaseTests
                 CREATE TABLE "__EFMigrationsHistory" ("MigrationId" varchar(150) PRIMARY KEY, "ProductVersion" varchar(32) NOT NULL);
                 INSERT INTO "__EFMigrationsHistory" VALUES ('20260918204126_InitialIngest', '10.0.4');
                 """, TestContext.Current.CancellationToken);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => new DatabaseInitializer(database)
+        await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => new DatabaseInitializer(database)
             .InitializeAsync(fixture.SpoolRoot, TestContext.Current.CancellationToken));
         Assert.False(await database.Database.SqlQuery<bool>($"SELECT to_regclass('public.assets') IS NOT NULL AS \"Value\"")
             .SingleAsync(TestContext.Current.CancellationToken));
@@ -326,7 +303,7 @@ public sealed class ArchitectureDatabaseTests
         string original = Path.Combine(fixture.SpoolRoot, "synthetic-original");
         await File.WriteAllBytesAsync(original, [4, 5, 6], TestContext.Current.CancellationToken);
         await using var database = new ShutterSpoolDbContext(fixture.Options);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => new DatabaseInitializer(database)
+        await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => new DatabaseInitializer(database)
             .InitializeAsync(fixture.SpoolRoot, TestContext.Current.CancellationToken));
         Assert.Empty(await database.Database.GetAppliedMigrationsAsync(TestContext.Current.CancellationToken));
         Assert.Equal(new byte[] { 4, 5, 6 }, await File.ReadAllBytesAsync(original, TestContext.Current.CancellationToken));

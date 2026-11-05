@@ -1405,6 +1405,19 @@ namespace ShutterSpool.Infrastructure.Persistence.Migrations
                 INSERT INTO collections ("Id", "Name", "Path", "Identity", "Revision", "IsBuiltIn")
                 VALUES ('00000000-0000-0000-0000-000000000012', 'ShutterSpool', 'ShutterSpool', 'SHUTTERSPOOL', 0, true);
                 """);
+            migrationBuilder.CreateTable(
+                name: "workspace_identity",
+                columns: table => new
+                {
+                    Id = table.Column<Guid>(type: "uuid", nullable: false),
+                    StorageIdentity = table.Column<string>(type: "text", nullable: false),
+                    OperationId = table.Column<Guid>(type: "uuid", nullable: false),
+                    BootstrapComplete = table.Column<bool>(type: "boolean", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_workspace_identity", x => x.Id);
+                });
         }
 
         /// <inheritdoc />

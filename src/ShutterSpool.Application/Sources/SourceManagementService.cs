@@ -112,6 +112,7 @@ public sealed class SourceManagementService(ISourceConfigurationStore store, ICr
             try { await store.CreateAsync(provisioning, cancellationToken); break; }
             catch (SourceUsernameConflictException) when (requestedUsername is null && attempt < 4)
             {
+                if (await store.GetAsync(id, cancellationToken) is not null) throw;
                 username = GenerateUsername();
                 provisioning = provisioning with { Username = username };
             }
@@ -235,6 +236,13 @@ public sealed class SourceCredentialVerifier(ISourceConfigurationStore store, IC
             return new(null, credential.SourceId);
         }
         return new(new(credential.SourceId, credential.VirtualRoot, credential.CredentialGeneration), null);
+    }
+
+    public async Task<bool> IsCurrentAsync(string username, SourceAccess access, SourceConnectionProfile profile, CancellationToken token)
+    {
+        SourceCredential? current = await store.FindCredentialAsync(username, token);
+        return current is { IsIngressEnabled: true } && current.SourceId == access.SourceId
+            && current.CredentialGeneration == access.CredentialGeneration && current.ConnectionProfile == profile;
     }
 
     public void RecordSucceeded(Guid sourceId) => audit.Succeeded(sourceId);

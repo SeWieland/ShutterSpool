@@ -2,10 +2,11 @@ using Microsoft.EntityFrameworkCore;
 using ShutterSpool.Application.Ingest;
 using ShutterSpool.Application.Ingress;
 using ShutterSpool.Domain.Sources;
+using ShutterSpool.Application.Workspaces;
 
 namespace ShutterSpool.Infrastructure.Persistence;
 
-internal sealed class EfCameraIngressStore(ShutterSpoolDbContext database, TimeProvider timeProvider) : ICameraIngressStore
+internal sealed class EfCameraIngressStore(ShutterSpoolDbContext database, TimeProvider timeProvider, IWorkspaceRegistry? registry = null) : ICameraIngressStore
 {
     public async Task<CameraLogin?> CreateLoginAsync(Guid sourceId, string username, long credentialGeneration, CancellationToken cancellationToken,
         SourceConnectionProfile connectionProfile)
@@ -23,6 +24,7 @@ internal sealed class EfCameraIngressStore(ShutterSpoolDbContext database, TimeP
             CredentialGeneration = credential.CredentialGeneration, ConnectionProfile = connectionProfile, CreatedAt = timeProvider.GetUtcNow(),
         };
         database.CameraLogins.Add(login);
+        if (registry is not null) await registry.RegisterIngressAsync(WorkspaceIngressHandle.Login(login.Id), sourceId, cancellationToken);
         await database.SaveChangesAsync(cancellationToken);
         if (transaction is not null) await transaction.CommitAsync(cancellationToken);
         return Map(login);

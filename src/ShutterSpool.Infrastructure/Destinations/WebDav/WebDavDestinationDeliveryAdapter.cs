@@ -1,4 +1,5 @@
 using ShutterSpool.Application.Delivery;
+using ShutterSpool.Application.Destinations;
 using ShutterSpool.Domain.Delivery;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
@@ -17,6 +18,7 @@ internal static class WebDavDestinationUris
         uri = null;
         if (string.IsNullOrWhiteSpace(value) || value.Length > 2_048 || !Uri.TryCreate(value, UriKind.Absolute, out Uri? parsed)
             || parsed.Scheme != Uri.UriSchemeHttps || !string.IsNullOrEmpty(parsed.UserInfo) || !string.IsNullOrEmpty(parsed.Query)
+            || !HasUnambiguousHost(value, parsed)
             || !string.IsNullOrEmpty(parsed.Fragment) || value.Contains('\\') || value.Any(char.IsControl)
             || parsed.AbsolutePath.Contains("//", StringComparison.Ordinal)
             || HasUnsafeRawPath(value)
@@ -25,6 +27,21 @@ internal static class WebDavDestinationUris
             return false;
         uri = new Uri(parsed.AbsoluteUri.TrimEnd('/') + "/", UriKind.Absolute);
         return true;
+    }
+
+    private static bool HasUnambiguousHost(string value, Uri parsed)
+    {
+        int start = value.IndexOf("://", StringComparison.Ordinal) + 3;
+        if (start < 3) return false;
+        int end = value.IndexOfAny(['/', '?', '#'], start);
+        string authority = value[start..(end < 0 ? value.Length : end)];
+        string expected = parsed.HostNameType == UriHostNameType.IPv6 ? $"[{parsed.IdnHost.Trim('[', ']')}]" : parsed.IdnHost;
+        if (!parsed.IsDefaultPort) expected += $":{parsed.Port}";
+        else if (authority.EndsWith(":443", StringComparison.Ordinal)) expected += ":443";
+        return string.Equals(authority, expected, StringComparison.OrdinalIgnoreCase)
+            && !parsed.IdnHost.Contains('%') && !parsed.IdnHost.EndsWith('.')
+            && (parsed.HostNameType is UriHostNameType.IPv4 or UriHostNameType.IPv6
+                || parsed.HostNameType == UriHostNameType.Dns && parsed.IdnHost.Contains('.'));
     }
 
     private static bool HasUnsafeRawPath(string value)
@@ -59,7 +76,7 @@ internal static class WebDavDestinationUris
         new(collection.AbsoluteUri + string.Join('/', segments.Select(Uri.EscapeDataString)), UriKind.Absolute);
 }
 
-internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory clients) : IDestinationDeliveryAdapter
+internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory clients, DestinationCapabilities? capabilities = null) : IDestinationDeliveryAdapter
 {
     internal const string PrivateRequestTelemetryKey = "ShutterSpool.PrivateProviderRequest";
     private const int BufferSize = 64 * 1024;
@@ -69,6 +86,7 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
     public async Task<(bool Writable, string? ErrorCode)> TestAsync(string collectionUrl, string username, string password,
         CancellationToken cancellationToken)
     {
+        if (!(capabilities ?? DestinationCapabilities.All).IsEnabled(Kind)) return (false, "DESTINATION_KIND_DISABLED");
         if (!WebDavDestinationUris.TryCollection(collectionUrl, out Uri? root)) return (false, "INVALID_COLLECTION_URL");
         using var deadline = CreateDeadline(cancellationToken);
         CancellationToken operationToken = deadline.Token;
@@ -88,6 +106,8 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
 
     public async Task<DeliveryResult> WriteAsync(DeliveryRequest request, Stream original, CancellationToken cancellationToken)
     {
+        if (!(capabilities ?? DestinationCapabilities.All).IsEnabled(Kind))
+            return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "DESTINATION_KIND_DISABLED");
         if (!TryConfig(request, out Uri? root, out string? user, out string? password, out string[]? segments, out string? error))
             return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: error);
         if (!ValidExpectedContent(request))
@@ -160,6 +180,8 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
 
     public async Task<DeliveryReconciliation> ReconcileAsync(DeliveryRequest request, CancellationToken cancellationToken)
     {
+        if (!(capabilities ?? DestinationCapabilities.All).IsEnabled(Kind))
+            return new(DeliveryReconciliationKind.Uncertain, ErrorCode: "DESTINATION_KIND_DISABLED");
         if (!TryConfig(request, out Uri? root, out string? user, out string? password, out string[]? segments, out string? error))
             return new(DeliveryReconciliationKind.Conflict, ErrorCode: error);
         if (!ValidExpectedContent(request))
