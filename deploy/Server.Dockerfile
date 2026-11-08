@@ -8,7 +8,7 @@ COPY deploy/images/compose.yaml /source/deploy/images/compose.yaml
 COPY THIRD-PARTY-NOTICES.md /source/THIRD-PARTY-NOTICES.md
 RUN npm run build
 
-FROM mcr.microsoft.com/dotnet/sdk:10.0.403@sha256:de4fe90a98845d75910b9769662465c84de1a934665c431279d1382b2bddc02b AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0.403@sha256:212fe4cb74627d5adf9817a4088906ae3edff1bd853bb27565d4b46731efe61e AS build
 WORKDIR /source
 COPY Directory.Build.props global.json ./
 COPY src/ShutterSpool.Domain/ src/ShutterSpool.Domain/
