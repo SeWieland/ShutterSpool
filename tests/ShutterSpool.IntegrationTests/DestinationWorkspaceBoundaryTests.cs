@@ -64,15 +64,17 @@ public sealed class DestinationWorkspaceBoundaryTests
         workspace.Bind(new(Guid.NewGuid(), "Synthetic", "synthetic", root, 1000));
         try
         {
+            Assert.True(LocalDestinationPaths.IsAllowed(destinations, workspace));
             Assert.True(LocalDestinationPaths.IsAllowed(Path.Combine(destinations, "child"), workspace));
             Assert.False(LocalDestinationPaths.IsAllowed(Path.Combine(root, "originals"), workspace));
+            Assert.False(LocalDestinationPaths.IsAllowed(destinations + "-other", workspace));
             Assert.False(LocalDestinationPaths.IsAllowed(Path.Combine(destinations, "..", "originals"), workspace));
-            LocalDirectoryListing listing = LocalDirectoryBrowser.Browse(null, CancellationToken.None, destinations).Listing!;
+            LocalDirectoryListing listing = LocalDirectoryBrowser.Browse(null, destinations, CancellationToken.None).Listing!;
             Assert.Equal(destinations, listing.Path);
             Assert.Null(listing.ParentPath);
             Assert.Equal("child", Assert.Single(listing.Directories).Name);
-            Assert.Null(LocalDirectoryBrowser.Browse(root, CancellationToken.None, destinations).Listing);
-            Assert.Null(LocalDirectoryBrowser.Browse(Path.Combine(destinations, ".."), CancellationToken.None, destinations).Listing);
+            Assert.Null(LocalDirectoryBrowser.Browse(root, destinations, CancellationToken.None).Listing);
+            Assert.Null(LocalDirectoryBrowser.Browse(Path.Combine(destinations, ".."), destinations, CancellationToken.None).Listing);
         }
         finally { Directory.Delete(root, recursive: true); }
     }
@@ -99,7 +101,7 @@ public sealed class DestinationWorkspaceBoundaryTests
     }
 
     [Fact]
-    public void Workspace_destination_paths_reject_redirected_ancestors()
+    public async Task Workspace_destination_operations_reject_redirected_ancestors()
     {
         string root = Path.Combine(Path.GetTempPath(), $"shutterspool-destination-link-{Guid.NewGuid():N}");
         string destinations = Path.Combine(root, "destinations");
@@ -115,9 +117,18 @@ public sealed class DestinationWorkspaceBoundaryTests
             var workspace = new WorkspaceContext();
             workspace.Bind(new(Guid.NewGuid(), "Synthetic", "synthetic", root, 1000));
 
-            Assert.False(LocalDestinationPaths.IsAllowed(Path.Combine(link, "new-child"), workspace));
-            Assert.Null(LocalDirectoryBrowser.Browse(link, CancellationToken.None, destinations).Listing);
-            Assert.DoesNotContain(LocalDirectoryBrowser.Browse(null, CancellationToken.None, destinations).Listing!.Directories,
+            var adapter = new LocalDestinationDeliveryAdapter(DestinationCapabilities.All, workspace);
+            var request = new DeliveryRequest(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "synthetic.raw", 1,
+                new string('0', 64), "synthetic", Configuration: new LocalDestinationDeliveryConfiguration(Path.Combine(link, "new-child")));
+            DeliveryResult write = await adapter.WriteAsync(request, Stream.Null, TestContext.Current.CancellationToken);
+            Assert.Equal(DeliveryResultKind.ConfigurationFailure, write.Kind);
+            Assert.Equal("UNSAFE_PATH", write.ErrorCode);
+            DeliveryReconciliation reconciliation = await adapter.ReconcileAsync(request, TestContext.Current.CancellationToken);
+            Assert.Equal(DeliveryReconciliationKind.Uncertain, reconciliation.Kind);
+            Assert.Equal("UNSAFE_PATH", reconciliation.ErrorCode);
+            Assert.Empty(Directory.GetFileSystemEntries(outside));
+            Assert.Null(LocalDirectoryBrowser.Browse(link, destinations, CancellationToken.None).Listing);
+            Assert.DoesNotContain(LocalDirectoryBrowser.Browse(null, destinations, CancellationToken.None).Listing!.Directories,
                 entry => entry.Name == "redirected");
         }
         finally

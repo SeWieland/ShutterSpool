@@ -7,8 +7,8 @@ namespace ShutterSpool.Infrastructure.Persistence;
 internal sealed class DatabaseInitializer(ShutterSpoolDbContext database, ShutterSpool.Application.Workspaces.WorkspaceContext? workspace = null)
 {
     private const string KeyCheckValue = "ShutterSpool deployment key check v1";
-    public async Task InitializeAsync(string spoolRoot, CancellationToken cancellationToken, Func<CancellationToken, Task>? recover = null,
-        bool validateOnly = false)
+    public async Task InitializeAsync(string spoolRoot, Func<CancellationToken, Task>? recover = null,
+        bool validateOnly = false, CancellationToken cancellationToken = default)
     {
         if (!database.Database.IsRelational())
         {
@@ -17,13 +17,13 @@ internal sealed class DatabaseInitializer(ShutterSpoolDbContext database, Shutte
         }
         if (validateOnly)
         {
-            await Workspaces.WorkspaceRuntime.ValidateDatabaseAsync(database, cancellationToken, workspace?.Selected);
+            await Workspaces.WorkspaceRuntime.ValidateDatabaseAsync(database, workspace?.Selected, cancellationToken);
             if (recover is not null) await recover(cancellationToken);
         }
-        else await InitializeLockedAsync(spoolRoot, cancellationToken, recover);
+        else await InitializeLockedAsync(spoolRoot, recover, cancellationToken);
     }
 
-    private async Task InitializeLockedAsync(string spoolRoot, CancellationToken cancellationToken, Func<CancellationToken, Task>? recover)
+    private async Task InitializeLockedAsync(string spoolRoot, Func<CancellationToken, Task>? recover, CancellationToken cancellationToken)
     {
         bool exists = await database.Database.CanConnectAsync(cancellationToken);
         string[] applied = exists ? [.. (await database.Database.GetAppliedMigrationsAsync(cancellationToken))] : [];
@@ -47,8 +47,8 @@ internal sealed class DatabaseInitializer(ShutterSpoolDbContext database, Shutte
         if (recover is not null) await recover(cancellationToken);
     }
 
-    public async Task ValidateSecretKeyAsync(ICredentialProtector protector, CancellationToken cancellationToken,
-        bool enroll = false)
+    public async Task ValidateSecretKeyAsync(ICredentialProtector protector,
+        bool enroll = false, CancellationToken cancellationToken = default)
     {
         string? encryptedCheck = await database.Database.SqlQuery<string>($"SELECT key_check AS \"Value\" FROM deployment_key_checks WHERE id = 1")
             .SingleOrDefaultAsync(cancellationToken);

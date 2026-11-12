@@ -116,7 +116,8 @@ public sealed class WorkspaceTenancyPostgresTests
                 Assert.True((await store.SetIngressEnabledAsync(ids[index], 1, true, TestContext.Current.CancellationToken)).Applied);
             }
         }
-        var registry = new PostgresWorkspaceRegistry(fixture.Configuration, new WorkspaceContext());
+        await using AsyncServiceScope control = provider.CreateAsyncScope();
+        IWorkspaceRegistry registry = control.ServiceProvider.GetRequiredService<IWorkspaceRegistry>();
         WorkspaceIngressRoute? route = await registry.FindIngressAsync(WorkspaceIngressHandle.Username("shared-wire-login"), TestContext.Current.CancellationToken);
         Assert.Equal(workspaces[0].Id, route!.Workspace.Id);
         Assert.Equal(ids[0], route.SourceId);
@@ -133,8 +134,8 @@ public sealed class WorkspaceTenancyPostgresTests
         await using AsyncServiceScope scope = fixture.Scope(provider, workspaces[0]);
         var context = scope.ServiceProvider.GetRequiredService<WorkspaceContext>();
         var quota = scope.ServiceProvider.GetRequiredService<ISpoolQuotaStore>();
-        await using (SeekableMedia copy = await SeekableMediaStream.OpenAsync(new Nonseekable([7, 8, 9]), 3, 3,
-            TestContext.Current.CancellationToken, context, quota))
+        await using (SeekableMedia copy = await SeekableMediaStream.OpenAsync(new Nonseekable([7, 8, 9]), 3, 3, context, quota,
+            TestContext.Current.CancellationToken))
         {
             Assert.Equal(new byte[] { 7, 8, 9 }, Read(copy.Stream));
             Assert.Single(Directory.GetFiles(Path.Combine(workspaces[0].StorageRoot, "incoming", "media-temporary")));
@@ -483,7 +484,12 @@ public sealed class WorkspaceTenancyPostgresTests
         public string ConnectionKey(int index) => $"ConnectionStrings:Workspaces:{WorkspaceName(index)}:Runtime";
         public string Connection(int index) => Configuration[ConnectionKey(index)]!;
         public Task ProvisionWorkspaceAsync(int index) => WorkspaceOperator.RunAsync(["--workspace-provision", WorkspaceName(index)], Configuration, TestContext.Current.CancellationToken);
-        public Task<WorkspaceDefinition[]> RegistryAsync() => new PostgresWorkspaceRegistry(Configuration, new WorkspaceContext()).ListReadyAsync(TestContext.Current.CancellationToken);
+        public async Task<WorkspaceDefinition[]> RegistryAsync()
+        {
+            await using ServiceProvider provider = Services();
+            await using AsyncServiceScope scope = provider.CreateAsyncScope();
+            return await scope.ServiceProvider.GetRequiredService<IWorkspaceRegistry>().ListReadyAsync(TestContext.Current.CancellationToken);
+        }
         public ServiceProvider Services() => new ServiceCollection().AddLogging().AddShutterSpoolInfrastructure(Configuration).BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
         public AsyncServiceScope Scope(IServiceProvider provider, WorkspaceDefinition workspace)
         { AsyncServiceScope scope = provider.CreateAsyncScope(); scope.ServiceProvider.GetRequiredService<WorkspaceContext>().Bind(workspace); return scope; }

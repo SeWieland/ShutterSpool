@@ -12,15 +12,15 @@ public sealed class PreviewServiceTests
         var service = adapters.CreateService(new PreviewSettings());
         Guid captureId = Guid.NewGuid();
         CancellationToken token = TestContext.Current.CancellationToken;
-        await service.GetAsync(captureId, PreviewProfile.Grid, token, 640);
-        await service.GetAsync(captureId, PreviewProfile.Grid, token, 1024);
-        await service.GetAsync(captureId, PreviewProfile.Grid, token, 640);
+        await service.GetAsync(captureId, PreviewProfile.Grid, 640, token);
+        await service.GetAsync(captureId, PreviewProfile.Grid, 1024, token);
+        await service.GetAsync(captureId, PreviewProfile.Grid, 640, token);
         Assert.Equal(2, adapters.GenerationCount);
         Assert.Contains(adapters.Cache.Keys, key => key.EndsWith("grid-640x640.webp", StringComparison.Ordinal));
         Assert.Contains(adapters.Cache.Keys, key => key.EndsWith("grid-1024x1024.webp", StringComparison.Ordinal));
         int reads = adapters.ResolutionCount;
-        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => service.GetAsync(captureId, PreviewProfile.Grid, token, 63));
-        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => service.GetAsync(captureId, PreviewProfile.Grid, token, 4097));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => service.GetAsync(captureId, PreviewProfile.Grid, 63, token));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => service.GetAsync(captureId, PreviewProfile.Grid, 4097, token));
         Assert.Equal(reads, adapters.ResolutionCount);
     }
 
@@ -79,20 +79,20 @@ public sealed class PreviewServiceTests
         var service = adapters.CreateService(new PreviewSettings());
         Guid captureId = Guid.NewGuid();
 
-        Assert.Equal(PreviewState.Pending, (await service.GetAsync(captureId, PreviewProfile.Grid, TestContext.Current.CancellationToken)).State);
+        Assert.Equal(PreviewState.Pending, (await service.GetAsync(captureId, PreviewProfile.Grid, cancellationToken: TestContext.Current.CancellationToken)).State);
 
         adapters.Resolution = new(true, new PreviewSource(Guid.NewGuid(), "spool/jpeg", 3));
-        PreviewResult firstReady = await service.GetAsync(captureId, PreviewProfile.Grid, TestContext.Current.CancellationToken);
+        PreviewResult firstReady = await service.GetAsync(captureId, PreviewProfile.Grid, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(PreviewState.Ready, firstReady.State);
         Assert.True(firstReady.Published);
         Assert.Equal(adapters.Resolution.Source!.AssetId, firstReady.SourceAssetId);
         Assert.Equal(1, adapters.GenerationCount);
-        PreviewResult cacheHit = await service.GetAsync(captureId, PreviewProfile.Grid, TestContext.Current.CancellationToken);
+        PreviewResult cacheHit = await service.GetAsync(captureId, PreviewProfile.Grid, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(PreviewState.Ready, cacheHit.State);
         Assert.False(cacheHit.Published);
         Assert.Equal(1, adapters.GenerationCount);
         adapters.Cache.Clear();
-        Assert.True((await service.GetAsync(captureId, PreviewProfile.Grid, TestContext.Current.CancellationToken)).Published);
+        Assert.True((await service.GetAsync(captureId, PreviewProfile.Grid, cancellationToken: TestContext.Current.CancellationToken)).Published);
         Assert.Equal(2, adapters.GenerationCount);
     }
 
@@ -104,11 +104,11 @@ public sealed class PreviewServiceTests
         var service = adapters.CreateService(new PreviewSettings());
 
         Guid captureId = Guid.NewGuid();
-        Assert.Equal(PreviewState.Ready, (await service.GetAsync(captureId, PreviewProfile.Detail, TestContext.Current.CancellationToken)).State);
+        Assert.Equal(PreviewState.Ready, (await service.GetAsync(captureId, PreviewProfile.Detail, cancellationToken: TestContext.Current.CancellationToken)).State);
         Assert.Single(adapters.Cache);
         Assert.Equal(1, adapters.ResolutionCount);
 
-        Assert.Equal(PreviewState.Ready, (await service.GetAsync(captureId, PreviewProfile.Detail, TestContext.Current.CancellationToken)).State);
+        Assert.Equal(PreviewState.Ready, (await service.GetAsync(captureId, PreviewProfile.Detail, cancellationToken: TestContext.Current.CancellationToken)).State);
         Assert.Equal(2, adapters.Cache.Count);
         Assert.Equal(2, adapters.ResolutionCount);
     }
@@ -120,9 +120,9 @@ public sealed class PreviewServiceTests
         var service = adapters.CreateService(new PreviewSettings());
         Guid captureId = Guid.NewGuid();
 
-        await service.GetAsync(captureId, PreviewProfile.Grid, TestContext.Current.CancellationToken);
+        await service.GetAsync(captureId, PreviewProfile.Grid, cancellationToken: TestContext.Current.CancellationToken);
         adapters.Cache.Clear();
-        Assert.Equal(PreviewState.Ready, (await service.GetAsync(captureId, PreviewProfile.Grid, TestContext.Current.CancellationToken)).State);
+        Assert.Equal(PreviewState.Ready, (await service.GetAsync(captureId, PreviewProfile.Grid, cancellationToken: TestContext.Current.CancellationToken)).State);
         Assert.Equal(2, adapters.GenerationCount);
     }
 
@@ -135,11 +135,11 @@ public sealed class PreviewServiceTests
         var service = new PreviewService(adapters, adapters, adapters, new PreviewSettings(), activity);
 
         Assert.Equal(PreviewState.Ready, (await service.GetAsync(captureId, PreviewProfile.Grid,
-            TestContext.Current.CancellationToken)).State);
+            cancellationToken: TestContext.Current.CancellationToken)).State);
         Assert.Equal(captureId, Assert.Single(activity.Started).CaptureId);
         Assert.Equal(activity.Started[0], Assert.Single(activity.FinishedItems));
 
-        await service.GetAsync(captureId, PreviewProfile.Grid, TestContext.Current.CancellationToken);
+        await service.GetAsync(captureId, PreviewProfile.Grid, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Single(activity.Started);
         Assert.Single(activity.FinishedItems);
     }
@@ -149,10 +149,10 @@ public sealed class PreviewServiceTests
     {
         var adapters = new FakePreviewAdapters { Resolution = new(true, new PreviewSource(Guid.NewGuid(), "spool/jpeg", 3)) };
         Guid captureId = Guid.NewGuid();
-        await adapters.CreateService(new PreviewSettings()).GetAsync(captureId, PreviewProfile.Grid, TestContext.Current.CancellationToken);
+        await adapters.CreateService(new PreviewSettings()).GetAsync(captureId, PreviewProfile.Grid, cancellationToken: TestContext.Current.CancellationToken);
 
         PreviewResult resized = await adapters.CreateService(new PreviewSettings { GridWidth = 640 })
-            .GetAsync(captureId, PreviewProfile.Grid, TestContext.Current.CancellationToken);
+            .GetAsync(captureId, PreviewProfile.Grid, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(PreviewState.Ready, resized.State);
         Assert.Equal(2, adapters.GenerationCount);
@@ -166,12 +166,12 @@ public sealed class PreviewServiceTests
         var service = adapters.CreateService(new PreviewSettings());
         Guid captureId = Guid.NewGuid();
 
-        Assert.Equal(PreviewState.Unavailable, (await service.GetAsync(captureId, PreviewProfile.Grid, TestContext.Current.CancellationToken)).State);
+        Assert.Equal(PreviewState.Unavailable, (await service.GetAsync(captureId, PreviewProfile.Grid, cancellationToken: TestContext.Current.CancellationToken)).State);
         adapters.FailGeneration = false;
         adapters.FailWrite = true;
-        Assert.Equal(PreviewState.Unavailable, (await service.GetAsync(captureId, PreviewProfile.Grid, TestContext.Current.CancellationToken)).State);
+        Assert.Equal(PreviewState.Unavailable, (await service.GetAsync(captureId, PreviewProfile.Grid, cancellationToken: TestContext.Current.CancellationToken)).State);
         adapters.FailWrite = false;
-        Assert.Equal(PreviewState.Ready, (await service.GetAsync(captureId, PreviewProfile.Grid, TestContext.Current.CancellationToken)).State);
+        Assert.Equal(PreviewState.Ready, (await service.GetAsync(captureId, PreviewProfile.Grid, cancellationToken: TestContext.Current.CancellationToken)).State);
     }
 
     [Fact]
@@ -183,7 +183,7 @@ public sealed class PreviewServiceTests
             DeclineWrite = true,
         };
         PreviewResult result = await adapters.CreateService(new PreviewSettings()).GetAsync(Guid.NewGuid(),
-            PreviewProfile.Grid, TestContext.Current.CancellationToken);
+            PreviewProfile.Grid, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(PreviewState.Ready, result.State);
         Assert.Equal(new byte[] { 1, 2, 3 }, result.Content);
@@ -201,7 +201,7 @@ public sealed class PreviewServiceTests
         using IDisposable fence = await useGate.FenceAsync(assetId, TestContext.Current.CancellationToken);
 
         Assert.Equal(PreviewState.Unavailable, (await service.GetAsync(Guid.NewGuid(), PreviewProfile.Grid,
-            TestContext.Current.CancellationToken)).State);
+            cancellationToken: TestContext.Current.CancellationToken)).State);
         Assert.Equal(PreviewWarmOutcome.Retry, await service.WarmAsync(Guid.NewGuid(), assetId, PreviewProfile.Grid,
             TestContext.Current.CancellationToken));
         Assert.Equal(0, adapters.GenerationCount);
@@ -216,13 +216,13 @@ public sealed class PreviewServiceTests
         Guid captureId = Guid.NewGuid();
 
         Assert.Equal(PreviewState.Ready, (await service.GetAsync(captureId, PreviewProfile.Grid,
-            TestContext.Current.CancellationToken)).State);
+            cancellationToken: TestContext.Current.CancellationToken)).State);
         Assert.Equal(2, adapters.ResolutionCount);
         Assert.Same(locks.LastLease, adapters.SharedLeaseUsed);
         Assert.True(locks.LastLease!.Disposed);
 
         Assert.Equal(PreviewState.Ready, (await service.GetAsync(captureId, PreviewProfile.Grid,
-            TestContext.Current.CancellationToken)).State);
+            cancellationToken: TestContext.Current.CancellationToken)).State);
         Assert.Equal(4, adapters.ResolutionCount);
         Assert.Equal(2, locks.SharedAcquisitions);
         Assert.Equal(1, adapters.GenerationCount);
@@ -239,7 +239,7 @@ public sealed class PreviewServiceTests
         var service = new PreviewService(adapters, adapters, adapters, new PreviewSettings(), assetLock: locks);
 
         Assert.Equal(PreviewState.Unavailable, (await service.GetAsync(captureId, PreviewProfile.Grid,
-            TestContext.Current.CancellationToken)).State);
+            cancellationToken: TestContext.Current.CancellationToken)).State);
         Assert.Equal(PreviewWarmOutcome.Obsolete, await service.WarmAsync(captureId, assetId, PreviewProfile.Grid,
             TestContext.Current.CancellationToken));
         Assert.Equal(0, adapters.GenerationCount);

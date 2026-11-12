@@ -111,8 +111,8 @@ public sealed partial class ConfigurationApiTests
         await using (var scope = fixture.Scope())
         {
             var verifier = scope.ServiceProvider.GetRequiredService<SourceCredentialVerifier>();
-            Assert.Null(await verifier.VerifyAsync(source.Username, source.Secret!, token));
-            SourceAccess access = (await verifier.VerifyAsync(source.Username, regenerated, token))!;
+            Assert.Null(await verifier.VerifyAsync(source.Username, source.Secret!, cancellationToken: token));
+            SourceAccess access = (await verifier.VerifyAsync(source.Username, regenerated, cancellationToken: token))!;
             Assert.Equal(source.Id, access.SourceId);
             Assert.Equal(source.VirtualRoot, access.VirtualRoot);
             Assert.Equal(credentialId, (await scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>().SourceCredentials.SingleAsync(token)).Id);
@@ -263,8 +263,8 @@ public sealed partial class ConfigurationApiTests
         Assert.DoesNotContain("CustomCamera!47", await stale.Content.ReadAsStringAsync(token), StringComparison.Ordinal);
         await using var scope = fixture.Scope();
         SourceCredentialVerifier verifier = scope.ServiceProvider.GetRequiredService<SourceCredentialVerifier>();
-        Assert.Null(await verifier.VerifyAsync("camera-one", "!A23456789~!", token));
-        Assert.Equal(source.Id, (await verifier.VerifyAsync("camera-two", "CustomCamera!43", token))?.SourceId);
+        Assert.Null(await verifier.VerifyAsync("camera-one", "!A23456789~!", cancellationToken: token));
+        Assert.Equal(source.Id, (await verifier.VerifyAsync("camera-two", "CustomCamera!43", cancellationToken: token))?.SourceId);
     }
 
     [Fact]
@@ -299,9 +299,9 @@ public sealed partial class ConfigurationApiTests
             await using var scope = fixture.Scope();
             SourceCredentialVerifier verifier = scope.ServiceProvider.GetRequiredService<SourceCredentialVerifier>();
             Assert.Equal(firstWon ? null : first.Id,
-                (await verifier.VerifyAsync("camera-two", "CustomCamera!43", token))?.SourceId);
+                (await verifier.VerifyAsync("camera-two", "CustomCamera!43", cancellationToken: token))?.SourceId);
             Assert.Equal(firstWon ? second.Id : null,
-                (await verifier.VerifyAsync("camera-other", "CustomCamera!44", token))?.SourceId);
+                (await verifier.VerifyAsync("camera-other", "CustomCamera!44", cancellationToken: token))?.SourceId);
         }
         finally
         {

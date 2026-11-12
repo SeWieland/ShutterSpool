@@ -93,9 +93,10 @@ public sealed class SourceManagementService(ISourceConfigurationStore store, ICr
     public Task<SourceRemovalWrite> RemoveAsync(Guid id, long expectedRevision, CancellationToken token) =>
         store.RemoveAsync(id, expectedRevision, token);
 
-    public async Task<CreatedSource> CreateAsync(string name, string mode, int? delaySeconds, CancellationToken cancellationToken,
+    public async Task<CreatedSource> CreateAsync(string name, string mode, int? delaySeconds,
         SourceType sourceType = SourceType.CameraFtpUpload, SourceConnectionProfile connectionProfile = SourceConnectionProfile.ModernFtps,
-        string? requestedUsername = null, string? passwordMode = null, string? requestedPassword = null, Guid? collectionId = null)
+        string? requestedUsername = null, string? passwordMode = null, string? requestedPassword = null, Guid? collectionId = null,
+            CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(name) || name.Trim().Length > 256) throw new ArgumentException("Provide a source name of at most 256 characters.");
         (SourceCurationMode policy, int delay) = ParsePolicy(mode, delaySeconds);
@@ -127,9 +128,9 @@ public sealed class SourceManagementService(ISourceConfigurationStore store, ICr
     }
 
     public async Task<SourceConfigurationWrite> UpdateConfigurationAsync(Guid id, long expectedRevision,
-        string name, string mode, int? delaySeconds, CancellationToken token,
+        string name, string mode, int? delaySeconds,
         SourceType sourceType = SourceType.CameraFtpUpload, SourceConnectionProfile connectionProfile = SourceConnectionProfile.ModernFtps,
-        Guid? collectionId = null)
+        Guid? collectionId = null, CancellationToken token = default)
     {
         if (string.IsNullOrWhiteSpace(name) || name.Trim().Length > 256)
             throw new ArgumentException("Provide a source name of at most 256 characters.");
@@ -139,8 +140,8 @@ public sealed class SourceManagementService(ISourceConfigurationStore store, ICr
             collectionId ?? (await store.GetAsync(id, token))?.CollectionId ?? ShutterSpool.Domain.Collections.CollectionName.BuiltInId, token);
     }
 
-    public async Task<SourceSecretWrite> RegenerateAsync(Guid id, long expectedRevision, CancellationToken token,
-        string? username = null, string? passwordMode = null, string? requestedPassword = null)
+    public async Task<SourceSecretWrite> RegenerateAsync(Guid id, long expectedRevision,
+        string? username = null, string? passwordMode = null, string? requestedPassword = null, CancellationToken token = default)
     {
         SourceManagementConfiguration? current = await store.GetAsync(id, token);
         if (current is null) return new(false, null, null);
@@ -212,12 +213,12 @@ public sealed class SourceManagementService(ISourceConfigurationStore store, ICr
 
 public sealed class SourceCredentialVerifier(ISourceConfigurationStore store, ICredentialProtector protector, ISourceAccessAudit audit)
 {
-    public async Task<SourceAccess?> VerifyAsync(string username, string secret, CancellationToken cancellationToken,
-        SourceConnectionProfile connectionProfile = SourceConnectionProfile.ModernFtps) =>
-        (await VerifyAttemptAsync(username, secret, cancellationToken, connectionProfile)).Access;
+    public async Task<SourceAccess?> VerifyAsync(string username, string secret,
+        SourceConnectionProfile connectionProfile = SourceConnectionProfile.ModernFtps, CancellationToken cancellationToken = default) =>
+        (await VerifyAttemptAsync(username, secret, connectionProfile, cancellationToken)).Access;
 
-    public async Task<SourceCredentialCheck> VerifyAttemptAsync(string username, string secret, CancellationToken cancellationToken,
-        SourceConnectionProfile connectionProfile = SourceConnectionProfile.ModernFtps)
+    public async Task<SourceCredentialCheck> VerifyAttemptAsync(string username, string secret,
+        SourceConnectionProfile connectionProfile = SourceConnectionProfile.ModernFtps, CancellationToken cancellationToken = default)
     {
         SourceCredential? credential = await store.FindCredentialAsync(username, cancellationToken);
         if (credential is null || !protector.Verify(secret, credential.SecretVerifier))

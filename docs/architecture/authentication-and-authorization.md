@@ -65,6 +65,16 @@ Switching workspaces reloads the page so selections, drafts, private previews an
 The control registry grants no media access. Camera usernames are unique on the shared ingress endpoint and resolve through opaque routing handles, followed by current Source credential/generation checks inside the selected tenant.
 Camera credentials grant only Source ingress and cannot establish human membership.
 
+For browser requests, JWT authentication runs first. `WorkspaceSelectionMiddleware` resolves and binds the requested workspace before endpoint authorization reads that tenant's current membership and permissions.
+This order is required because the grant store itself needs the selected tenant database. A valid selector alone grants no access.
+
+`WorkspaceIngressMiddleware` handles private camera callbacks instead: it checks the private listener and callback key, reads the bounded routing identity, then binds the workspace found in the control registry.
+The camera endpoint subsequently validates the Source credential or durable admission. Routing does not revoke an already admitted transfer when credentials change.
+
+`WorkspaceLiveTokenMiddleware` binds SignalR negotiation tokens to the selected workspace using data protection, and unwraps them before native SignalR transport handling.
+SignalR knows its connection token, but not ShutterSpool's workspace boundary; the wrapper prevents polling a connection under another selected workspace.
+Token expiry and current membership/visibility checks remain separate responsibilities.
+
 ## Credentials and encryption
 
 Management identity is not source ingress authentication. Each logical Source has its own generated or custom credentials and a distinct virtual ingress root; several devices may share that Source.

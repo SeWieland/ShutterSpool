@@ -22,8 +22,8 @@ internal sealed class CaptureDeliveryWorker(IServiceScopeFactory scopes, Deliver
                 {
                     LiveChangeNotifier changes = scope.ServiceProvider.GetRequiredService<LiveChangeNotifier>();
                     DeliveryProcessingService delivery = scope.ServiceProvider.GetRequiredService<DeliveryProcessingService>();
-                    processed = await delivery.ProcessOneAsync(stoppingToken,
-                        captureId => changes.CaptureChanged(captureId, "delivery"));
+                    processed = await delivery.ProcessOneAsync(
+                        captureId => changes.CaptureChanged(captureId, "delivery"), stoppingToken);
                     if (delivery.LastChangedCaptureId is Guid captureId) changes.CaptureChanged(captureId, "delivery");
                 }
             }

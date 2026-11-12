@@ -207,15 +207,21 @@ public sealed class WorkspaceTenancyHttpTests
         Assert.Equal(survivingHint, await ReceiveCaptureHintAsync(secondSocket));
     }
 
-    [Fact]
-    public async Task Long_poll_connection_token_cannot_be_replayed_with_another_authorized_workspace()
+    [Theory]
+    [InlineData("/live/changes/negotiate", "/live/changes", "id", 1)]
+    [InlineData("/live/changes/negotiate", "/live/changes", "id", 0)]
+    [InlineData("/live/changes/negotiate", "/live/changes", "ID", 1)]
+    [InlineData("/live/changes/negotiate/", "/live/changes/", "id", 1)]
+    [InlineData("/LIVE/CHANGES/NEGOTIATE", "/LIVE/CHANGES", "id", 1)]
+    public async Task Long_poll_connection_token_cannot_be_replayed_with_another_authorized_workspace(
+        string negotiatePath, string transportPath, string idParameter, int negotiateVersion)
     {
         await using var fixture = await TenantHttpFixture.CreateAsync();
         WorkspaceDefinition first = fixture.Workspaces[0], second = fixture.Workspaces[1];
         await fixture.SetGrantAsync(second, first.Name, true);
         using HttpClient client = fixture.Client(first.Name);
         client.DefaultRequestHeaders.Add("Origin", "http://localhost");
-        string path = await StartLongPollingAsync(client, first.Id);
+        string path = await StartLongPollingAsync(client, first.Id, negotiatePath, transportPath, idParameter, negotiateVersion);
         string replayPath = path.Replace(first.Id.ToString("D"), second.Id.ToString("D"), StringComparison.Ordinal);
         try
         {
@@ -238,6 +244,37 @@ public sealed class WorkspaceTenancyHttpTests
     }
 
     [Fact]
+    public async Task Live_transport_preserves_negotiation_errors_and_rejects_empty_or_duplicate_values()
+    {
+        await using var fixture = await TenantHttpFixture.CreateAsync();
+        WorkspaceDefinition workspace = fixture.Workspaces[0];
+        using HttpClient client = fixture.Client(workspace.Name);
+        client.DefaultRequestHeaders.Add("Origin", "http://localhost");
+        using (HttpResponseMessage invalidVersion = await client.PostAsync(
+            $"/live/changes/negotiate?negotiateVersion=invalid&workspace={workspace.Id:D}", null, Token))
+        {
+            Assert.Equal(HttpStatusCode.OK, invalidVersion.StatusCode);
+            using JsonDocument error = JsonDocument.Parse(await invalidVersion.Content.ReadAsStringAsync(Token));
+            Assert.False(string.IsNullOrEmpty(error.RootElement.GetProperty("error").GetString()));
+            Assert.False(error.RootElement.TryGetProperty("connectionToken", out _));
+        }
+        using HttpResponseMessage ambiguousWorkspace = await client.PostAsync(
+            $"/live/changes/negotiate?negotiateVersion=1&workspace={workspace.Id:D}&workspace=", null, Token);
+        Assert.Equal(HttpStatusCode.BadRequest, ambiguousWorkspace.StatusCode);
+
+        using HttpResponseMessage negotiated = await client.PostAsync(
+            $"/live/changes/negotiate?negotiateVersion=1&workspace={workspace.Id:D}", null, Token);
+        Assert.Equal(HttpStatusCode.OK, negotiated.StatusCode);
+        using JsonDocument negotiation = JsonDocument.Parse(await negotiated.Content.ReadAsStringAsync(Token));
+        string connection = negotiation.RootElement.GetProperty("connectionToken").GetString()!;
+        foreach (string query in new[] { "id=", $"id={Uri.EscapeDataString(connection)}&id=" })
+        {
+            using HttpResponseMessage rejected = await client.GetAsync($"/live/changes?workspace={workspace.Id:D}&{query}", Token);
+            Assert.Equal(HttpStatusCode.Forbidden, rejected.StatusCode);
+        }
+    }
+
+    [Fact]
     public async Task Tenant_owner_cannot_export_or_reconcile_operator_recovery_manifests()
     {
         await using var fixture = await TenantHttpFixture.CreateAsync();
@@ -253,13 +290,14 @@ public sealed class WorkspaceTenancyHttpTests
         Assert.Equal(HttpStatusCode.Forbidden, reconcile.StatusCode);
     }
 
-    private static async Task<string> StartLongPollingAsync(HttpClient client, Guid workspace)
+    private static async Task<string> StartLongPollingAsync(HttpClient client, Guid workspace,
+        string negotiatePath, string transportPath, string idParameter, int negotiateVersion)
     {
-        using HttpResponseMessage negotiated = await client.PostAsync($"/live/changes/negotiate?negotiateVersion=1&workspace={workspace:D}", null, Token);
+        using HttpResponseMessage negotiated = await client.PostAsync($"{negotiatePath}?negotiateVersion={negotiateVersion}&workspace={workspace:D}", null, Token);
         Assert.Equal(HttpStatusCode.OK, negotiated.StatusCode);
         using JsonDocument negotiation = JsonDocument.Parse(await negotiated.Content.ReadAsStringAsync(Token));
-        string connection = negotiation.RootElement.GetProperty("connectionToken").GetString()!;
-        string path = $"/live/changes?workspace={workspace:D}&id={Uri.EscapeDataString(connection)}";
+        string connection = negotiation.RootElement.GetProperty(negotiateVersion == 0 ? "connectionId" : "connectionToken").GetString()!;
+        string path = $"{transportPath}?workspace={workspace:D}&{idParameter}={Uri.EscapeDataString(connection)}";
         using HttpResponseMessage initial = await client.GetAsync(path, Token);
         Assert.Equal(HttpStatusCode.OK, initial.StatusCode);
         using var handshake = new StringContent("{\"protocol\":\"json\",\"version\":1}\u001e", Encoding.UTF8, "text/plain");

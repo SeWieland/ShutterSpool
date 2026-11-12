@@ -6,18 +6,21 @@ using ShutterSpool.Application.Workspaces;
 
 namespace ShutterSpool.Infrastructure.Workspaces;
 
-internal sealed class PostgresWorkspaceRegistry(IConfiguration configuration, WorkspaceContext context, WorkspaceInventory? inventory = null) : IWorkspaceRegistry
+internal sealed class EfWorkspaceRegistry(IDbContextFactory<WorkspaceControlDbContext> databases,
+    WorkspaceDeploymentConfiguration deployment, WorkspaceContext context, WorkspaceInventory inventory) : IWorkspaceRegistry
 {
     internal const int MaximumWorkspaces = 32;
-    internal static string ControlConnection(IConfiguration configuration) => new NpgsqlConnectionStringBuilder(
-        configuration.GetConnectionString("shutterspool-control") ?? throw new WorkspaceOperator.RefusedException("The workspace control connection is required."))
-        { MinPoolSize = 0, MaxPoolSize = 4, Timeout = 3, CommandTimeout = 3, IncludeErrorDetail = false }.ConnectionString;
-    internal static WorkspaceControlDbContext Database(string connection) => new(new DbContextOptionsBuilder<WorkspaceControlDbContext>().UseNpgsql(connection).Options);
 
     public async Task<WorkspaceDefinition[]> ListReadyAsync(CancellationToken cancellationToken)
     {
-        if (inventory?.Ready is { } frozen) return frozen;
-        await using var database = Database(ControlConnection(configuration));
+        if (inventory.Ready is { } frozen) return frozen;
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
+        return await ReadReadyAsync(database, deployment.Value, cancellationToken);
+    }
+
+    internal static async Task<WorkspaceDefinition[]> ReadReadyAsync(WorkspaceControlDbContext database,
+        IConfiguration configuration, CancellationToken cancellationToken)
+    {
         string[] applied = [.. await database.Database.GetAppliedMigrationsAsync(cancellationToken)];
         if (!applied.SequenceEqual(database.Database.GetMigrations(), StringComparer.Ordinal))
             throw new WorkspaceOperator.RefusedException("The control schema is incompatible; run explicit maintenance.");
@@ -33,7 +36,7 @@ internal sealed class PostgresWorkspaceRegistry(IConfiguration configuration, Wo
     public async Task<WorkspaceIngressRoute?> FindIngressAsync(string handle, CancellationToken cancellationToken)
     {
         if (handle.Length is < 1 or > 128) return null;
-        await using var database = Database(ControlConnection(configuration));
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
         IngressRouteRecord? route = await database.IngressRoutes.AsNoTracking().SingleOrDefaultAsync(item => item.Handle == handle, cancellationToken);
         if (route is null) return null;
         WorkspaceDefinition? workspace = await FindReadyAsync(route.WorkspaceId, cancellationToken);
@@ -43,7 +46,7 @@ internal sealed class PostgresWorkspaceRegistry(IConfiguration configuration, Wo
     public async Task RegisterIngressAsync(string handle, Guid sourceId, CancellationToken cancellationToken)
     {
         WorkspaceDefinition workspace = context.Required;
-        await using var database = Database(ControlConnection(configuration));
+        await using var database = await databases.CreateDbContextAsync(cancellationToken);
         var route = new IngressRouteRecord { Handle = handle, WorkspaceId = workspace.Id, SourceId = sourceId };
         database.IngressRoutes.Add(route);
         try { await database.SaveChangesAsync(cancellationToken); }

@@ -51,7 +51,7 @@ internal static class WorkspaceRuntime
         return marker;
     }
 
-    internal static async Task ValidateDatabaseAsync(ShutterSpoolDbContext database, CancellationToken token, WorkspaceDefinition? workspace = null)
+    internal static async Task ValidateDatabaseAsync(ShutterSpoolDbContext database, WorkspaceDefinition? workspace = null, CancellationToken token = default)
     {
         string[] known = [.. database.Database.GetMigrations()];
         string[] applied = [.. await database.Database.GetAppliedMigrationsAsync(token)];

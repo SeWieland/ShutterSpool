@@ -35,7 +35,8 @@ public sealed class WorkspaceCameraIngressTests
         await using WebApplication server = await StartAsync(fixture);
         CreatedSource created;
         await using (var scope = fixture.Scope(server.Services, workspaces[0]))
-            created = await scope.ServiceProvider.GetRequiredService<SourceManagementService>().CreateAsync("Synthetic rotated camera", "Delay", 60, Token);
+            created = await scope.ServiceProvider.GetRequiredService<SourceManagementService>().CreateAsync("Synthetic rotated camera", "Delay", 60,
+                cancellationToken: Token);
         using HttpClient client = server.GetTestClient();
         client.DefaultRequestHeaders.Add("X-API-KEY", CallbackKey);
         Guid login = await AuthenticateAsync(client, created.Username, created.Secret);
@@ -44,8 +45,8 @@ public sealed class WorkspaceCameraIngressTests
         using (HttpResponseMessage admission = await client.PostAsJsonAsync(hookPath, Event("pre-upload", created.Username, endpoint, admitted), Token))
             Assert.Equal(HttpStatusCode.OK, admission.StatusCode);
         await using (var scope = fixture.Scope(server.Services, workspaces[0]))
-            Assert.True((await scope.ServiceProvider.GetRequiredService<SourceManagementService>().RegenerateAsync(created.Id, 0, Token,
-                username: "replacement-" + Guid.NewGuid().ToString("N"))).Applied);
+            Assert.True((await scope.ServiceProvider.GetRequiredService<SourceManagementService>().RegenerateAsync(created.Id, 0,
+                username: "replacement-" + Guid.NewGuid().ToString("N"), token: Token)).Applied);
 
         using (HttpResponseMessage newAdmission = await client.PostAsJsonAsync(hookPath, Event("pre-upload", created.Username, endpoint, admitted + 2_000_000_000), Token))
             Assert.Equal(HttpStatusCode.Forbidden, newAdmission.StatusCode);
@@ -96,12 +97,18 @@ public sealed class WorkspaceCameraIngressTests
         await using (WebApplication server = await StartAsync(fixture))
         {
             await using (var scope = fixture.Scope(server.Services, workspaces[0]))
-                created = await scope.ServiceProvider.GetRequiredService<SourceManagementService>().CreateAsync("Synthetic camera", "Delay", 60, Token);
+                created = await scope.ServiceProvider.GetRequiredService<SourceManagementService>().CreateAsync("Synthetic camera", "Delay", 60,
+                    cancellationToken: Token);
             using HttpClient client = server.GetTestClient();
             using (HttpResponseMessage denied = await client.PostAsJsonAsync("/internal/camera/auth", new { username = created.Username, password = created.Secret }, Token))
                 Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
             client.DefaultRequestHeaders.Add("X-API-KEY", CallbackKey);
             login = await AuthenticateAsync(client, created.Username, created.Secret);
+            foreach (string handle in new[] { login.ToString("D"), Guid.NewGuid().ToString("N"), "invalid" })
+            {
+                using HttpResponseMessage rejectedHandle = await client.GetAsync($"/internal/camera/fs/{handle}/stat/%2F", Token);
+                Assert.Equal(HttpStatusCode.Forbidden, rejectedHandle.StatusCode);
+            }
             string endpoint = $"http://localhost:8081/internal/camera/fs/{login:N}";
             long admitted = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1_000_000;
             using (HttpResponseMessage admission = await client.PostAsJsonAsync("/internal/camera/hook", Event("pre-upload", created.Username, endpoint, admitted), Token))
@@ -114,7 +121,7 @@ public sealed class WorkspaceCameraIngressTests
             await AssertCustodyAsync(server, fixture, workspaces);
             await using (var scope = fixture.Scope(server.Services, workspaces[0]))
             {
-                var changed = await scope.ServiceProvider.GetRequiredService<SourceManagementService>().RegenerateAsync(created.Id, 0, Token);
+                var changed = await scope.ServiceProvider.GetRequiredService<SourceManagementService>().RegenerateAsync(created.Id, 0, token: Token);
                 Assert.True(changed.Applied);
                 using HttpResponseMessage stale = await client.GetAsync($"/internal/camera/fs/{login:N}/stat/%2Fsynthetic.jpg", Token);
                 Assert.Equal(HttpStatusCode.Forbidden, stale.StatusCode);

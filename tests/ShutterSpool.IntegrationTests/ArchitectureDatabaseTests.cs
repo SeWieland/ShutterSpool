@@ -39,7 +39,7 @@ public sealed class ArchitectureDatabaseTests
         CancellationToken token = deadline.Token;
         await using var fixture = await ArchitectureTestDatabase.CreateAsync();
         await using var gate = new ShutterSpoolDbContext(fixture.Options);
-        await new DatabaseInitializer(gate).InitializeAsync(fixture.SpoolRoot, token);
+        await new DatabaseInitializer(gate).InitializeAsync(fixture.SpoolRoot, cancellationToken: token);
         Guid id = Guid.NewGuid();
         gate.Captures.Add(new CaptureEntity { Id = id, SourceId = Guid.NewGuid(), NormalizedStem = "synthetic", ReleaseDueAt = DateTimeOffset.UtcNow.AddMinutes(-1) });
         await gate.SaveChangesAsync(token);
@@ -70,14 +70,14 @@ public sealed class ArchitectureDatabaseTests
     {
         await using var fixture = await ArchitectureTestDatabase.CreateAsync();
         await using var database = new ShutterSpoolDbContext(fixture.Options);
-        await new DatabaseInitializer(database).InitializeAsync(fixture.SpoolRoot, TestContext.Current.CancellationToken);
+        await new DatabaseInitializer(database).InitializeAsync(fixture.SpoolRoot, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("20261025211318_InitialCreate", Assert.Single(database.Database.GetMigrations()));
         Assert.Equal(database.Database.GetMigrations(), await database.Database.GetAppliedMigrationsAsync(TestContext.Current.CancellationToken));
         Assert.False(database.Database.HasPendingModelChanges());
         Directory.CreateDirectory(fixture.SpoolRoot);
         string original = Path.Combine(fixture.SpoolRoot, "synthetic-original");
         await File.WriteAllBytesAsync(original, [1, 2, 3], TestContext.Current.CancellationToken);
-        await new DatabaseInitializer(database).InitializeAsync(fixture.SpoolRoot, TestContext.Current.CancellationToken);
+        await new DatabaseInitializer(database).InitializeAsync(fixture.SpoolRoot, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(new byte[] { 1, 2, 3 }, await File.ReadAllBytesAsync(original, TestContext.Current.CancellationToken));
     }
 
@@ -88,8 +88,8 @@ public sealed class ArchitectureDatabaseTests
         await using var first = new ShutterSpoolDbContext(fixture.Options);
         await using var second = new ShutterSpoolDbContext(fixture.Options);
         await Task.WhenAll(
-            new DatabaseInitializer(first).InitializeAsync(fixture.SpoolRoot, TestContext.Current.CancellationToken),
-            new DatabaseInitializer(second).InitializeAsync(fixture.SpoolRoot, TestContext.Current.CancellationToken));
+            new DatabaseInitializer(first).InitializeAsync(fixture.SpoolRoot, cancellationToken: TestContext.Current.CancellationToken),
+            new DatabaseInitializer(second).InitializeAsync(fixture.SpoolRoot, cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(first.Database.GetMigrations(), await second.Database.GetAppliedMigrationsAsync(TestContext.Current.CancellationToken));
         Assert.Single(await first.Collections.ToArrayAsync(TestContext.Current.CancellationToken));
     }
@@ -101,15 +101,15 @@ public sealed class ArchitectureDatabaseTests
         await using var database = new ShutterSpoolDbContext(fixture.Options);
         var initializer = new DatabaseInitializer(database);
         CancellationToken token = TestContext.Current.CancellationToken;
-        await initializer.InitializeAsync(fixture.SpoolRoot, token);
+        await initializer.InitializeAsync(fixture.SpoolRoot, cancellationToken: token);
         var correct = new SecretProtector(Options.Create(new CredentialProtectionOptions { EncryptionKey = Convert.ToBase64String(new byte[32]) }));
-        await initializer.ValidateSecretKeyAsync(correct, token, enroll: true);
+        await initializer.ValidateSecretKeyAsync(correct, enroll: true, token);
         Guid destination = Guid.NewGuid();
         await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO destinations (\"Id\", \"Name\", \"Kind\", \"Enabled\") VALUES ({destination}, 'synthetic-key-check', 'local', true)", token);
         await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO destination_credentials (\"Id\", \"DestinationId\", \"EncryptedSecret\") VALUES ({Guid.NewGuid()}, {destination}, {correct.Protect("synthetic-secret")})", token);
         var wrong = new SecretProtector(Options.Create(new CredentialProtectionOptions { EncryptionKey = Convert.ToBase64String(Enumerable.Repeat((byte)1, 32).ToArray()) }));
 
-        await Assert.ThrowsAnyAsync<System.Security.Cryptography.CryptographicException>(() => initializer.ValidateSecretKeyAsync(wrong, token));
+        await Assert.ThrowsAnyAsync<System.Security.Cryptography.CryptographicException>(() => initializer.ValidateSecretKeyAsync(wrong, cancellationToken: token));
     }
 
     [Fact]
@@ -119,23 +119,23 @@ public sealed class ArchitectureDatabaseTests
         await using var database = new ShutterSpoolDbContext(fixture.Options);
         var initializer = new DatabaseInitializer(database);
         CancellationToken token = TestContext.Current.CancellationToken;
-        await initializer.InitializeAsync(fixture.SpoolRoot, token);
+        await initializer.InitializeAsync(fixture.SpoolRoot, cancellationToken: token);
         var enrolled = new SecretProtector(Options.Create(new CredentialProtectionOptions { EncryptionKey = Convert.ToBase64String(new byte[32]) }));
         var changed = new SecretProtector(Options.Create(new CredentialProtectionOptions { EncryptionKey = Convert.ToBase64String(Enumerable.Repeat((byte)1, 32).ToArray()) }));
-        await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => initializer.ValidateSecretKeyAsync(enrolled, token));
+        await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => initializer.ValidateSecretKeyAsync(enrolled, cancellationToken: token));
         Assert.False(await HasDeploymentKeyCheckAsync(database, token));
-        await initializer.ValidateSecretKeyAsync(enrolled, token, enroll: true);
+        await initializer.ValidateSecretKeyAsync(enrolled, enroll: true, token);
         Assert.True(await HasDeploymentKeyCheckAsync(database, token));
 
-        await Assert.ThrowsAnyAsync<System.Security.Cryptography.CryptographicException>(() => initializer.ValidateSecretKeyAsync(changed, token));
-        await initializer.ValidateSecretKeyAsync(enrolled, token);
+        await Assert.ThrowsAnyAsync<System.Security.Cryptography.CryptographicException>(() => initializer.ValidateSecretKeyAsync(changed, cancellationToken: token));
+        await initializer.ValidateSecretKeyAsync(enrolled, cancellationToken: token);
         string marker = await database.Database.SqlQuery<string>($"SELECT key_check AS \"Value\" FROM deployment_key_checks WHERE id = 1").SingleAsync(token);
         byte[] corrupted = Convert.FromBase64String(marker);
         corrupted[^1] ^= 1;
         string damagedMarker = Convert.ToBase64String(corrupted);
         await database.Database.ExecuteSqlInterpolatedAsync($"UPDATE deployment_key_checks SET key_check = {damagedMarker} WHERE id = 1", token);
 
-        await Assert.ThrowsAnyAsync<System.Security.Cryptography.CryptographicException>(() => initializer.ValidateSecretKeyAsync(enrolled, token));
+        await Assert.ThrowsAnyAsync<System.Security.Cryptography.CryptographicException>(() => initializer.ValidateSecretKeyAsync(enrolled, cancellationToken: token));
     }
 
     private static Task<bool> HasDeploymentKeyCheckAsync(ShutterSpoolDbContext database, CancellationToken cancellationToken) =>
@@ -162,7 +162,7 @@ public sealed class ArchitectureDatabaseTests
         bool recovered = false;
 
         await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => new DatabaseInitializer(database)
-            .InitializeAsync(fixture.SpoolRoot, token, _ => { recovered = true; return Task.CompletedTask; }));
+            .InitializeAsync(fixture.SpoolRoot, _ => { recovered = true; return Task.CompletedTask; }, cancellationToken: token));
 
         Assert.False(recovered);
         Assert.Equal([migration], await database.Database.GetAppliedMigrationsAsync(token));
@@ -183,7 +183,8 @@ public sealed class ArchitectureDatabaseTests
         CancellationToken token = TestContext.Current.CancellationToken;
         await database.Database.ExecuteSqlRawAsync(sql, token);
 
-        await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => new DatabaseInitializer(database).InitializeAsync(fixture.SpoolRoot, token));
+        await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => new DatabaseInitializer(database).InitializeAsync(fixture.SpoolRoot,
+            cancellationToken: token));
 
         Assert.False(await database.Database.SqlQuery<bool>($"SELECT to_regclass('public.\"__EFMigrationsHistory\"') IS NOT NULL AS \"Value\"").SingleAsync(token));
         Assert.False(Directory.Exists(fixture.SpoolRoot));
@@ -195,7 +196,7 @@ public sealed class ArchitectureDatabaseTests
         await using var fixture = await ArchitectureTestDatabase.CreateAsync();
         await using var database = new ShutterSpoolDbContext(fixture.Options);
         CancellationToken token = TestContext.Current.CancellationToken;
-        await new DatabaseInitializer(database).InitializeAsync(fixture.SpoolRoot, token);
+        await new DatabaseInitializer(database).InitializeAsync(fixture.SpoolRoot, cancellationToken: token);
         await database.Database.ExecuteSqlRawAsync("UPDATE \"__EFMigrationsHistory\" SET \"MigrationId\" = '20261023010000_M212Collections'", token);
 
         PostgresException rejection = await Assert.ThrowsAsync<PostgresException>(() => database.Database.MigrateAsync(token));
@@ -215,7 +216,7 @@ public sealed class ArchitectureDatabaseTests
         await using var fixture = await ArchitectureTestDatabase.CreateAsync();
         await using var database = new ShutterSpoolDbContext(fixture.Options);
         CancellationToken token = TestContext.Current.CancellationToken;
-        await new DatabaseInitializer(database).InitializeAsync(fixture.SpoolRoot, token);
+        await new DatabaseInitializer(database).InitializeAsync(fixture.SpoolRoot, cancellationToken: token);
 
         PostgresException invalidKeyId = await Assert.ThrowsAsync<PostgresException>(() => database.Database.ExecuteSqlRawAsync(
             "INSERT INTO deployment_key_checks (id, key_check) VALUES (2, 'synthetic')", token));
@@ -248,7 +249,7 @@ public sealed class ArchitectureDatabaseTests
         await using var database = new ShutterSpoolDbContext(fixture.Options);
         CancellationToken token = TestContext.Current.CancellationToken;
         var initializer = new DatabaseInitializer(database);
-        await initializer.InitializeAsync(fixture.SpoolRoot, token);
+        await initializer.InitializeAsync(fixture.SpoolRoot, cancellationToken: token);
 
         SpoolQuotaSettingsEntity settings = Assert.Single(await database.SpoolQuotaSettings.ToListAsync(token));
         Assert.False(settings.IsActive);
@@ -267,7 +268,7 @@ public sealed class ArchitectureDatabaseTests
 
         settings.Revision = 4;
         await database.SaveChangesAsync(token);
-        await initializer.InitializeAsync(fixture.SpoolRoot, token);
+        await initializer.InitializeAsync(fixture.SpoolRoot, cancellationToken: token);
         database.ChangeTracker.Clear();
         Assert.Equal(4, Assert.Single(await database.SpoolQuotaSettings.ToListAsync(token)).Revision);
         Assert.Single(await database.RetentionPolicyHistory.ToListAsync(token));
@@ -288,7 +289,7 @@ public sealed class ArchitectureDatabaseTests
                 INSERT INTO "__EFMigrationsHistory" VALUES ('20260918204126_InitialIngest', '10.0.4');
                 """, TestContext.Current.CancellationToken);
         await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => new DatabaseInitializer(database)
-            .InitializeAsync(fixture.SpoolRoot, TestContext.Current.CancellationToken));
+            .InitializeAsync(fixture.SpoolRoot, cancellationToken: TestContext.Current.CancellationToken));
         Assert.False(await database.Database.SqlQuery<bool>($"SELECT to_regclass('public.assets') IS NOT NULL AS \"Value\"")
             .SingleAsync(TestContext.Current.CancellationToken));
         Assert.True(await database.Database.SqlQuery<bool>($"SELECT to_regclass('public.legacy_originals') IS NOT NULL AS \"Value\"")
@@ -304,7 +305,7 @@ public sealed class ArchitectureDatabaseTests
         await File.WriteAllBytesAsync(original, [4, 5, 6], TestContext.Current.CancellationToken);
         await using var database = new ShutterSpoolDbContext(fixture.Options);
         await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => new DatabaseInitializer(database)
-            .InitializeAsync(fixture.SpoolRoot, TestContext.Current.CancellationToken));
+            .InitializeAsync(fixture.SpoolRoot, cancellationToken: TestContext.Current.CancellationToken));
         Assert.Empty(await database.Database.GetAppliedMigrationsAsync(TestContext.Current.CancellationToken));
         Assert.Equal(new byte[] { 4, 5, 6 }, await File.ReadAllBytesAsync(original, TestContext.Current.CancellationToken));
     }

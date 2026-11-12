@@ -8,8 +8,8 @@ namespace ShutterSpool.Infrastructure.Persistence;
 
 internal sealed class EfCameraIngressStore(ShutterSpoolDbContext database, TimeProvider timeProvider, IWorkspaceRegistry? registry = null) : ICameraIngressStore
 {
-    public async Task<CameraLogin?> CreateLoginAsync(Guid sourceId, string username, long credentialGeneration, CancellationToken cancellationToken,
-        SourceConnectionProfile connectionProfile)
+    public async Task<CameraLogin?> CreateLoginAsync(Guid sourceId, string username, long credentialGeneration,
+        SourceConnectionProfile connectionProfile, CancellationToken cancellationToken)
     {
         await using var transaction = database.Database.IsRelational() ? await database.Database.BeginTransactionAsync(cancellationToken) : null;
         SourceCredentialEntity? credential = await LockCredentialByUsernameAsync(username, cancellationToken);

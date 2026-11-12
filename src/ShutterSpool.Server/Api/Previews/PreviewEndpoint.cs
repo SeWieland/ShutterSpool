@@ -56,7 +56,7 @@ public static class PreviewEndpoint
         if (maximumDimension is < 64 or > 4096)
             return Results.ValidationProblem(new Dictionary<string, string[]> { ["maximumDimension"] = ["Provide a dimension from 64 to 4096 pixels."] });
 
-        PreviewResult result = await previews.GetAsync(captureId, selectedProfile.Value, context.RequestAborted, maximumDimension);
+        PreviewResult result = await previews.GetAsync(captureId, selectedProfile.Value, maximumDimension, context.RequestAborted);
         context.Response.Headers["X-Preview-State"] = result.State.ToString().ToLowerInvariant();
         if (result.State == PreviewState.Ready)
         {

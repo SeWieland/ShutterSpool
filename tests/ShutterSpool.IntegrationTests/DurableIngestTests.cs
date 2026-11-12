@@ -355,7 +355,7 @@ public sealed class DurableIngestTests : IDisposable
         {
             var options = new DbContextOptionsBuilder<ShutterSpoolDbContext>().UseNpgsql(testConnection).Options;
             await using var database = new ShutterSpoolDbContext(options);
-            await new DatabaseInitializer(database).InitializeAsync(_root, TestContext.Current.CancellationToken);
+            await new DatabaseInitializer(database).InitializeAsync(_root, cancellationToken: TestContext.Current.CancellationToken);
             var service = new IngestService(new EfIngestJournal(database), CreateSpool(), TimeProvider.System);
 
             IngestResult result = await service.AcceptAsync(new IngestRequest(Guid.NewGuid(), "synthetic.jpg", new MemoryStream([7, 8, 9])), TestContext.Current.CancellationToken);

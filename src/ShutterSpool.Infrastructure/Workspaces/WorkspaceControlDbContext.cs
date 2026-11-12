@@ -1,11 +1,21 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
+using Microsoft.Extensions.Configuration;
+using Npgsql;
+using ShutterSpool.Infrastructure.Composition;
 using ShutterSpool.Application.Workspaces;
 
 namespace ShutterSpool.Infrastructure.Workspaces;
 
 internal sealed class WorkspaceControlDbContext(DbContextOptions<WorkspaceControlDbContext> options) : DbContext(options)
 {
+    internal static string RuntimeConnection(IConfiguration configuration) => new NpgsqlConnectionStringBuilder(
+        configuration.GetConnectionString("shutterspool-control") ?? throw new WorkspaceOperator.RefusedException("The workspace control connection is required."))
+        { MinPoolSize = 0, MaxPoolSize = 4, Timeout = 3, CommandTimeout = 3, IncludeErrorDetail = false }.ConnectionString;
+
+    internal static WorkspaceControlDbContext Create(string connection) =>
+        new(new DbContextOptionsBuilder<WorkspaceControlDbContext>().UseNpgsql(connection).Options);
+
     internal DbSet<WorkspaceRecord> Workspaces => Set<WorkspaceRecord>();
     internal DbSet<IngressRouteRecord> IngressRoutes => Set<IngressRouteRecord>();
 

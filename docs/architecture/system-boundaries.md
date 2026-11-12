@@ -41,6 +41,7 @@ OpenAPI generates the frontend client, so Domain/Application records do not beco
 
 [AppHost](../../src/ShutterSpool.AppHost/README.md) wires the development resources; [ServiceDefaults](../../src/ShutterSpool.ServiceDefaults/README.md) supplies host health and telemetry conventions.
 The [source map](../../src/README.md) links the six .NET projects and Nuxt application.
+The [Infrastructure wiring guide](../../src/ShutterSpool.Infrastructure/README.md#service-registration-and-startup) explains control and tenant database lifetimes, workspace binding and startup recovery.
 The AppHost generates the [Compose candidate](../../deploy/README.md), which packages these existing runtime components and static Web output with upstream services.
 It introduces no additional application layer. Generated candidates retain explicit platform/dependency limits and do not imply a published release.
 

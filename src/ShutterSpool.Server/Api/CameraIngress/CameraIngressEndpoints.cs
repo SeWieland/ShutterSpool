@@ -84,7 +84,7 @@ internal static class CameraIngressEndpoints
         if (!settings.IsEnabled(profile)) return Results.StatusCode(403);
         if (string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrEmpty(request.Password)) return Results.StatusCode(403);
         CameraLogin? login;
-        try { login = await ingress.AuthenticateAsync(request.Username, request.Password, cancellationToken, profile); }
+        try { login = await ingress.AuthenticateAsync(request.Username, request.Password, profile, cancellationToken); }
         catch (CameraSourceRootInitializationException exception)
         {
             logger.LogWarning("Camera source root initialization failed for SourceId {SourceId}.", exception.SourceId);

@@ -44,7 +44,7 @@ internal sealed class ImaginaryPreviewGenerator(ICommittedOriginalReader origina
                 ? await originals.OpenReadAsync(source.SpoolKey, deadline.Token)
                 : await originals.OpenReadAsync(source.AssetId, source.SpoolKey, sharedLease, deadline.Token);
             SeekableMedia seekable;
-            try { seekable = await SeekableMediaStream.OpenAsync(original, source.Size, MaximumInputBytes, deadline.Token, workspace, quota); }
+            try { seekable = await SeekableMediaStream.OpenAsync(original, source.Size, MaximumInputBytes, workspace, quota, deadline.Token); }
             catch (Exception error) when (error is MediaUnreadableException or MediaSizeLimitException or MediaSizeMismatchException or InvalidDataException or EndOfStreamException)
             {
                 throw new PreviewPermanentException("Preview source size does not match its committed metadata.", error);

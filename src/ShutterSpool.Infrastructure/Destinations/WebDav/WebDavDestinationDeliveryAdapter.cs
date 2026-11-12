@@ -121,7 +121,7 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
         {
             DeliveryResult? rootCheck = await VerifyCollectionAsync(client, root, user, password, operationToken);
             if (rootCheck is not null) return rootCheck;
-            DeliveryResult? existing = await VerifyTargetAsync(client, target, user, password, request, operationToken);
+            DeliveryResult? existing = await VerifyTargetAsync(client, target, user, password, request, token: operationToken);
             if (existing is not null) return existing;
             DeliveryResult? capability = await VerifyNoReplaceAsync(client, root, user, password, operationToken);
             if (capability is not null) return capability;
@@ -152,7 +152,7 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
             using HttpResponseMessage moved = await client.SendAsync(move, HttpCompletionOption.ResponseHeadersRead, operationToken);
             if (moved.StatusCode is HttpStatusCode.PreconditionFailed or HttpStatusCode.Conflict)
             {
-                DeliveryResult? occupied = await VerifyTargetAsync(client, target, user, password, request, operationToken);
+                DeliveryResult? occupied = await VerifyTargetAsync(client, target, user, password, request, token: operationToken);
                 return occupied?.Kind == DeliveryResultKind.Confirmed ? occupied
                     : occupied?.ErrorCode == "TARGET_CONFLICT" ? new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "TARGET_CONFLICT")
                     : new(DeliveryResultKind.Uncertain, ErrorCode: "MOVE_CONFLICT_UNVERIFIABLE");
@@ -191,7 +191,7 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
         try
         {
             using HttpClient client = clients.CreateClient("webdav");
-            DeliveryResult? result = await VerifyTargetAsync(client, WebDavDestinationUris.Child(root, segments), user, password, request, operationToken, mayHavePublished: true);
+            DeliveryResult? result = await VerifyTargetAsync(client, WebDavDestinationUris.Child(root, segments), user, password, request, mayHavePublished: true, operationToken);
             return result is null
                 ? new(DeliveryReconciliationKind.Uncertain, ErrorCode: "ABSENCE_NOT_AUTHORITATIVE")
                 : result.Kind == DeliveryResultKind.Confirmed
@@ -349,7 +349,7 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
     }
 
     private static async Task<DeliveryResult?> VerifyTargetAsync(HttpClient client, Uri target, string user, string password,
-        DeliveryRequest request, CancellationToken token, bool mayHavePublished = false)
+        DeliveryRequest request, bool mayHavePublished = false, CancellationToken token = default)
     {
         ResourceMetadata metadata = await InspectResourceAsync(client, target, user, password, request, token);
         if (metadata.Kind == ResourceMetadataKind.Missing) return null;

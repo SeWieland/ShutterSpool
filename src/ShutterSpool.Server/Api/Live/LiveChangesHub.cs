@@ -47,11 +47,11 @@ public sealed class LiveChangesHub(IServiceScopeFactory scopes, IOptions<Securit
         Action abort = Context.Abort;
         WorkspaceDefinition? selected = workspace.Selected;
         await Groups.AddToGroupAsync(Context.ConnectionId, LiveChangeNotifier.Group(workspace.Id ?? Guid.Empty), disconnected);
-        _ = MonitorGrantAsync(issuer, subject, selected, disconnected, abort);
+        _ = MonitorGrantAsync(issuer, subject, selected, abort, disconnected);
         await base.OnConnectedAsync();
     }
 
-    private async Task MonitorGrantAsync(string? issuer, string? subject, WorkspaceDefinition? selected, CancellationToken disconnected, Action abort)
+    private async Task MonitorGrantAsync(string? issuer, string? subject, WorkspaceDefinition? selected, Action abort, CancellationToken disconnected)
     {
         try
         {

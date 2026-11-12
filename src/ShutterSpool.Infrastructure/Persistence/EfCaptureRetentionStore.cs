@@ -118,7 +118,7 @@ internal sealed class EfCaptureRetentionStore(ShutterSpoolDbContext database, Ti
         capture.Revision = checked(capture.Revision + 1);
         capture.RetentionPolicyRevision = settings.Revision;
         await database.SaveChangesAsync(cancellationToken);
-        CaptureRetentionSummary summary = await BuildSummaryAsync(capture, now, cancellationToken, settings);
+        CaptureRetentionSummary summary = await BuildSummaryAsync(capture, now, settings, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return new(RetentionOperationStatus.Committed, summary);
     }
@@ -146,7 +146,7 @@ internal sealed class EfCaptureRetentionStore(ShutterSpoolDbContext database, Ti
         capture.RetentionFactsDirty = true;
         capture.Revision = checked(capture.Revision + 1);
         await database.SaveChangesAsync(cancellationToken);
-        CaptureRetentionSummary summary = await BuildSummaryAsync(capture, now, cancellationToken, settings);
+        CaptureRetentionSummary summary = await BuildSummaryAsync(capture, now, settings, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return new(RetentionOperationStatus.Committed, summary);
     }
@@ -165,8 +165,8 @@ internal sealed class EfCaptureRetentionStore(ShutterSpoolDbContext database, Ti
         capture.RetentionPaused = false;
         capture.Revision = checked(capture.Revision + 1);
         await database.SaveChangesAsync(cancellationToken);
-        CaptureRetentionSummary summary = await BuildSummaryAsync(capture, clock.GetUtcNow(), cancellationToken,
-            await ReadSettingsAsync(cancellationToken));
+        CaptureRetentionSummary summary = await BuildSummaryAsync(capture, clock.GetUtcNow(),
+            await ReadSettingsAsync(cancellationToken), cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return new(RetentionOperationStatus.Committed, summary);
     }
@@ -206,14 +206,14 @@ internal sealed class EfCaptureRetentionStore(ShutterSpoolDbContext database, Ti
         capture.RetentionFactsDirty = true;
         capture.Revision = checked(capture.Revision + 1);
         await database.SaveChangesAsync(cancellationToken);
-        CaptureRetentionSummary summary = await BuildSummaryAsync(capture, now, cancellationToken,
-            await ReadSettingsAsync(cancellationToken));
+        CaptureRetentionSummary summary = await BuildSummaryAsync(capture, now,
+            await ReadSettingsAsync(cancellationToken), cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return new(RetentionOperationStatus.Committed, summary);
     }
 
-    internal async Task<CaptureRetentionSummary> BuildSummaryAsync(CaptureEntity capture, DateTimeOffset now,
-        CancellationToken cancellationToken, RetentionSettings settings)
+    internal async Task<CaptureRetentionSummary> BuildSummaryAsync(CaptureEntity capture, DateTimeOffset now, RetentionSettings settings,
+        CancellationToken cancellationToken)
     {
         IReadOnlyDictionary<Guid, CaptureRetentionSummary> summaries = await BuildSummariesAsync([capture], now,
             settings, cancellationToken);
@@ -335,8 +335,8 @@ internal sealed class EfCaptureRetentionStore(ShutterSpoolDbContext database, Ti
     private async Task<RetentionOperationResult> FinishAsync(IDbContextTransaction transaction,
         RetentionOperationStatus status, CaptureEntity? capture, string error, CancellationToken cancellationToken)
     {
-        CaptureRetentionSummary? summary = capture is null ? null : await BuildSummaryAsync(capture, clock.GetUtcNow(),
-            cancellationToken, await ReadSettingsAsync(cancellationToken));
+        CaptureRetentionSummary? summary = capture is null ? null : await BuildSummaryAsync(capture, clock.GetUtcNow(), await ReadSettingsAsync(cancellationToken),
+            cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return new(status, summary, error);
     }

@@ -94,8 +94,8 @@ public static class SourceEndpoints
         {
             if (!TryProfile(request.SourceType, request.ConnectionProfile, out SourceType sourceType, out SourceConnectionProfile profile)
                 || !settings.IsEnabled(profile)) return Invalid("Choose a Source type and connection profile enabled in this deployment.");
-            CreatedSource created = await sources.CreateAsync(request.Name, request.CurationMode, request.DelaySeconds, token,
-                sourceType, profile, request.Username, request.PasswordMode, request.Password, request.CollectionId);
+            CreatedSource created = await sources.CreateAsync(request.Name, request.CurationMode, request.DelaySeconds,
+                sourceType, profile, request.Username, request.PasswordMode, request.Password, request.CollectionId, token);
             await displayCache.InvalidateAsync(created.Id, token);
             return Results.Created($"/management/sources/{created.Id}", new CreatedSourceResponse(created.Id, created.Username, created.VirtualRoot,
                 request.PasswordMode == "Custom" ? null : created.Secret));
@@ -117,7 +117,7 @@ public static class SourceEndpoints
             if (!settings.IsEnabled(profile) && (current.SourceType != sourceType || current.ConnectionProfile != profile))
                 return Invalid("Choose a connection profile enabled in this deployment for a new assignment.");
             SourceConfigurationWrite result = await sources.UpdateConfigurationAsync(id, request.ExpectedRevision,
-                request.Name, request.CurationMode, request.DelaySeconds, token, sourceType, profile, request.CollectionId);
+                request.Name, request.CurationMode, request.DelaySeconds, sourceType, profile, request.CollectionId, token);
             if (result.Applied) await displayCache.InvalidateAsync(id, token);
             return WriteResult(result);
         }
@@ -133,7 +133,7 @@ public static class SourceEndpoints
             SourceManagementConfiguration? current = await sources.GetAsync(id, token);
             if (current is null) return Missing();
             SourceConfigurationWrite result = await sources.UpdateConfigurationAsync(id, request.ExpectedRevision, current.Name,
-                request.CurationMode, request.DelaySeconds, token, current.SourceType, current.ConnectionProfile, current.CollectionId);
+                request.CurationMode, request.DelaySeconds, current.SourceType, current.ConnectionProfile, current.CollectionId, token);
             if (result.Applied) await displayCache.InvalidateAsync(id, token);
             return WriteResult(result);
         }
@@ -144,7 +144,7 @@ public static class SourceEndpoints
         SourceManagementService sources, SourceDisplayCache displayCache, CancellationToken token)
     {
         SourceSecretWrite result;
-        try { result = await sources.RegenerateAsync(id, request.ExpectedRevision, token, request.Username, request.PasswordMode, request.Password); }
+        try { result = await sources.RegenerateAsync(id, request.ExpectedRevision, request.Username, request.PasswordMode, request.Password, token); }
         catch (ArgumentException exception) { return Invalid(exception); }
         catch (UnchangedSourceCredentialException) { return Invalid(new ArgumentException("Choose a different username or password.", "password")); }
         catch (SourceUsernameConflictException) { return UsernameConflict(); }

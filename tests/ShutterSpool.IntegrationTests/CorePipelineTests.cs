@@ -39,9 +39,9 @@ public sealed class CorePipelineTests
             await first.InitializeShutterSpoolAsync(configuration, token);
             Directory.CreateDirectory(targetRoot);
             await using AsyncServiceScope scope = fixture.Scope(first, workspace);
-            var source = await scope.ServiceProvider.GetRequiredService<SourceManagementService>().CreateAsync("Synthetic", "Manual", null, token);
+            var source = await scope.ServiceProvider.GetRequiredService<SourceManagementService>().CreateAsync("Synthetic", "Manual", null, cancellationToken: token);
             var destination = await scope.ServiceProvider.GetRequiredService<DestinationManagementService>().CreateAsync("Local", "local", null, token);
-            await scope.ServiceProvider.GetRequiredService<ILocalDestinationConfiguration>().ConfigureAsync(destination.Id, targetRoot, token);
+            await scope.ServiceProvider.GetRequiredService<ILocalDestinationConfiguration>().ConfigureAsync(destination.Id, destination.ConfigurationRevision, targetRoot, token);
             DestinationRoutingMutation routing = await scope.ServiceProvider.GetRequiredService<DestinationRoutingService>().SetAsync(new(destination.Id, true,
                 [new("picked", "Picked images", 0, true, [new("selection", "equals", "Picked")], "delivered", "{suppliedName}")]), 1, token);
             Assert.True(routing.Applied);
@@ -72,7 +72,7 @@ public sealed class CorePipelineTests
         {
             // The generator endpoint and Valkey are deliberately unavailable.
             Assert.Equal(PreviewState.Unavailable, (await scope.ServiceProvider.GetRequiredService<PreviewService>()
-                .GetAsync(captureId, PreviewProfile.Grid, token)).State);
+                .GetAsync(captureId, PreviewProfile.Grid, cancellationToken: token)).State);
             Assert.True(await scope.ServiceProvider.GetRequiredService<CaptureRoutingService>().ProcessOneAsync(token));
             ShutterSpoolDbContext workflow = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
             string[] routedKinds = await workflow.RoutingDecisions.AsNoTracking()
@@ -80,7 +80,7 @@ public sealed class CorePipelineTests
             int pendingDeliveries = await workflow.Deliveries.CountAsync(delivery => delivery.State == ShutterSpool.Domain.Delivery.DeliveryState.Pending, token);
             Assert.True(pendingDeliveries > 0, $"Routing did not create pending work (decisions: {string.Join(", ", routedKinds)}).");
             await restarted.GetRequiredService<IDeliveryWorkSignal>().NotifyAsync(token);
-            Assert.True(await scope.ServiceProvider.GetRequiredService<DeliveryProcessingService>().ProcessOneAsync(token));
+            Assert.True(await scope.ServiceProvider.GetRequiredService<DeliveryProcessingService>().ProcessOneAsync(cancellationToken: token));
             var history = (await scope.ServiceProvider.GetRequiredService<CaptureRoutingHistoryService>().GetDeliveriesAsync(captureId, new(), token))!;
             Assert.Equal("COMPLETE", (await scope.ServiceProvider.GetRequiredService<CaptureCurationService>().GetAsync(captureId, token))!.State);
             Assert.Equal("Delivered", Assert.Single(history.Items).State);

@@ -49,7 +49,7 @@ public sealed class AdmittedSpoolWriteTests : IDisposable
         Guid oversizedOperation = Guid.NewGuid();
 
         await Assert.ThrowsAsync<IOException>(() => ingest.ReceiveAdmittedAsync(new(sourceId, "oversized.raw",
-            new ChunkedStream([1, 2, 3, 4], 2), 3, oversizedOperation), TestContext.Current.CancellationToken));
+            new ChunkedStream([1, 2, 3, 4], 2), 3, oversizedOperation), cancellationToken: TestContext.Current.CancellationToken));
 
         IngestOperation oversized = (await journal.FindOperationAsync(oversizedOperation, TestContext.Current.CancellationToken))!;
         Assert.Equal(IngestOperationState.AwaitingSource, oversized.State);
@@ -58,7 +58,7 @@ public sealed class AdmittedSpoolWriteTests : IDisposable
 
         Guid failedReadOperation = Guid.NewGuid();
         await Assert.ThrowsAsync<IOException>(() => ingest.ReceiveAdmittedAsync(new(sourceId, "failed-read.raw", new FailingStream(),
-            3, failedReadOperation), TestContext.Current.CancellationToken));
+            3, failedReadOperation), cancellationToken: TestContext.Current.CancellationToken));
 
         IngestOperation failedRead = (await journal.FindOperationAsync(failedReadOperation, TestContext.Current.CancellationToken))!;
         Assert.Equal(IngestOperationState.AwaitingSource, failedRead.State);
@@ -86,7 +86,7 @@ public sealed class AdmittedSpoolWriteTests : IDisposable
         byte[] bytes = [1, 2, 3, 4, 5, 6, 7, 8];
 
         await Assert.ThrowsAsync<IOException>(() => ingest.ReceiveAdmittedAsync(new(Guid.NewGuid(), "camera.raw",
-            new MemoryStream(bytes), bytes.Length, operationId), TestContext.Current.CancellationToken));
+            new MemoryStream(bytes), bytes.Length, operationId), cancellationToken: TestContext.Current.CancellationToken));
 
         IngestOperation operation = (await journal.FindOperationAsync(operationId, TestContext.Current.CancellationToken))!;
         Assert.Equal(IngestOperationState.AwaitingSource, operation.State);
@@ -127,7 +127,7 @@ public sealed class AdmittedSpoolWriteTests : IDisposable
             IoCounters? beforeReceive = payloadSize == 32 * 1024 * 1024 ? ReadIoCounters() : null;
 
             long receivedSize = await ingest.ReceiveAdmittedAsync(new(sourceId, "camera.raw", new RepeatedByteStream(payloadSize),
-                payloadSize, operationId), TestContext.Current.CancellationToken);
+                payloadSize, operationId), cancellationToken: TestContext.Current.CancellationToken);
             allocatedBySize.Add(payloadSize, GC.GetTotalAllocatedBytes(precise: true) - allocatedBefore);
 
             IoCounters? afterReceive = payloadSize == 32 * 1024 * 1024 ? ReadIoCounters() : null;

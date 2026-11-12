@@ -14,7 +14,8 @@ public static class WorkspaceSelection
         id = Guid.Empty;
         var header = request.Headers[Header];
         var query = request.Query["workspace"];
-        bool live = request.Path == "/live/changes" || request.Path == "/live/changes/negotiate" || request.Path == "/live/status";
+        PathString path = request.Path.Value?.TrimEnd('/');
+        bool live = path == "/live/changes" || path == "/live/changes/negotiate" || path == "/live/status";
         if (header.Count > 1 || query.Count > 1 || query.Count > 0 && !live) return false;
         if (header.Count == 0 && query.Count == 0) return false;
         if (!Guid.TryParseExact(header.Count == 1 ? header[0] : query[0], "D", out id) || id == Guid.Empty) return false;

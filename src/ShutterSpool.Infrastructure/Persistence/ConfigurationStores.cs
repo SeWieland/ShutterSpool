@@ -274,11 +274,10 @@ internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database,
         .SingleOrDefaultAsync(cancellationToken);
 }
 
-internal sealed class EfDestinationConfigurationStore(ShutterSpoolDbContext database, DestinationCapabilities? capabilities = null) : IDestinationConfigurationStore
+internal sealed class EfDestinationConfigurationStore(ShutterSpoolDbContext database) : IDestinationConfigurationStore
 {
     public async Task CreateAsync(DestinationConfiguration destination, string? encryptedSecret, CancellationToken cancellationToken)
     {
-        (capabilities ?? DestinationCapabilities.All).EnsureEnabled(destination.Kind);
         database.Destinations.Add(new DestinationEntity
         {
             Id = destination.Id, Name = destination.Name, Kind = destination.Kind, Enabled = destination.Enabled,
@@ -398,33 +397,20 @@ internal sealed class EfWebDavDestinationConfiguration(ShutterSpoolDbContext dat
     ShutterSpool.Application.Security.ICredentialProtector protector,
     WebDavDestinationDeliveryAdapter adapter, DestinationCapabilities? capabilities = null) : IWebDavDestinationConfiguration
 {
-    public Task<WebDavDestinationConfiguration?> GetAsync(Guid destinationId, CancellationToken cancellationToken) =>
-        database.WebDavDestinations.AsNoTracking().Where(item => item.DestinationId == destinationId)
-            .Select(item => new WebDavDestinationConfiguration(item.CollectionUrl, item.Username)).SingleOrDefaultAsync(cancellationToken);
-
-    public async Task<string?> ConfigureAsync(Guid destinationId, string collectionUrl, string username, string password,
-        CancellationToken cancellationToken)
-        => await ConfigureCoreAsync(destinationId, null, collectionUrl, username, password, cancellationToken);
-
-    public Task<string?> ConfigureAsync(Guid destinationId, long expectedRevision, string collectionUrl,
-        string username, string? password, CancellationToken cancellationToken) =>
-        ConfigureCoreAsync(destinationId, expectedRevision, collectionUrl, username, password, cancellationToken);
-
-    private async Task<string?> ConfigureCoreAsync(Guid destinationId, long? expectedRevision, string collectionUrl,
+    public async Task<string?> ConfigureAsync(Guid destinationId, long expectedRevision, string collectionUrl,
         string username, string? password, CancellationToken cancellationToken)
     {
         if (!(capabilities ?? DestinationCapabilities.All).IsEnabled("webdav")) return "DESTINATION_TYPE_DISABLED";
         if (collectionUrl is null || !WebDavDestinationUris.TryCollection(collectionUrl, out Uri? normalized)) return "INVALID_COLLECTION_URL";
         if (string.IsNullOrWhiteSpace(username) || username.Length > 256 || username.Contains(':') || username.Any(char.IsControl)
             || password is not null && password.Length is 0 or > 4096) return "INVALID_CREDENTIALS";
-        if (!await database.Destinations.AnyAsync(item => item.Id == destinationId && item.Kind == "webdav", cancellationToken)) return "DESTINATION_NOT_FOUND";
         await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(hashtextextended('shutterspool-routing', 0))", cancellationToken);
         DestinationEntity? destination = await database.Destinations.FromSqlInterpolated($"SELECT * FROM destinations WHERE \"Id\" = {destinationId} AND \"Kind\" = 'webdav' FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
         if (destination is null) return "DESTINATION_NOT_FOUND";
         if (destination.IsArchived) return "DESTINATION_ARCHIVED";
-        if (expectedRevision is long expected && destination.ConfigurationRevision != expected) return "CONFIGURATION_CONFLICT";
+        if (destination.ConfigurationRevision != expectedRevision) return "CONFIGURATION_CONFLICT";
         WebDavDestinationEntity? config = await database.WebDavDestinations.SingleOrDefaultAsync(item => item.DestinationId == destinationId, cancellationToken);
         bool identityChanged = config is null || config.CollectionUrl != normalized.AbsoluteUri || config.Username != username.Trim();
         if (identityChanged && await database.Deliveries.AnyAsync(item => item.DestinationId == destinationId, cancellationToken)) return "IDENTITY_LOCKED";
@@ -442,12 +428,6 @@ internal sealed class EfWebDavDestinationConfiguration(ShutterSpoolDbContext dat
         await database.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return null;
-    }
-
-    public async Task<(bool Writable, string? ErrorCode)> TestAsync(Guid destinationId, CancellationToken cancellationToken)
-    {
-        (bool writable, string? error, _) = await TestWithRevisionAsync(destinationId, cancellationToken);
-        return (writable, error);
     }
 
     public async Task<(bool Writable, string? ErrorCode, long TestedConfigurationRevision)> TestWithRevisionAsync(

@@ -6,7 +6,7 @@ internal static class LocalDirectoryBrowser
 {
     private const int MaximumEntries = 200;
 
-    public static LocalDirectoryListingResult Browse(string? path, CancellationToken cancellationToken, string? assignedRoot = null)
+    public static LocalDirectoryListingResult Browse(string? path, string? assignedRoot = null, CancellationToken cancellationToken = default)
     {
         try
         {

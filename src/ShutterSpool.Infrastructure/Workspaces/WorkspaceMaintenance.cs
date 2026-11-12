@@ -13,7 +13,7 @@ namespace ShutterSpool.Infrastructure.Workspaces;
 internal sealed class WorkspaceMaintenance(IConfiguration configuration)
 {
     private string ControlMigration => WorkspaceManifest.ValidateMigrationConnection(
-        configuration.GetConnectionString("shutterspool-control-migration"), PostgresWorkspaceRegistry.ControlConnection(configuration));
+        configuration.GetConnectionString("shutterspool-control-migration"), WorkspaceControlDbContext.RuntimeConnection(configuration));
 
     internal async Task RunAsync(string[] args, CancellationToken token)
     {
@@ -23,14 +23,14 @@ internal sealed class WorkspaceMaintenance(IConfiguration configuration)
         await using var transaction = await serial.BeginTransactionAsync(token);
         await using (var command = new NpgsqlCommand("SELECT pg_advisory_xact_lock(721034250721)", serial, transaction))
             await command.ExecuteNonQueryAsync(token);
-        await using WorkspaceControlDbContext control = PostgresWorkspaceRegistry.Database(ControlMigration);
+        await using WorkspaceControlDbContext control = WorkspaceControlDbContext.Create(ControlMigration);
         if (args is ["--workspace-control-init"])
         {
             await InitializeControlAsync(control, token);
             return;
         }
         using var writers = new WorkspaceWriterLease();
-        WorkspaceDefinition[] ready = await new PostgresWorkspaceRegistry(configuration, new WorkspaceContext()).ListReadyAsync(token);
+        WorkspaceDefinition[] ready = await ListReadyAsync(token);
         foreach (WorkspaceDefinition workspace in ready) writers.Acquire(workspace);
         if (args is ["--workspace-provision", var name]) await ProvisionAsync(control, name, token);
         else if (args is ["--workspace-upgrade"]) await UpgradeAsync(ready, token);
@@ -38,6 +38,12 @@ internal sealed class WorkspaceMaintenance(IConfiguration configuration)
             && long.TryParse(expectedText, out long expected) && long.TryParse(nextText, out long next) && next >= 10)
             await ChangeAllocationAsync(control, ready, selected, expected, next, token);
         else throw new ArgumentException("Use --workspace-control-init, --workspace-provision <name>, --workspace-upgrade, or --workspace-allocation <name> <expected bytes> <new bytes>.");
+    }
+
+    private async Task<WorkspaceDefinition[]> ListReadyAsync(CancellationToken token)
+    {
+        await using var control = WorkspaceControlDbContext.Create(WorkspaceControlDbContext.RuntimeConnection(configuration));
+        return await EfWorkspaceRegistry.ReadReadyAsync(control, configuration, token);
     }
 
     private async Task InitializeControlAsync(WorkspaceControlDbContext control, CancellationToken token)
@@ -48,7 +54,7 @@ internal sealed class WorkspaceMaintenance(IConfiguration configuration)
         if (applied.Length == 0 && await HasObjectsAsync(control, token))
             throw new WorkspaceOperator.RefusedException("Control initialization requires an empty database. Existing state is preserved.");
         await control.Database.MigrateAsync(token);
-        string role = new NpgsqlConnectionStringBuilder(PostgresWorkspaceRegistry.ControlConnection(configuration)).Username!;
+        string role = new NpgsqlConnectionStringBuilder(WorkspaceControlDbContext.RuntimeConnection(configuration)).Username!;
         string privileges = $"REVOKE CREATE ON SCHEMA public FROM PUBLIC; REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC; GRANT USAGE ON SCHEMA public TO {Quote(role)}; GRANT SELECT ON ALL TABLES IN SCHEMA public TO {Quote(role)}; GRANT INSERT ON ingress_routes TO {Quote(role)}";
         await control.Database.ExecuteSqlRawAsync(privileges, token);
     }
@@ -69,7 +75,7 @@ internal sealed class WorkspaceMaintenance(IConfiguration configuration)
             if (await HasObjectsAsync(empty, token)) throw new WorkspaceOperator.RefusedException("Provisioning requires an empty tenant database.");
             int count = await control.Workspaces.CountAsync(token);
             long allocated = await control.Workspaces.SumAsync(item => item.AllocatedBytes, token);
-            if (count >= PostgresWorkspaceRegistry.MaximumWorkspaces || checked(allocated + manifest.AllocatedBytes)
+            if (count >= EfWorkspaceRegistry.MaximumWorkspaces || checked(allocated + manifest.AllocatedBytes)
                 > configuration.GetValue<long>("ShutterSpool:Workspaces:UsableCapacityBytes"))
                 throw new WorkspaceOperator.RefusedException("The workspace count or total allocation exceeds the deployment budget.");
             record = new WorkspaceRecord
@@ -86,13 +92,13 @@ internal sealed class WorkspaceMaintenance(IConfiguration configuration)
         {
             WorkspaceRuntime.ValidateRoot(definition);
             await using var runtime = CreateDatabase(manifest.ConnectionString);
-            await WorkspaceRuntime.ValidateDatabaseAsync(runtime, token, definition);
+            await WorkspaceRuntime.ValidateDatabaseAsync(runtime, definition, token);
             return;
         }
         await using (ShutterSpoolDbContext database = CreateDatabase(migration))
         {
             var initializer = new DatabaseInitializer(database);
-            await initializer.InitializeAsync(definition.StorageRoot, token);
+            await initializer.InitializeAsync(definition.StorageRoot, cancellationToken: token);
             await using var transaction = await database.Database.BeginTransactionAsync(token);
             WorkspaceIdentityEntity? identity = await database.WorkspaceIdentities.SingleOrDefaultAsync(token);
             if (identity is null)
@@ -115,7 +121,7 @@ internal sealed class WorkspaceMaintenance(IConfiguration configuration)
             }
             await transaction.CommitAsync(token);
             var protector = new SecretProtector(Options.Create(configuration.GetSection("ShutterSpool:Security").Get<CredentialProtectionOptions>() ?? new()));
-            await initializer.ValidateSecretKeyAsync(protector, token, enroll: true);
+            await initializer.ValidateSecretKeyAsync(protector, enroll: true, token);
             string role = new NpgsqlConnectionStringBuilder(manifest.ConnectionString).Username!;
             string privileges = $"REVOKE CREATE ON SCHEMA public FROM PUBLIC; GRANT USAGE ON SCHEMA public TO {Quote(role)}; GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO {Quote(role)}; GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO {Quote(role)}; REVOKE INSERT,UPDATE,DELETE ON workspace_identity,\"__EFMigrationsHistory\",deployment_key_checks FROM {Quote(role)}";
             await database.Database.ExecuteSqlRawAsync(privileges, token);
@@ -129,9 +135,9 @@ internal sealed class WorkspaceMaintenance(IConfiguration configuration)
         }
         WorkspaceRuntime.ValidateRoot(definition);
         await using (var runtime = CreateDatabase(manifest.ConnectionString))
-            await WorkspaceRuntime.ValidateDatabaseAsync(runtime, token, definition);
-        WorkspaceDefinition[] established = await new PostgresWorkspaceRegistry(configuration, new WorkspaceContext()).ListReadyAsync(token);
-        await InfrastructureServices.ValidateWorkspaceInventoryAsync(configuration, [.. established, definition], token);
+            await WorkspaceRuntime.ValidateDatabaseAsync(runtime, definition, token);
+        WorkspaceDefinition[] established = await ListReadyAsync(token);
+        await WorkspaceInventoryValidator.ValidateAsync(configuration, [.. established, definition], token);
         record.Ready = true;
         await control.SaveChangesAsync(token);
     }
@@ -165,7 +171,7 @@ internal sealed class WorkspaceMaintenance(IConfiguration configuration)
         var context = new WorkspaceContext(); context.Bind(current);
         IConfiguration scoped = WorkspaceRuntime.Configure(configuration, context);
         await using var database = CreateDatabase(manifest.ConnectionString);
-        await WorkspaceRuntime.ValidateDatabaseAsync(database, token, current);
+        await WorkspaceRuntime.ValidateDatabaseAsync(database, current, token);
         var quota = new EfSpoolQuotaStore(database, new Spool.FileSystemSpoolAccounting(scoped, TimeProvider.System), TimeProvider.System, context);
         var snapshot = await quota.GetSnapshotAsync(token);
         if (!snapshot.IsKnown || checked(snapshot.UsedBytes + snapshot.ReservedBytes) > next || snapshot.Settings.QuotaBytes > next)

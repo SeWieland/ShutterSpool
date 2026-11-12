@@ -5,8 +5,8 @@ namespace ShutterSpool.Infrastructure.Media;
 
 internal static class SeekableMediaStream
 {
-    public static async Task<SeekableMedia> OpenAsync(Stream original, long size, long maximumSize, CancellationToken cancellationToken,
-        WorkspaceContext? workspace = null, ISpoolQuotaStore? quota = null)
+    public static async Task<SeekableMedia> OpenAsync(Stream original, long size, long maximumSize,
+        WorkspaceContext? workspace = null, ISpoolQuotaStore? quota = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(original);
         if (!original.CanRead) throw new MediaUnreadableException();

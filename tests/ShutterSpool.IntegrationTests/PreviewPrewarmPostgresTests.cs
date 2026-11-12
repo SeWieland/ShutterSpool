@@ -37,7 +37,7 @@ public sealed class PreviewPrewarmPostgresTests
             Guid sourceId = Guid.NewGuid(), rawId = Guid.NewGuid(), jpegId = Guid.NewGuid();
             string spoolKey = $"spool/{jpegId:N}";
             await using var database = new ShutterSpoolDbContext(options);
-            await new DatabaseInitializer(database).InitializeAsync(root, TestContext.Current.CancellationToken);
+            await new DatabaseInitializer(database).InitializeAsync(root, cancellationToken: TestContext.Current.CancellationToken);
             database.Sources.Add(new SourceEntity { Id = sourceId, Name = "synthetic-preview-source" });
             database.SourceCredentials.Add(new SourceCredentialEntity
             {
@@ -113,7 +113,8 @@ public sealed class PreviewPrewarmPostgresTests
             Assert.True(await restartedStore.FinishAsync(recoveredOutput, PreviewWarmOutcome.Ready, now.AddMinutes(2), TestContext.Current.CancellationToken));
             Assert.Null(await restartedStore.ClaimAsync(settings, now.AddMinutes(2), TestContext.Current.CancellationToken));
             Assert.Equal(4, handler.Requests);
-            Assert.Equal(PreviewState.Ready, (await previews.GetAsync(recoveredOutput.CaptureId, PreviewProfile.Detail, TestContext.Current.CancellationToken)).State);
+            Assert.Equal(PreviewState.Ready, (await previews.GetAsync(recoveredOutput.CaptureId, PreviewProfile.Detail,
+                cancellationToken: TestContext.Current.CancellationToken)).State);
             Assert.Equal(4, handler.Requests);
 
             settings.GridWidth = 640;

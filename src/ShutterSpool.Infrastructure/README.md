@@ -8,6 +8,28 @@ Read the [architecture](../../docs/architecture/system-boundaries.md) and [core 
 The sections below are an implementation and operations reference for changing those adapters safely.
 For transaction/lock ordering, use the [persistence reference](../../docs/architecture/persistence.md).
 
+## Service registration and startup
+
+`InfrastructureServices` groups registrations by responsibility; `WorkspaceStartup` performs initialization before Server accepts requests.
+Registration itself does not select a workspace or recover media.
+
+| Lifetime | What it holds |
+| --- | --- |
+| Process | Frozen deployment configuration and workspace inventory, shared worker limits, and per-workspace spool/preview resources. |
+| Control database factory | A standard `IDbContextFactory<WorkspaceControlDbContext>`, available before workspace selection. `EfWorkspaceRegistry` creates and disposes a context for each operation. |
+| Workspace scope | One immutable `WorkspaceContext`, its derived configuration and the scoped `ShutterSpoolDbContext` factory used by tenant adapters. |
+
+The registry resolves ready workspaces and camera routes from the control database; it never selects a tenant database implicitly.
+Fresh control contexts also keep a failed registry write from leaving tracked entities in the next operation.
+Requests and worker iterations bind their workspace before resolving tenant services. The tenant factory then uses that workspace's runtime connection; resolving it before binding fails.
+The [authorization guide](../../docs/architecture/authentication-and-authorization.md#workspace-selection) explains the request order.
+
+Startup reads and validates the complete ready-workspace inventory, freezes those mappings, then acquires all storage writer leases.
+Within each bound workspace scope it validates the schema, database/storage identity and encryption-key custody before restore reconciliation and ingest recovery.
+It restores saved preview settings and quota accounting and completes camera recovery before serving requests.
+`WorkspaceInventoryValidator` is shared with maintenance so allocation and database-target checks have one owner.
+Changing database or storage targets requires stopped writers and a restart; initialization is not repeated on each request.
+
 ## Retention persistence and cleanup
 
 Automatic cleanup holds a dedicated PostgreSQL session advisory lease for the full bounded pass. A competing replica skips that pass; per-Asset original-use fences still protect physical removal. Pressure episodes continue to the recovery target, and only finite pending reclamation reduces further selection; protected occupancy remains in admission accounting.

@@ -33,7 +33,7 @@ public sealed class MetadataPipelinePostgresTests
             IngestResult accepted;
             await using (var ingestDatabase = new ShutterSpoolDbContext(options))
             {
-                await new DatabaseInitializer(ingestDatabase).InitializeAsync(root, TestContext.Current.CancellationToken);
+                await new DatabaseInitializer(ingestDatabase).InitializeAsync(root, cancellationToken: TestContext.Current.CancellationToken);
                 Guid sourceId = Guid.NewGuid();
                 ingestDatabase.Sources.Add(new SourceEntity { Id = sourceId, Name = $"synthetic-{sourceId:N}" });
                 ingestDatabase.SourceCredentials.Add(new SourceCredentialEntity

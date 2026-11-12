@@ -28,7 +28,7 @@ internal sealed class MetadataExtractorMediaMetadataParser(ShutterSpool.Applicat
         SeekableMedia seekable;
         try
         {
-            seekable = await SeekableMediaStream.OpenAsync(original, size, MaximumFileSize, cancellationToken, workspace, quota);
+            seekable = await SeekableMediaStream.OpenAsync(original, size, MaximumFileSize, workspace, quota, cancellationToken);
         }
         catch (MediaSizeLimitException)
         {
