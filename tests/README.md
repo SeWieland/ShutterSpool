@@ -5,12 +5,12 @@ Fast substitutes are useful for workflows, but they cannot establish a filesyste
 
 ## CI frequency
 
-Pull requests targeting `main` also run `Dependency review`, which rejects newly introduced dependencies with known high or critical vulnerabilities, including development dependencies.
+All pull requests, including stacked changes targeting another feature branch, run `Dependency review`, which rejects newly introduced dependencies with known high or critical vulnerabilities, including development dependencies.
 Dependabot checks GitHub Actions, npm, NuGet and Docker images weekly; updates still require the normal checks and maintainer review.
 Docker scans the literal build-stage references in `deploy/Server.Dockerfile`, the shared `deploy/images/compose.yaml` pins, and the packaged component/proxy YAML files. Tags identify the update stream; digests remain the executable identity. SDK updates must still satisfy `global.json`, and database major-version changes need a supported migration path.
 GitHub-managed CodeQL scans Actions, C#, JavaScript/TypeScript and Python on supported pushes and pull requests and on its scheduled runs. Static analysis complements the checks below; it does not qualify camera or recovery behavior.
 
-Pushes to `main` and pull requests targeting `main` run the .NET suites with PostgreSQL, frontend type/test/build checks, migration and generated-client consistency checks, camera-client security, edge certificate validation and release-builder checks.
+Pushes to `main` and all pull requests run the .NET suites with PostgreSQL, frontend type/test/build checks, migration and generated-client consistency checks, camera-client security, edge certificate validation and release-builder checks.
 The release-builder tests use temporary fixtures and perform no application builds or registry writes.
 `node --test tools/generate-attribution.test.mjs` checks metadata generation with controlled registry responses and also runs through `npm test`. Frontend builds resolve the actual pinned SFTPGo metadata; they require outbound access to Docker Hub.
 Version tags on commits in `main` with successful CI run the [`release.yml` workflow](../.github/workflows/release.yml), which builds and pushes the image with the official Docker action, packages the Compose ZIP, checks anonymous manifest retrieval and release assets, then publishes the GitHub Release.
@@ -35,9 +35,14 @@ For a shared controlled PostgreSQL/provider host, bound collection concurrency w
 
 Unix permission checks, Windows symbolic-link privileges, the distinct Linux `/dev/shm` storage-mount check, and `SHUTTERSPOOL_LOCAL_CAPACITY_TEST_ROOT` tiny-filesystem fault checks are separately identified. Synthetic checks do not establish physical-camera or external-provider compatibility.
 
-After starting the local Keycloak companion through Aspire, run `pwsh -File tests/verify-keycloak-bootstrap.ps1 -KeycloakContainer <running-keycloak-container-name>` from the repository root. This separate runtime check uses the mounted reconciliation script and a uniquely named disposable realm to verify fresh subject retention, exact username matching, repeated reconciliation and preservation of identity/credentials on a rejected subject mismatch. It deletes only the realm and temporary files created by that invocation; existing realms and deployment secrets are retained. PostgreSQL CI acceptance remains mandatory independently of this companion check.
+After starting the local Keycloak companion through Aspire, run `pwsh -File tests/verify-keycloak-bootstrap.ps1 -KeycloakContainer <running-keycloak-container-name>` from the repository root.
+This runtime check executes the mounted reconciliation script in uniquely named disposable realms. It verifies fresh subject retention, exact username matching, repeated reconciliation and preservation of identity/credentials on a rejected subject mismatch.
+It also checks fresh-realm provisioning with optional email/name fields and no SMTP, then verifies that reconciliation preserves operator-managed profile policy and account enabled, verification and MFA-action controls.
+It deletes only its own realms and temporary files; existing realms and deployment secrets are retained.
+Successful password and PKCE login need separate runtime qualification. PostgreSQL CI acceptance remains mandatory independently of this companion check.
 
-The database suite checks the single initial migration, model/snapshot consistency, fresh startup/restart, concurrent startup serialization, SQL-owned key custody and Collection constraints, and non-destructive refusal of historical histories and unversioned objects. It does not exercise upgrades from historical migration chains.
+The database suite checks tenant/control migration models, fresh provisioning/restart, writer exclusion, database/storage identity, key custody and Collection constraints, and non-destructive refusal of incompatible histories and unversioned objects.
+It does not qualify conversion of older installation layouts or native filesystem allocation enforcement.
 
 Preserve meaningful regression expectations when changing implementation boundaries. Tests supply evidence for the request and documented safety constraints, rather than replacing them.
 

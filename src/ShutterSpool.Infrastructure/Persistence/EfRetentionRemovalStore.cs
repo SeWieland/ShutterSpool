@@ -155,8 +155,8 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
             CaptureEntity? capture = await database.Captures.AsNoTracking()
                 .SingleOrDefaultAsync(item => item.Id == id, cancellationToken);
             if (capture is null) continue;
-            CaptureRetentionSummary summary = await captures.BuildSummaryAsync(capture, now,
-                cancellationToken, policy);
+            CaptureRetentionSummary summary = await captures.BuildSummaryAsync(capture, now, policy,
+                cancellationToken);
             DateTimeOffset? eligibleAt = underPressure ? summary.PressureEligibleAt : summary.TrashEligibleAt;
             DateTimeOffset? indexedAt = underPressure ? capture.RetentionPressureEligibleAt : capture.RetentionTrashEligibleAt;
             if (capture.RetentionTier != (summary.Tier is null ? null : (int)summary.Tier.Value)
@@ -222,8 +222,8 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
                 continue;
             }
 
-            CaptureRetentionSummary summary = await captures.BuildSummaryAsync(capture, now,
-                cancellationToken, policy);
+            CaptureRetentionSummary summary = await captures.BuildSummaryAsync(capture, now, policy,
+                cancellationToken);
             capture.RetentionTier = summary.Tier is null ? null : (int)summary.Tier.Value;
             capture.RetentionPressureEligibleAt = summary.PressureEligibleAt;
             capture.RetentionTrashEligibleAt = summary.TrashEligibleAt;
@@ -255,7 +255,7 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
         }
 
         RetentionSettings policy = await ReadSettingsAsync(cancellationToken);
-        CaptureRetentionSummary summary = await captures.BuildSummaryAsync(capture, now, cancellationToken, policy);
+        CaptureRetentionSummary summary = await captures.BuildSummaryAsync(capture, now, policy, cancellationToken);
         DateTimeOffset? eligibleAt = underPressure ? summary.PressureEligibleAt : summary.TrashEligibleAt;
         if (!SelectionFactsMatch(capture, summary, eligibleAt, underPressure))
         {
@@ -641,7 +641,7 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
         RetentionSettings settings = policyJson is null
             ? new RetentionSettings()
             : JsonSerializer.Deserialize<RetentionSettings>(policyJson, JsonOptions) ?? new RetentionSettings();
-        return await captures.BuildSummaryAsync(capture, now, cancellationToken, settings);
+        return await captures.BuildSummaryAsync(capture, now, settings, cancellationToken);
     }
 
     private async Task<RetentionSettings> ReadSettingsAsync(CancellationToken cancellationToken)

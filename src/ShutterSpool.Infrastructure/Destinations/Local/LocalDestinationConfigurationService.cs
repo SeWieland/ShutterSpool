@@ -1,28 +1,24 @@
 using Microsoft.EntityFrameworkCore;
 using ShutterSpool.Application.Delivery;
+using ShutterSpool.Application.Destinations;
+using ShutterSpool.Application.Workspaces;
 using ShutterSpool.Infrastructure.Persistence;
 
 namespace ShutterSpool.Infrastructure.Destinations.Local;
 
 // Manages the fixed local root and mount marker; connection tests do not mutate delivery work.
-internal sealed class LocalDestinationConfigurationService(ShutterSpoolDbContext database) : ILocalDestinationConfiguration
+internal sealed class LocalDestinationConfigurationService(ShutterSpoolDbContext database,
+    DestinationCapabilities? capabilities = null, WorkspaceContext? workspace = null) : ILocalDestinationConfiguration
 {
     public Task<LocalDirectoryListingResult> BrowseAsync(string? path, CancellationToken cancellationToken) =>
-        Task.FromResult(LocalDirectoryBrowser.Browse(path, cancellationToken));
+        Task.FromResult(!(capabilities ?? DestinationCapabilities.All).IsEnabled("local")
+            ? new LocalDirectoryListingResult(null, "Local destinations are unavailable in this deployment.")
+            : LocalDirectoryBrowser.Browse(path, LocalDestinationPaths.AssignedRoot(workspace), cancellationToken));
 
-    public Task<string?> GetRootAsync(Guid destinationId, CancellationToken cancellationToken) =>
-        database.LocalDestinations.AsNoTracking().Where(item => item.DestinationId == destinationId)
-            .Select(item => item.RootPath).SingleOrDefaultAsync(cancellationToken);
-
-    public async Task<string?> ConfigureAsync(Guid destinationId, string root, CancellationToken cancellationToken)
-        => await ConfigureCoreAsync(destinationId, null, root, cancellationToken);
-
-    public Task<string?> ConfigureAsync(Guid destinationId, long expectedRevision, string root, CancellationToken cancellationToken) =>
-        ConfigureCoreAsync(destinationId, expectedRevision, root, cancellationToken);
-
-    private async Task<string?> ConfigureCoreAsync(Guid destinationId, long? expectedRevision, string root,
+    public async Task<string?> ConfigureAsync(Guid destinationId, long expectedRevision, string root,
         CancellationToken cancellationToken)
     {
+        if (!(capabilities ?? DestinationCapabilities.All).IsEnabled("local")) return "DESTINATION_KIND_DISABLED";
         root = LocalDirectoryBrowser.NormalizePath(root);
         if (string.IsNullOrWhiteSpace(root) || root.Length > 2_048)
             return "INVALID_ROOT";
@@ -33,45 +29,55 @@ internal sealed class LocalDestinationConfigurationService(ShutterSpoolDbContext
             normalized = Path.GetFullPath(root);
         }
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException) { return "INVALID_ROOT"; }
-        if (!await database.Destinations.AsNoTracking().AnyAsync(item => item.Id == destinationId && item.Kind == "local" && !item.IsArchived, cancellationToken))
-            return "LOCAL_DESTINATION_NOT_FOUND";
+        if (!LocalDestinationPaths.IsAllowed(normalized, workspace)) return "UNSAFE_PATH";
         await database.Database.OpenConnectionAsync(cancellationToken);
         bool routingLockHeld = false;
         try
         {
             await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_lock(hashtextextended('shutterspool-routing', 0))", cancellationToken);
             routingLockHeld = true;
-            string? current = await GetRootAsync(destinationId, cancellationToken);
-            long revision = await database.Destinations.AsNoTracking().Where(item => item.Id == destinationId)
-                .Select(item => item.ConfigurationRevision).SingleAsync(cancellationToken);
-            if (expectedRevision is long expected && expected != revision) return "CONFIGURATION_CONFLICT";
-            if (expectedRevision is null && current is not null && PathEquals(current, normalized))
-                return LocalFileDelivery.TestRoot(normalized, destinationId).ErrorCode;
-            if (current is not null && !PathEquals(current, normalized)
-                && await database.Deliveries.AnyAsync(item => item.DestinationId == destinationId, cancellationToken))
-                return "ROOT_LOCKED";
-
+            var current = await (from saved in database.Destinations.AsNoTracking()
+                where saved.Id == destinationId && saved.Kind == "local" && !saved.IsArchived
+                join rootConfig in database.LocalDestinations.AsNoTracking() on saved.Id equals rootConfig.DestinationId into roots
+                from rootConfig in roots.DefaultIfEmpty()
+                select new { saved.ConfigurationRevision, RootPath = rootConfig == null ? null : rootConfig.RootPath })
+                .SingleOrDefaultAsync(cancellationToken);
+            if (current is null) return "LOCAL_DESTINATION_NOT_FOUND";
+            if (expectedRevision != current.ConfigurationRevision) return "CONFIGURATION_CONFLICT";
+            bool rootUnchanged = current.RootPath is not null && PathEquals(current.RootPath, normalized);
             // Keep filesystem work outside the PostgreSQL transaction while the shared routing lock fences writers.
-            try { LocalFileDelivery.ProvisionRoot(normalized, destinationId); }
-            catch (UnauthorizedAccessException) { return "PERMISSION_DENIED"; }
-            catch (InvalidDataException) { return "UNSAFE_PATH"; }
-            catch (PlatformNotSupportedException) { return "UNSUPPORTED_PUBLICATION"; }
-            catch (IOException) { return "ROOT_UNAVAILABLE"; }
+            if (rootUnchanged)
+            {
+                string? error = LocalFileDelivery.TestRoot(normalized, destinationId).ErrorCode;
+                if (error is not null) return error;
+            }
+            else
+            {
+                if (current.RootPath is not null
+                    && await database.Deliveries.AnyAsync(item => item.DestinationId == destinationId, cancellationToken))
+                    return "ROOT_LOCKED";
+                try { LocalFileDelivery.ProvisionRoot(normalized, destinationId); }
+                catch (UnauthorizedAccessException) { return "PERMISSION_DENIED"; }
+                catch (InvalidDataException) { return "UNSAFE_PATH"; }
+                catch (PlatformNotSupportedException) { return "UNSUPPORTED_PUBLICATION"; }
+                catch (IOException) { return "ROOT_UNAVAILABLE"; }
+            }
 
             await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            // EF may reopen a broken connection here; fence the final write on the transaction's connection.
             await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(hashtextextended('shutterspool-routing', 0))", cancellationToken);
             DestinationEntity? destination = await database.Destinations.FromSqlInterpolated($"SELECT * FROM destinations WHERE \"Id\" = {destinationId} AND \"Kind\" = 'local' AND NOT \"IsArchived\" FOR UPDATE")
                 .SingleOrDefaultAsync(cancellationToken);
             if (destination is null) return "LOCAL_DESTINATION_NOT_FOUND";
-            if (expectedRevision is long requestedRevision && destination.ConfigurationRevision != requestedRevision)
+            if (destination.ConfigurationRevision != expectedRevision)
                 return "CONFIGURATION_CONFLICT";
-            LocalDestinationEntity? config = await database.LocalDestinations
-                .SingleOrDefaultAsync(item => item.DestinationId == destinationId, cancellationToken);
-            if (config?.RootPath is { } settled && PathEquals(settled, normalized))
+            if (rootUnchanged)
             {
                 await transaction.CommitAsync(cancellationToken);
                 return null;
             }
+            LocalDestinationEntity? config = await database.LocalDestinations
+                .SingleOrDefaultAsync(item => item.DestinationId == destinationId, cancellationToken);
             if (config is null)
                 database.LocalDestinations.Add(new LocalDestinationEntity { DestinationId = destinationId, RootPath = normalized });
             else config.RootPath = normalized;
@@ -88,12 +94,6 @@ internal sealed class LocalDestinationConfigurationService(ShutterSpoolDbContext
         }
     }
 
-    public async Task<(bool Writable, string? ErrorCode)> TestAsync(Guid destinationId, CancellationToken cancellationToken)
-    {
-        string? root = await GetRootAsync(destinationId, cancellationToken);
-        return root is null ? (false, "LOCAL_ROOT_NOT_CONFIGURED") : LocalFileDelivery.TestRoot(root, destinationId);
-    }
-
     public async Task<(bool Writable, string? ErrorCode, long TestedConfigurationRevision)> TestWithRevisionAsync(
         Guid destinationId, CancellationToken token)
     {
@@ -104,8 +104,10 @@ internal sealed class LocalDestinationConfigurationService(ShutterSpoolDbContext
             select new { destination.ConfigurationRevision, destination.IsArchived, RootPath = root == null ? null : root.RootPath })
             .SingleOrDefaultAsync(token);
         if (config is null) return (false, "LOCAL_DESTINATION_NOT_FOUND", 0);
+        if (!(capabilities ?? DestinationCapabilities.All).IsEnabled("local")) return (false, "DESTINATION_KIND_DISABLED", config.ConfigurationRevision);
         if (config.IsArchived) return (false, "DESTINATION_ARCHIVED", config.ConfigurationRevision);
         if (config.RootPath is null) return (false, "LOCAL_ROOT_NOT_CONFIGURED", config.ConfigurationRevision);
+        if (!LocalDestinationPaths.IsAllowed(config.RootPath, workspace)) return (false, "UNSAFE_PATH", config.ConfigurationRevision);
         (bool writable, string? error) = LocalFileDelivery.TestRoot(config.RootPath, destinationId);
         return (writable, error, config.ConfigurationRevision);
     }

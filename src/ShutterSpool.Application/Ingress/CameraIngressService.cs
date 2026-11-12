@@ -20,10 +20,10 @@ public sealed class CameraIngressService(
     ISourceAuthenticationObservationRecorder authenticationObservations,
     ICameraTransferActivityPublisher? transferActivity = null)
 {
-    public async Task<CameraLogin?> AuthenticateAsync(string username, string secret, CancellationToken cancellationToken,
-        SourceConnectionProfile connectionProfile = SourceConnectionProfile.ModernFtps)
+    public async Task<CameraLogin?> AuthenticateAsync(string username, string secret,
+        SourceConnectionProfile connectionProfile = SourceConnectionProfile.ModernFtps, CancellationToken cancellationToken = default)
     {
-        SourceCredentialCheck check = await credentials.VerifyAttemptAsync(username, secret, cancellationToken, connectionProfile);
+        SourceCredentialCheck check = await credentials.VerifyAttemptAsync(username, secret, connectionProfile, cancellationToken);
         if (check.Access is not SourceAccess access)
         {
             if (check.VerifiedButRejectedSourceId is Guid sourceId)
@@ -39,7 +39,7 @@ public sealed class CameraIngressService(
             authenticationObservations.Record(new(access.SourceId, SourceAuthenticationOutcome.Rejected, timeProvider.GetUtcNow()));
             throw new CameraSourceRootInitializationException(access.SourceId);
         }
-        CameraLogin? login = await store.CreateLoginAsync(access.SourceId, username, access.CredentialGeneration, cancellationToken, connectionProfile);
+        CameraLogin? login = await store.CreateLoginAsync(access.SourceId, username, access.CredentialGeneration, connectionProfile, cancellationToken);
         if (login is not null)
         {
             credentials.RecordSucceeded(login.SourceId);
@@ -110,8 +110,8 @@ public sealed class CameraIngressService(
         try
         {
             long size = await ingest.ReceiveAdmittedAsync(new(admission.SourceId,
-                virtualPath[(virtualPath.LastIndexOf('/') + 1)..], content, maximumBytes, admission.Id), cancellationToken,
-                receiveKey, assetId);
+                virtualPath[(virtualPath.LastIndexOf('/') + 1)..], content, maximumBytes, admission.Id),
+                receiveKey, assetId, cancellationToken);
             await store.MarkReceivedAsync(admission.Id, size, cancellationToken);
         }
         catch
@@ -243,8 +243,14 @@ public sealed class CameraIngressService(
         return sourceId is null ? (0, 0) : await store.GetDirectorySizeAsync(sourceId.Value, cancellationToken);
     }
 
-    private async Task<Guid?> FindSourceIdAsync(Guid loginId, CancellationToken cancellationToken) =>
-        (await store.FindLoginAsync(loginId, cancellationToken))?.SourceId;
+    private async Task<Guid?> FindSourceIdAsync(Guid loginId, CancellationToken cancellationToken)
+    {
+        CameraLogin? login = await store.FindLoginAsync(loginId, cancellationToken);
+        if (login is null || !await credentials.IsCurrentAsync(login.Username,
+            new(login.SourceId, login.VirtualRoot, login.CredentialGeneration), login.ConnectionProfile, cancellationToken))
+            throw new CameraIngressRejectedException("The camera login is unavailable.");
+        return login.SourceId;
+    }
 
     public Task<CameraLogin?> FindLoginAsync(Guid loginId, CancellationToken cancellationToken) =>
         store.FindLoginAsync(loginId, cancellationToken);

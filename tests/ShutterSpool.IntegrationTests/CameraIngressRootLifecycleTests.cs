@@ -17,7 +17,7 @@ public sealed partial class CameraIngressIntegrationTests
         await using var fixture = await CameraIngressFixture.CreateAsync();
         Guid sourceId = await fixture.CreateSourceAsync("root-login", "camera-secret");
 
-        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_root-login", "camera-secret", Token))!;
+        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_root-login", "camera-secret", cancellationToken: Token))!;
 
         Assert.True(Directory.Exists(SourceRoot(fixture, sourceId)));
         CameraFileInfo root = (await fixture.Ingress.GetFileInfoAsync(login.Id, "/", Token))!;
@@ -32,20 +32,20 @@ public sealed partial class CameraIngressIntegrationTests
     {
         await using var fixture = await CameraIngressFixture.CreateAsync();
         Guid sourceId = await fixture.CreateSourceAsync("root-reconnect", "camera-secret");
-        CameraLogin firstLogin = (await fixture.Ingress.AuthenticateAsync("cam_root-reconnect", "camera-secret", Token))!;
+        CameraLogin firstLogin = (await fixture.Ingress.AuthenticateAsync("cam_root-reconnect", "camera-secret", cancellationToken: Token))!;
         await fixture.Ingress.CreateDirectoryAsync(firstLogin.Id, "/DCIM/100MEDIA", Token);
         byte[] bytes = [3, 1, 4, 1, 5, 9];
         IngestResult accepted = await CommitSyntheticUploadAsync(fixture, firstLogin, "/DCIM/100MEDIA/DSC0001.JPG", bytes);
 
         await using var restartedDatabase = new ShutterSpoolDbContext(fixture.DatabaseOptions);
         CameraIngressService restarted = fixture.CreateIngress(restartedDatabase);
-        CameraLogin restartedLogin = (await restarted.AuthenticateAsync("cam_root-reconnect", "camera-secret", Token))!;
+        CameraLogin restartedLogin = (await restarted.AuthenticateAsync("cam_root-reconnect", "camera-secret", cancellationToken: Token))!;
         ShutterSpoolDbContext[] concurrentDatabases = Enumerable.Range(0, 4)
             .Select(_ => new ShutterSpoolDbContext(fixture.DatabaseOptions)).ToArray();
         try
         {
             CameraLogin?[] concurrentLogins = await Task.WhenAll(concurrentDatabases.Select(database =>
-                fixture.CreateIngress(database).AuthenticateAsync("cam_root-reconnect", "camera-secret", Token)));
+                fixture.CreateIngress(database).AuthenticateAsync("cam_root-reconnect", "camera-secret", cancellationToken: Token)));
 
             Assert.All(concurrentLogins, login => Assert.NotNull(login));
         }
@@ -69,7 +69,7 @@ public sealed partial class CameraIngressIntegrationTests
     {
         await using var fixture = await CameraIngressFixture.CreateAsync();
         Guid sourceId = await fixture.CreateSourceAsync("root-recovery", "camera-secret");
-        CameraLogin firstLogin = (await fixture.Ingress.AuthenticateAsync("cam_root-recovery", "camera-secret", Token))!;
+        CameraLogin firstLogin = (await fixture.Ingress.AuthenticateAsync("cam_root-recovery", "camera-secret", cancellationToken: Token))!;
         byte[] bytes = [2, 7, 1, 8, 2, 8];
         IngestResult accepted = await CommitSyntheticUploadAsync(fixture, firstLogin, "/DSC0002.JPG", bytes);
         string sourceDirectory = Path.Combine(fixture.DirectoriesRoot, sourceId.ToString("N"));
@@ -77,7 +77,7 @@ public sealed partial class CameraIngressIntegrationTests
 
         await using var restartedDatabase = new ShutterSpoolDbContext(fixture.DatabaseOptions);
         CameraIngressService restarted = fixture.CreateIngress(restartedDatabase);
-        CameraLogin recoveredLogin = (await restarted.AuthenticateAsync("cam_root-recovery", "camera-secret", Token))!;
+        CameraLogin recoveredLogin = (await restarted.AuthenticateAsync("cam_root-recovery", "camera-secret", cancellationToken: Token))!;
 
         Assert.NotEqual(firstLogin.Id, recoveredLogin.Id);
         Assert.True(Directory.Exists(SourceRoot(fixture, sourceId)));
@@ -92,7 +92,7 @@ public sealed partial class CameraIngressIntegrationTests
         await using var fixture = await CameraIngressFixture.CreateAsync();
         Guid sourceId = await fixture.CreateSourceAsync("root-invalid", "camera-secret");
 
-        Assert.Null(await fixture.Ingress.AuthenticateAsync("cam_root-invalid", "wrong-secret", Token));
+        Assert.Null(await fixture.Ingress.AuthenticateAsync("cam_root-invalid", "wrong-secret", cancellationToken: Token));
 
         Assert.False(Directory.Exists(fixture.DirectoriesRoot));
         Assert.Empty(await fixture.Database.CameraLogins.AsNoTracking().ToListAsync(Token));
@@ -113,7 +113,7 @@ public sealed partial class CameraIngressIntegrationTests
         await File.WriteAllBytesAsync(obstruction, contents, Token);
 
         CameraSourceRootInitializationException failure = await Assert.ThrowsAsync<CameraSourceRootInitializationException>(() =>
-            fixture.Ingress.AuthenticateAsync("cam_root-file-obstruction", "camera-secret", Token));
+            fixture.Ingress.AuthenticateAsync("cam_root-file-obstruction", "camera-secret", cancellationToken: Token));
 
         Assert.Equal(sourceId, failure.SourceId);
         Assert.Null(failure.InnerException);
@@ -148,7 +148,7 @@ public sealed partial class CameraIngressIntegrationTests
             }
 
             CameraSourceRootInitializationException failure = await Assert.ThrowsAsync<CameraSourceRootInitializationException>(() =>
-                fixture.Ingress.AuthenticateAsync("cam_root-link-obstruction", "camera-secret", Token));
+                fixture.Ingress.AuthenticateAsync("cam_root-link-obstruction", "camera-secret", cancellationToken: Token));
 
             Assert.Equal(sourceId, failure.SourceId);
             Assert.Null(failure.InnerException);
@@ -182,7 +182,7 @@ public sealed partial class CameraIngressIntegrationTests
         });
         CameraIngressService ingress = fixture.CreateIngress(ingressDatabase, directoriesOverride: directories);
 
-        Assert.Null(await ingress.AuthenticateAsync("cam_root-authority-race", "camera-secret", Token));
+        Assert.Null(await ingress.AuthenticateAsync("cam_root-authority-race", "camera-secret", cancellationToken: Token));
 
         Assert.True(Directory.Exists(SourceRoot(fixture, sourceId)));
         Assert.Empty(await ingressDatabase.CameraLogins.AsNoTracking().ToListAsync(Token));
@@ -201,7 +201,7 @@ public sealed partial class CameraIngressIntegrationTests
         var directories = new BlockingDirectories(fixture.Directories);
         CameraIngressService ingress = fixture.CreateIngress(ingressDatabase, directoriesOverride: directories);
 
-        Task<CameraLogin?> firstLogin = ingress.AuthenticateAsync(username, "owner-a-secret", Token);
+        Task<CameraLogin?> firstLogin = ingress.AuthenticateAsync(username, "owner-a-secret", cancellationToken: Token);
         await directories.Entered.Task.WaitAsync(Token);
         try
         {
@@ -227,7 +227,7 @@ public sealed partial class CameraIngressIntegrationTests
             Assert.DoesNotContain(fixture.AuthenticationRecorder.Observations,
                 observation => observation.Outcome == SourceAuthenticationOutcome.Succeeded);
 
-            CameraLogin validSecondLogin = (await ingress.AuthenticateAsync(username, "owner-b-secret", Token))!;
+            CameraLogin validSecondLogin = (await ingress.AuthenticateAsync(username, "owner-b-secret", cancellationToken: Token))!;
 
             Assert.Equal(secondSourceId, validSecondLogin.SourceId);
             Assert.True(Directory.Exists(SourceRoot(fixture, secondSourceId)));

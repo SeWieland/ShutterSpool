@@ -2,10 +2,11 @@ using Microsoft.EntityFrameworkCore;
 using ShutterSpool.Application.Routing;
 using ShutterSpool.Domain.Delivery;
 using ShutterSpool.Domain.Routing;
+using ShutterSpool.Application.Destinations;
 
 namespace ShutterSpool.Infrastructure.Persistence;
 
-internal sealed class DestinationRoutingAdminService(ShutterSpoolDbContext database) : IDestinationRoutingStore
+internal sealed class DestinationRoutingAdminService(ShutterSpoolDbContext database, DestinationCapabilities? capabilities = null) : IDestinationRoutingStore
 {
     public async Task<DestinationRouting?> GetAsync(Guid destinationId, CancellationToken cancellationToken)
     {
@@ -33,6 +34,7 @@ internal sealed class DestinationRoutingAdminService(ShutterSpoolDbContext datab
         await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(hashtextextended('shutterspool-routing', 0))", cancellationToken);
         DestinationEntity destination = await database.Destinations.FromSqlInterpolated($"SELECT * FROM destinations WHERE \"Id\" = {routing.DestinationId} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken) ?? throw new InvalidOperationException("Destination does not exist.");
+        if (routing.Enabled) (capabilities ?? DestinationCapabilities.All).EnsureEnabled(destination.Kind);
         if (destination.IsArchived)
         {
             await transaction.CommitAsync(cancellationToken);

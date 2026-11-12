@@ -11,12 +11,13 @@ created=false
 kcadm() { /opt/keycloak/bin/kcadm.sh "$@" --config "$work/kcadm.config"; }
 cleanup() {
     if [ "$created" = true ]; then kcadm delete "realms/$realm" >/dev/null; fi
-    rm -f "$work/kcadm.config" "$work/reconcile.sh" "$work/select-login-theme.sh" "$work/failed-set-password" "$work/shutterspool-realm.json" "$work/shutterspool-server-client.json" "$work/shutterspool-web-client.json" "$work/shutterspool-server-audience-mapper.json" "$work/shutterspool-roles-mapper.json"
+    rm -f "$work/kcadm.config" "$work/reconcile.sh" "$work/select-login-theme.sh" "$work/failed-set-password" "$work/shutterspool-realm.json" "$work/shutterspool-user-profile.json" "$work/shutterspool-server-client.json" "$work/shutterspool-web-client.json" "$work/shutterspool-server-audience-mapper.json"
     rmdir "$work"
 }
 trap cleanup EXIT
 export KEYCLOAK_ADMIN="$KC_BOOTSTRAP_ADMIN_USERNAME"
-KEYCLOAK_ADMIN_PASSWORD=$(cat /run/secrets/keycloak-admin-password)
+KEYCLOAK_ADMIN_PASSWORD=${KC_BOOTSTRAP_ADMIN_PASSWORD:-}
+[ -n "$KEYCLOAK_ADMIN_PASSWORD" ] || KEYCLOAK_ADMIN_PASSWORD=$(cat /run/secrets/keycloak-admin-password)
 export KEYCLOAK_ADMIN_PASSWORD
 export SHUTTERSPOOL_ADMIN_USERNAME=bootstrap-check
 export SHUTTERSPOOL_ADMIN_PASSWORD='synthetic-check-password-1!'
@@ -67,3 +68,76 @@ if ($LASTEXITCODE -ne 0) {
     throw $(if ($failure) { $failure -join ' ' } else { 'Keycloak bootstrap check failed; inspect the controlled container privately.' })
 }
 $output | Where-Object { $_ -like 'Keycloak check passed:*' }
+
+# Qualify a newly created realm, including the stricter email setting used by enrollment.
+# Its initial Owner has no email address; no SMTP server is configured.
+$realm = 'shutterspool-fresh-' + [Guid]::NewGuid().ToString('N')
+$freshProbe = @'
+set -eu
+realm=__REALM__
+work=$(mktemp -d /tmp/shutterspool-keycloak-fresh.XXXXXX)
+cleanup_realm=false
+kcadm() { /opt/keycloak/bin/kcadm.sh "$@" --config "$work/kcadm.config"; }
+cleanup() {
+    result=$?
+    trap - EXIT
+    set +e
+    cleanup_failed=false
+    if [ "$cleanup_realm" = true ]; then
+        realms=$(kcadm get realms --fields realm)
+        if [ "$?" -ne 0 ]; then cleanup_failed=true
+        elif printf '%s' "$realms" | grep -Eq "\"realm\"[[:space:]]*:[[:space:]]*\"$realm\""; then
+            kcadm delete "realms/$realm" >/dev/null || cleanup_failed=true
+        fi
+    fi
+    rm -f "$work/kcadm.config" "$work/reconcile.sh" "$work/select-login-theme.sh" "$work/shutterspool-realm.json" "$work/shutterspool-user-profile.json" "$work/shutterspool-server-client.json" "$work/shutterspool-web-client.json" "$work/shutterspool-server-audience-mapper.json" || cleanup_failed=true
+    rmdir "$work" || cleanup_failed=true
+    if [ "$cleanup_failed" = true ]; then
+        printf 'Fresh bootstrap disposable cleanup failed.\n' >&2
+        [ "$result" -ne 0 ] || result=1
+    fi
+    exit "$result"
+}
+trap cleanup EXIT
+export KEYCLOAK_ADMIN="$KC_BOOTSTRAP_ADMIN_USERNAME"
+KEYCLOAK_ADMIN_PASSWORD=${KC_BOOTSTRAP_ADMIN_PASSWORD:-}
+[ -n "$KEYCLOAK_ADMIN_PASSWORD" ] || KEYCLOAK_ADMIN_PASSWORD=$(cat /run/secrets/keycloak-admin-password)
+export KEYCLOAK_ADMIN_PASSWORD
+kcadm config credentials --server http://localhost:8080 --realm master --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD" >/dev/null
+cleanup_realm=true
+export SHUTTERSPOOL_ADMIN_USERNAME=bootstrap-check
+export SHUTTERSPOOL_ADMIN_PASSWORD='synthetic-check-password-1!'
+export SHUTTERSPOOL_ADMIN_SUBJECT=6c178745-3db4-47a7-8bb7-17c8e5e89337
+cp /opt/shutterspool/shutterspool-*-*.json "$work/"
+sed "s/\"shutterspool\"/\"$realm\"/" /opt/shutterspool/shutterspool-realm.json > "$work/shutterspool-realm.json"
+printf 'kcadm() { /opt/keycloak/bin/kcadm.sh "$@" --config "%s/kcadm.config"; }\n' "$work" > "$work/reconcile.sh"
+sed -e "s#http://keycloak:8080#http://localhost:8080#g" -e "s#-r shutterspool#-r $realm#g" -e "s#realms/shutterspool#realms/$realm#g" -e "s#/opt/shutterspool/#$work/#g" -e "s#/opt/keycloak/bin/kcadm.sh#kcadm#g" /opt/shutterspool/reconcile.sh >> "$work/reconcile.sh"
+printf 'kcadm() { /opt/keycloak/bin/kcadm.sh "$@" --config "%s/kcadm.config"; }\n' "$work" > "$work/select-login-theme.sh"
+sed -e "s#realms/shutterspool#realms/$realm#g" -e "s#/bin/sh /opt/keycloak/bin/kcadm.sh#kcadm#g" /opt/shutterspool/select-login-theme.sh >> "$work/select-login-theme.sh"
+sh "$work/reconcile.sh" >/dev/null
+kcadm update "realms/$realm" -s verifyEmail=true >/dev/null
+smtp=$(kcadm get "realms/$realm" --fields smtpServer)
+if printf '%s' "$smtp" | grep -q '"host"'; then printf 'Fresh bootstrap fixture unexpectedly configured SMTP.\n' >&2; exit 1; fi
+attributes=$(kcadm get users/profile -r "$realm" --fields attributes)
+if printf '%s' "$attributes" | grep -q '"required"'; then printf 'Fresh bootstrap profile unexpectedly required email or names.\n' >&2; exit 1; fi
+account=$(kcadm get "users/$SHUTTERSPOOL_ADMIN_SUBJECT" -r "$realm" --fields email,emailVerified)
+if printf '%s' "$account" | grep -Eq '"email"[[:space:]]*:[[:space:]]*"[^"]+"|"emailVerified"[[:space:]]*:[[:space:]]*true'; then printf 'Fresh bootstrap invented an email or marked it verified.\n' >&2; exit 1; fi
+# Reconciliation must retain operator profile requirements and account controls.
+kcadm update users/profile -r "$realm" -s unmanagedAttributePolicy=ADMIN_VIEW >/dev/null
+profile=$(kcadm get users/profile -r "$realm" --fields unmanagedAttributePolicy)
+kcadm update "users/$SHUTTERSPOOL_ADMIN_SUBJECT" -r "$realm" -s enabled=false -s emailVerified=false -s 'requiredActions=["CONFIGURE_TOTP"]' >/dev/null
+account=$(kcadm get "users/$SHUTTERSPOOL_ADMIN_SUBJECT" -r "$realm" --fields enabled,emailVerified,requiredActions)
+sh "$work/reconcile.sh" >/dev/null
+retained_profile=$(kcadm get users/profile -r "$realm" --fields unmanagedAttributePolicy)
+retained_account=$(kcadm get "users/$SHUTTERSPOOL_ADMIN_SUBJECT" -r "$realm" --fields enabled,emailVerified,requiredActions)
+[ "$retained_profile" = "$profile" ] || { printf 'Fresh bootstrap repeat changed operator profile policy.\n' >&2; exit 1; }
+[ "$retained_account" = "$account" ] || { printf 'Fresh bootstrap repeat changed operator account controls.\n' >&2; exit 1; }
+# Windows pipelines append CRLF; keep the trailing carriage return inside a comment.
+'@
+$freshProbe = $freshProbe.Replace('__REALM__', $realm).Replace("`r`n", "`n")
+$output = $freshProbe | docker exec -i $KeycloakContainer /bin/sh -s 2>&1
+if ($LASTEXITCODE -ne 0) {
+    $failure = $output | Where-Object { $_ -like 'Fresh bootstrap*' }
+    throw $(if ($failure) { $failure -join ' ' } else { 'Fresh bootstrap setup or preservation check failed.' })
+}
+Write-Output 'Keycloak check passed: fresh realm applied the optional email/name profile without SMTP; repeated reconciliation preserved operator profile policy and account enabled/verification/MFA-action controls.'

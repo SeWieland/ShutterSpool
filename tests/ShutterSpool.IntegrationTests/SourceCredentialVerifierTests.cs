@@ -28,8 +28,8 @@ public sealed class SourceCredentialVerifierTests
         var verifier = new SourceCredentialVerifier(new EfSourceConfigurationStore(database), protector,
             new SourceAccessAudit(LoggerFactory.Create(_ => { }).CreateLogger<SourceAccessAudit>()));
 
-        SourceCredentialCheck check = await verifier.VerifyAttemptAsync("cam_legacy", "correct-secret",
-            TestContext.Current.CancellationToken, SourceConnectionProfile.LegacyFtps);
+        SourceCredentialCheck check = await verifier.VerifyAttemptAsync("cam_legacy", "correct-secret", SourceConnectionProfile.LegacyFtps,
+            TestContext.Current.CancellationToken);
 
         Assert.Null(check.Access);
         Assert.Equal(sourceId, check.VerifiedButRejectedSourceId);
@@ -57,7 +57,7 @@ public sealed class SourceCredentialVerifierTests
         using var loggerFactory = LoggerFactory.Create(builder => builder.AddProvider(loggerProvider));
         var verifier = new SourceCredentialVerifier(new EfSourceConfigurationStore(database), protector, new SourceAccessAudit(loggerFactory.CreateLogger<SourceAccessAudit>()));
 
-        SourceAccess? access = await verifier.VerifyAsync("cam_test", "correct-secret", TestContext.Current.CancellationToken);
+        SourceAccess? access = await verifier.VerifyAsync("cam_test", "correct-secret", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(access);
         Assert.Equal("sources/camera", access.VirtualRoot);
@@ -65,7 +65,7 @@ public sealed class SourceCredentialVerifierTests
         Assert.DoesNotContain(loggerProvider.Entries, eventId => eventId.Id == 2004 && eventId.Name == "SourceAuthenticationSucceeded");
         verifier.RecordSucceeded(sourceId);
         Assert.Contains(loggerProvider.Entries, eventId => eventId.Id == 2004 && eventId.Name == "SourceAuthenticationSucceeded");
-        Assert.Null(await verifier.VerifyAsync("cam_test", "wrong-secret", TestContext.Current.CancellationToken));
+        Assert.Null(await verifier.VerifyAsync("cam_test", "wrong-secret", cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -89,10 +89,10 @@ public sealed class SourceCredentialVerifierTests
         var verifier = new SourceCredentialVerifier(new EfSourceConfigurationStore(database), protector,
             new SourceAccessAudit(LoggerFactory.Create(_ => { }).CreateLogger<SourceAccessAudit>()));
 
-        SourceCredentialCheck rejected = await verifier.VerifyAttemptAsync("cam_suspended", "correct-secret", TestContext.Current.CancellationToken);
+        SourceCredentialCheck rejected = await verifier.VerifyAttemptAsync("cam_suspended", "correct-secret", cancellationToken: TestContext.Current.CancellationToken);
         Assert.Null(rejected.Access);
         Assert.Equal(sourceId, rejected.VerifiedButRejectedSourceId);
-        SourceCredentialCheck unproved = await verifier.VerifyAttemptAsync("cam_suspended", "wrong-secret", TestContext.Current.CancellationToken);
+        SourceCredentialCheck unproved = await verifier.VerifyAttemptAsync("cam_suspended", "wrong-secret", cancellationToken: TestContext.Current.CancellationToken);
         Assert.Null(unproved.Access);
         Assert.Null(unproved.VerifiedButRejectedSourceId);
     }

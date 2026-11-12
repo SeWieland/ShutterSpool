@@ -36,10 +36,7 @@ public interface IDeliveryWorkStore
 public interface ILocalDestinationConfiguration
 {
     Task<LocalDirectoryListingResult> BrowseAsync(string? path, CancellationToken cancellationToken);
-    Task<string?> GetRootAsync(Guid destinationId, CancellationToken cancellationToken);
-    Task<string?> ConfigureAsync(Guid destinationId, string root, CancellationToken cancellationToken);
     Task<string?> ConfigureAsync(Guid destinationId, long expectedRevision, string root, CancellationToken cancellationToken);
-    Task<(bool Writable, string? ErrorCode)> TestAsync(Guid destinationId, CancellationToken cancellationToken);
     Task<(bool Writable, string? ErrorCode, long TestedConfigurationRevision)> TestWithRevisionAsync(Guid destinationId, CancellationToken cancellationToken);
 }
 
@@ -47,13 +44,9 @@ public sealed record LocalDirectoryEntry(string Name, string Path);
 public sealed record LocalDirectoryListing(string? Path, string? ParentPath, IReadOnlyList<LocalDirectoryEntry> Directories, bool Truncated);
 public sealed record LocalDirectoryListingResult(LocalDirectoryListing? Listing, string? Error);
 
-public sealed record WebDavDestinationConfiguration(string CollectionUrl, string Username);
 public interface IWebDavDestinationConfiguration
 {
-    Task<WebDavDestinationConfiguration?> GetAsync(Guid destinationId, CancellationToken cancellationToken);
-    Task<string?> ConfigureAsync(Guid destinationId, string collectionUrl, string username, string password, CancellationToken cancellationToken);
     Task<string?> ConfigureAsync(Guid destinationId, long expectedRevision, string collectionUrl, string username, string? password, CancellationToken cancellationToken);
-    Task<(bool Writable, string? ErrorCode)> TestAsync(Guid destinationId, CancellationToken cancellationToken);
     Task<(bool Writable, string? ErrorCode, long TestedConfigurationRevision)> TestWithRevisionAsync(Guid destinationId, CancellationToken cancellationToken);
 }
 

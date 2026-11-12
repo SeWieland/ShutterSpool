@@ -1940,6 +1940,27 @@ namespace ShutterSpool.Infrastructure.Persistence.Migrations
                     b.ToTable("webdav_destinations", (string)null);
                 });
 
+            modelBuilder.Entity("ShutterSpool.Infrastructure.Persistence.WorkspaceIdentityEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("BootstrapComplete")
+                        .HasColumnType("boolean");
+
+                    b.Property<Guid>("OperationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("StorageIdentity")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("workspace_identity", (string)null);
+                });
+
             modelBuilder.Entity("ShutterSpool.Infrastructure.Persistence.AssetRemovalOperationEntity", b =>
                 {
                     b.HasOne("ShutterSpool.Infrastructure.Persistence.AssetEntity", null)

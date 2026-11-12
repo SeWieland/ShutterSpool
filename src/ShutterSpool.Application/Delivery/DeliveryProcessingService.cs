@@ -26,7 +26,7 @@ public sealed class DeliveryProcessingService(IDeliveryWorkStore workStore, ICom
 {
     public Guid? LastChangedCaptureId { get; private set; }
 
-    public async Task<bool> ProcessOneAsync(CancellationToken cancellationToken, Action<Guid>? afterClaim = null)
+    public async Task<bool> ProcessOneAsync(Action<Guid>? afterClaim = null, CancellationToken cancellationToken = default)
     {
         LastChangedCaptureId = null;
         ClaimedDelivery? work = await workStore.ClaimAsync(cancellationToken);

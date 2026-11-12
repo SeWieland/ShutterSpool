@@ -27,6 +27,8 @@ public sealed partial class ConfigurationApiTests
             await connection.OpenAsync(token);
             await using (var command = new NpgsqlCommand($"CREATE SEQUENCE \"{sequence}\" START WITH 1", connection))
                 await command.ExecuteNonQueryAsync(token);
+            await using (var grant = new NpgsqlCommand($"GRANT USAGE,SELECT ON SEQUENCE \"{sequence}\" TO \"{fixture.RuntimeRole}\"", connection))
+                await grant.ExecuteNonQueryAsync(token);
             string createFunction = $"""
                 CREATE FUNCTION "{function}"() RETURNS trigger LANGUAGE plpgsql AS $$
                 BEGIN

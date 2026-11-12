@@ -33,7 +33,7 @@ public static class DeliveryEndpoints
     }
 
     private static async Task<IResult> RetryAsync(Guid id, CaptureRoutingActionService actions, IDeliveryWorkSignal signal,
-        CancellationToken cancellationToken) => await Respond(await actions.RetryAsync(id, cancellationToken), signal, cancellationToken);
+        CancellationToken cancellationToken) => await Respond(await actions.RetryAsync(id, cancellationToken), signal, cancellationToken: cancellationToken);
 
     private static async Task<IResult> PreviewResendAsync(Guid id, CaptureRoutingActionService actions,
         CancellationToken cancellationToken) => Respond(await actions.PreviewResendAsync(id, cancellationToken));
@@ -42,7 +42,7 @@ public static class DeliveryEndpoints
         CaptureRoutingActionService actions, IDeliveryWorkSignal signal, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.ConfirmationToken)) return InvalidConfirmation();
-        return await Respond(await actions.ResendAsync(id, request.ConfirmationToken, cancellationToken), signal, cancellationToken, confirming: true);
+        return await Respond(await actions.ResendAsync(id, request.ConfirmationToken, cancellationToken), signal, confirming: true, cancellationToken);
     }
 
     private static async Task<IResult> PreviewReevaluateAsync(Guid assetId, Guid destinationId,
@@ -54,7 +54,7 @@ public static class DeliveryEndpoints
     {
         if (string.IsNullOrWhiteSpace(request.ConfirmationToken)) return InvalidConfirmation();
         return await Respond(await actions.ReevaluateAsync(assetId, destinationId, request.ConfirmationToken, cancellationToken),
-            signal, cancellationToken, confirming: true);
+            signal, confirming: true, cancellationToken);
     }
 
     private static IResult Respond(RoutingActionPreview result, bool confirming = false)
@@ -73,8 +73,8 @@ public static class DeliveryEndpoints
         return Results.Ok(current);
     }
 
-    private static async Task<IResult> Respond(RoutingActionPreview result, IDeliveryWorkSignal signal,
-        CancellationToken cancellationToken, bool confirming = false)
+    private static async Task<IResult> Respond(RoutingActionPreview result, IDeliveryWorkSignal signal, bool confirming = false,
+        CancellationToken cancellationToken = default)
     {
         if (result.Status == RoutingActionStatus.Queued) await signal.NotifyAsync(cancellationToken);
         return Respond(result, confirming);

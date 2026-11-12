@@ -15,7 +15,7 @@ public sealed partial class DeliveryWorkerPostgresTests
     public async Task WebDav_lost_move_recovery_persists_provider_receipt_and_fences_old_completion()
     {
         CancellationToken token = TestContext.Current.CancellationToken;
-        await using TestDatabase fixture = await TestDatabase.CreateAsync(token);
+        await using TestDatabase fixture = await TestDatabase.CreateAsync(token: token);
         var protector = WebDavProtector();
         await SeedWebDavAsync(fixture, protector, token);
         var clock = new ManualClock(DateTimeOffset.UtcNow);
@@ -52,7 +52,7 @@ public sealed partial class DeliveryWorkerPostgresTests
     public async Task WebDav_late_move_after_expiry_preserves_ambiguity_and_fences_old_finish_despite_late_hash_evidence()
     {
         CancellationToken token = TestContext.Current.CancellationToken;
-        await using TestDatabase fixture = await TestDatabase.CreateAsync(token);
+        await using TestDatabase fixture = await TestDatabase.CreateAsync(token: token);
         var protector = WebDavProtector();
         await SeedWebDavAsync(fixture, protector, token);
         var clock = new ManualClock(DateTimeOffset.UtcNow);
@@ -117,7 +117,7 @@ public sealed partial class DeliveryWorkerPostgresTests
     public async Task WebDav_identity_change_waits_for_work_creation_then_rejects_the_new_identity()
     {
         CancellationToken token = TestContext.Current.CancellationToken;
-        await using TestDatabase fixture = await TestDatabase.CreateAsync(token);
+        await using TestDatabase fixture = await TestDatabase.CreateAsync(token: token);
         var protector = WebDavProtector();
         await SeedWebDavAsync(fixture, protector, token);
         await using var writer = new ShutterSpoolDbContext(fixture.DbOptions);
@@ -129,7 +129,7 @@ public sealed partial class DeliveryWorkerPostgresTests
         await using var configurationDatabase = new ShutterSpoolDbContext(fixture.DbOptions);
         var configuration = new EfWebDavDestinationConfiguration(configurationDatabase, protector,
             new WebDavDestinationDeliveryAdapter(new WebDavDestinationAdapterTests.FakeHttpClientFactory(new())));
-        Task<string?> edit = configuration.ConfigureAsync(fixture.DestinationId, "https://dav.example.test/other/", "other-user", "new-secret", token);
+        Task<string?> edit = configuration.ConfigureAsync(fixture.DestinationId, 1, "https://dav.example.test/other/", "other-user", "new-secret", token);
         Assert.True(await WaitForBlockedRoutingCommandAsync(fixture.DbOptions, token));
         writer.Deliveries.Add(delivery);
         await writer.SaveChangesAsync(token);
@@ -146,7 +146,7 @@ public sealed partial class DeliveryWorkerPostgresTests
     public async Task WebDav_claim_keeps_one_credential_snapshot_while_replacement_waits_for_routing_lock()
     {
         CancellationToken token = TestContext.Current.CancellationToken;
-        await using TestDatabase fixture = await TestDatabase.CreateAsync(token);
+        await using TestDatabase fixture = await TestDatabase.CreateAsync(token: token);
         var protector = WebDavProtector();
         await SeedWebDavAsync(fixture, protector, token);
         var blocking = new BlockingCredentialProtector(protector, token);
@@ -158,7 +158,7 @@ public sealed partial class DeliveryWorkerPostgresTests
         await using var database = new ShutterSpoolDbContext(fixture.DbOptions);
         var configuration = new EfWebDavDestinationConfiguration(database, protector,
             new WebDavDestinationDeliveryAdapter(new WebDavDestinationAdapterTests.FakeHttpClientFactory(new())));
-        Task<string?> replacement = configuration.ConfigureAsync(fixture.DestinationId, "https://dav.example.test/camera/", "operator", "replacement-app-password", token);
+        Task<string?> replacement = configuration.ConfigureAsync(fixture.DestinationId, 1, "https://dav.example.test/camera/", "operator", "replacement-app-password", token);
         try
         {
             Assert.True(await WaitForBlockedRoutingCommandAsync(fixture.DbOptions, token));

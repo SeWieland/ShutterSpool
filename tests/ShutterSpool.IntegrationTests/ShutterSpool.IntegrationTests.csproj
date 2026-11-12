@@ -25,6 +25,7 @@
     <ProjectReference Include="..\..\src\ShutterSpool.Application\ShutterSpool.Application.csproj" />
     <ProjectReference Include="..\..\src\ShutterSpool.Infrastructure\ShutterSpool.Infrastructure.csproj" />
     <Compile Include="..\..\src\ShutterSpool.AppHost\CameraIngressCertificate.cs" Link="AppHost\CameraIngressCertificate.cs" />
+    <Compile Include="..\..\src\ShutterSpool.AppHost\WorkspaceRuntimeConfiguration.cs" Link="AppHost\WorkspaceRuntimeConfiguration.cs" />
     <Using Include="Xunit" />
   </ItemGroup>
 </Project>

@@ -10,6 +10,18 @@ namespace ShutterSpool.IntegrationTests;
 
 public sealed class WebDavDestinationAdapterTests
 {
+    [Theory]
+    [InlineData("https://2130706433/camera/")]
+    [InlineData("https://0177.0.0.1/camera/")]
+    [InlineData("https://0x7f000001/camera/")]
+    [InlineData("https://intranet/camera/")]
+    [InlineData("https://dav.example.test./camera/")]
+    [InlineData("https://[fe80::1%251]/camera/")]
+    public void Collection_urls_reject_ambiguous_or_scoped_hosts(string value)
+    {
+        Assert.False(WebDavDestinationUris.TryCollection(value, out _));
+    }
+
     public enum FakeChecksumMode
     {
         Default,

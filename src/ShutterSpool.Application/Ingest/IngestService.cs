@@ -35,8 +35,8 @@ public sealed class IngestService(IIngestJournal journal, ISpool spool, TimeProv
     public Task<IngestResult> AcceptAsync(IngestRequest request, CancellationToken cancellationToken) =>
         AcceptCoreAsync(request, cancellationToken);
 
-    internal async Task<long> ReceiveAdmittedAsync(IngestRequest request, CancellationToken cancellationToken,
-        string? admittedReceiveKey = null, Guid? admittedAssetId = null)
+    internal async Task<long> ReceiveAdmittedAsync(IngestRequest request,
+        string? admittedReceiveKey = null, Guid? admittedAssetId = null, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(request.OriginalName);
         ArgumentNullException.ThrowIfNull(request.Content);

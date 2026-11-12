@@ -16,20 +16,11 @@ public sealed class SecurityOptions
 
     public string[] AllowedOrigins { get; init; } = [];
 
-    public string AdministratorRole { get; init; } = "shutterspool-admin";
-
-    public string AdministratorRoleClaimType { get; init; } = System.Security.Claims.ClaimsIdentity.DefaultRoleClaimType;
-
-    public string? BootstrapIssuer { get; init; }
-
-    public string? BootstrapSubject { get; init; }
-
     public string? EncryptionKey { get; init; }
 
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(ClientId)) throw new InvalidOperationException("The public OIDC client ID is required.");
-        if (string.IsNullOrWhiteSpace(AdministratorRoleClaimType)) throw new InvalidOperationException("The administrator role claim type is required.");
         if (!string.IsNullOrWhiteSpace(MetadataAddress))
         {
             if (!Uri.TryCreate(MetadataAddress, UriKind.Absolute, out Uri? metadata)

@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -104,7 +103,9 @@ jobs:
       - name: Restore .NET tools
         run: dotnet tool restore
       - name: Check for missing database migrations
-        run: dotnet ef migrations has-pending-model-changes --project src/ShutterSpool.Infrastructure --startup-project src/ShutterSpool.Infrastructure --context ShutterSpoolDbContext --no-build
+        run: |
+          dotnet ef migrations has-pending-model-changes --project src/ShutterSpool.Infrastructure --startup-project src/ShutterSpool.Infrastructure --context ShutterSpoolDbContext --no-build
+          dotnet ef migrations has-pending-model-changes --project src/ShutterSpool.Infrastructure --startup-project src/ShutterSpool.Infrastructure --context WorkspaceControlDbContext --no-build
       - name: Generate API client
         run: npm run generate-client
         working-directory: src/ShutterSpool.Web

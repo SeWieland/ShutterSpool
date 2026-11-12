@@ -5,6 +5,8 @@ Follow [.editorconfig](../.editorconfig), [Directory.Build.props](../Directory.B
 Use domain-accurate names and focused types. Comments explain constraints and decisions; warning suppressions need a reason.
 Keep orchestration readable and extract substantive decisions when that improves understanding or testing.
 Do not extract trivial guards or introduce indirection merely to satisfy a pattern.
+Put the operation's `CancellationToken cancellationToken` last in method signatures, including interfaces and test helpers.
+Keep optional inputs before it; use a final `cancellationToken = default` when those inputs are optional.
 
 ## Dependencies and simplicity
 
@@ -17,7 +19,8 @@ HTTP DTOs stay beside endpoints and the frontend client is generated from OpenAP
 Reuse existing code, platform features and installed dependencies before adding machinery.
 Preserve opaque streamed-original references and honest provider-specific publication semantics.
 Possible consumers alone do not justify generic repositories, base entities, event buses, plugin frameworks or empty projects.
-Never cut validation, accessibility, error handling, security or media-safety checks to save code.
+Validate inputs at their owning boundary; avoid repeating checks whose guarantees are already established.
+Recheck mutable state where an operation relies on it. Preserve accessibility, error handling, security and media-safety checks.
 A deliberate shortcut comment names its known limit and upgrade trigger.
 
 ## UI and tests

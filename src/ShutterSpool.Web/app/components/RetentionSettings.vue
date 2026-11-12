@@ -30,6 +30,8 @@ let historySequence = 0;
 const quotaGiB = ref(0);
 const highGiB = ref(0);
 const recoveryGiB = ref(0);
+const workspaceAllocationBytes = computed(() => settings.value?.workspaceAllocatedBytes ?? undefined);
+const workspaceAllocationGiB = computed(() => workspaceAllocationBytes.value === undefined ? undefined : workspaceAllocationBytes.value / 1024 ** 3);
 const automatic = ref(false);
 const quotaActive = ref(false);
 const cacheMode = ref<'Disk' | 'Memory'>('Disk');
@@ -66,8 +68,11 @@ function body() {
 }
 const validationErrors = computed(() => {
     const positive = (value: number) => Number.isFinite(value) && value > 0;
+    const quotaBytes = Math.round(quotaGiB.value * 1024 ** 3);
+    const exceedsWorkspaceAllocation = workspaceAllocationBytes.value !== undefined && quotaBytes > workspaceAllocationBytes.value;
+    const allocationNeedsActiveQuota = workspaceAllocationBytes.value !== undefined && !quotaActive.value;
     return {
-        quota: [quotaGiB.value, highGiB.value, recoveryGiB.value].every(positive) && recoveryGiB.value < highGiB.value && highGiB.value <= quotaGiB.value ? '' : 'Use a positive cleanup target below the cleanup starting point, and keep both within the storage limit.',
+        quota: allocationNeedsActiveQuota ? 'A storage limit is required for this workspace.' : exceedsWorkspaceAllocation ? 'The storage limit cannot exceed this workspace’s assigned allocation.' : [quotaGiB.value, highGiB.value, recoveryGiB.value].every(positive) && recoveryGiB.value < highGiB.value && highGiB.value <= quotaGiB.value ? '' : 'Use a positive cleanup target below the cleanup starting point, and keep both within the storage limit.',
         automatic: automatic.value && !quotaActive.value ? 'Enable a storage limit before allowing automatic cleanup.' : '',
         trash: positive(trashHours.value) ? '' : 'Trash recovery must be greater than zero hours.',
         restore: positive(restoreHours.value) ? '' : 'Restore protection must be greater than zero hours.',
@@ -127,7 +132,7 @@ async function load(initial = false, clearFeedbackOnSuccess = true) {
             policyChanged.value = !initial && !!settings.value && (saved.settings?.revision !== settings.value.settings?.revision || saved.quota?.revision !== settings.value.quota?.revision);
             if (policyChanged.value) { invalidateReview(); feedback.value = 'Settings changed elsewhere. Your edits are kept. Reload the saved settings before reviewing them.'; }
             if (initial || !settings.value) {
-                settings.value = saved; cacheMode.value = saved.previewCache?.cacheMode === 'Memory' ? 'Memory' : 'Disk'; memoryMiB.value = (saved.previewCache?.memoryCacheBytes ?? 64 * 1024 ** 2) / 1024 ** 2; quotaGiB.value = (saved.quota?.quotaBytes ?? 0) / 1024 ** 3; highGiB.value = (saved.quota?.highWatermarkBytes ?? 0) / 1024 ** 3; recoveryGiB.value = (saved.quota?.recoveryTargetBytes ?? 0) / 1024 ** 3; quotaActive.value = saved.quota?.isActive === true; automatic.value = saved.settings?.automaticRemovalEnabled === true;
+                settings.value = saved; cacheMode.value = saved.previewCache?.cacheMode === 'Memory' ? 'Memory' : 'Disk'; memoryMiB.value = (saved.previewCache?.memoryCacheBytes ?? 64 * 1024 ** 2) / 1024 ** 2; quotaGiB.value = (saved.quota?.quotaBytes ?? 0) / 1024 ** 3; highGiB.value = (saved.quota?.highWatermarkBytes ?? 0) / 1024 ** 3; recoveryGiB.value = (saved.quota?.recoveryTargetBytes ?? 0) / 1024 ** 3; quotaActive.value = saved.quota?.isActive === true || saved.workspaceAllocatedBytes != null; automatic.value = saved.settings?.automaticRemovalEnabled === true;
                 trashHours.value = durationHours(saved.settings?.trashRecoveryWindow) ?? 0; restoreHours.value = durationHours(saved.settings?.restoreProtection) ?? 0; galleryDays.value = (durationHours(saved.settings?.galleryMaximum) ?? 0) / 24;
                 for (const key of lifetimeKeys) { lifetimes[key].pressureHours = durationHours(saved.settings?.[key]?.pressureAge) ?? 0; lifetimes[key].ordinaryDays = (durationHours(saved.settings?.[key]?.ordinaryAge) ?? 0) / 24; }
                 baseline.value = {
@@ -209,9 +214,10 @@ onUnmounted(() => { disposed = true; sequence++; historySequence++; cancelLoad()
                 <section class="storage-policy-section" aria-labelledby="storage-limit-heading">
                     <div class="storage-section-top"><h3 id="storage-limit-heading">Storage limit and cleanup</h3><button type="button" :disabled="busy || !online" @click="load(true)">Reload saved settings</button></div>
                     <p class="muted">The storage limit controls new uploads. Automatic cleanup moves eligible photographs to recoverable Trash.</p>
-                    <label class="settings-checkbox"><span><input v-model="quotaActive" type="checkbox" :disabled="busy" /> Use a storage limit for new photographs</span></label>
+                    <p v-if="workspaceAllocationBytes !== undefined" class="muted">This workspace is allocated {{ formatFileSize(workspaceAllocationBytes) }} for storage. Its storage limit must stay within this allocation.</p>
+                    <label class="settings-checkbox"><span><input v-model="quotaActive" type="checkbox" :disabled="busy || workspaceAllocationBytes !== undefined" /> Use a storage limit for new photographs<span v-if="workspaceAllocationBytes !== undefined"> · required for this workspace</span></span></label>
                     <div class="storage-field-grid">
-                        <label>Storage limit (GiB)<input v-model.number="quotaGiB" type="number" min="0" step="any" required :disabled="busy" :aria-invalid="!!validationErrors.quota" :aria-describedby="validationErrors.quota ? 'retention-quota-error' : undefined" /></label>
+                        <label>Storage limit (GiB)<input v-model.number="quotaGiB" type="number" min="0" :max="workspaceAllocationGiB" step="any" required :disabled="busy" :aria-invalid="!!validationErrors.quota" :aria-describedby="validationErrors.quota ? 'retention-quota-error' : undefined" /></label>
                         <label>Start cleanup above (GiB)<input v-model.number="highGiB" type="number" min="0" step="any" required :disabled="busy" :aria-invalid="!!validationErrors.quota" :aria-describedby="validationErrors.quota ? 'retention-quota-error' : undefined" /></label>
                         <label>Cleanup target (GiB)<input v-model.number="recoveryGiB" type="number" min="0" step="any" required :disabled="busy" :aria-invalid="!!validationErrors.quota" :aria-describedby="validationErrors.quota ? 'retention-quota-error' : undefined" /></label>
                     </div>
