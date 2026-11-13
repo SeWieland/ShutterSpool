@@ -172,8 +172,8 @@ Application tests do not establish filesystem enforcement, power-loss recovery o
 
 Account setup belongs to the identity provider; a ShutterSpool invitation is a separate, tenant-local offer of membership.
 Use protected native Keycloak administration for the following account steps. Workspace Owners and Administrators receive neither realm-admin credentials nor a global user directory.
-The companion keeps public registration off, enables native email verification and maps a boolean `email_verified` claim into API access tokens.
-Initial Owner sign-in needs no email or SMTP; accepting an ordinary invitation still requires verified email.
+The companion keeps public registration off and maps a boolean `email_verified` claim into API access tokens. Invited accounts verify email through the explicit native `VERIFY_EMAIL` setup action below; automatic realm-wide email verification is off.
+The initial Owner can sign in and restore the issuer session without email or SMTP; accepting an ordinary invitation still requires verified email.
 Email-based password recovery is an operator setting: fresh realms leave it disabled, and reconciliation preserves the setting on existing realms.
 Initial Owner provisioning remains explicit and locally audited. Owner login recovery uses native identity-provider facilities as described below.
 

@@ -26,7 +26,8 @@ if ! /opt/keycloak/bin/kcadm.sh get realms/shutterspool >/dev/null 2>&1; then
   /opt/keycloak/bin/kcadm.sh update users/profile -r shutterspool -f /opt/shutterspool/shutterspool-user-profile.json
 fi
 
-/opt/keycloak/bin/kcadm.sh update realms/shutterspool --no-merge -s registrationAllowed=false -s verifyEmail=true
+# SMTP-free Owners have no email; explicit native enrollment actions still verify invited accounts.
+/opt/keycloak/bin/kcadm.sh update realms/shutterspool --no-merge -s registrationAllowed=false -s verifyEmail=false
 for action in VERIFY_EMAIL UPDATE_PASSWORD; do
   /opt/keycloak/bin/kcadm.sh update "authentication/required-actions/$action" -r shutterspool -s enabled=true
 done
