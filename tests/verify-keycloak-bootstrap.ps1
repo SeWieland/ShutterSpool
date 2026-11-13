@@ -29,7 +29,7 @@ sed -e "s#http://keycloak:8080#http://localhost:8080#g" -e "s#-r shutterspool#-r
 printf 'kcadm() { /opt/keycloak/bin/kcadm.sh "$@" --config "%s/kcadm.config"; }\n' "$work" > "$work/select-login-theme.sh"
 sed -e "s#realms/shutterspool#realms/$realm#g" -e "s#/bin/sh /opt/keycloak/bin/kcadm.sh#kcadm#g" /opt/shutterspool/select-login-theme.sh >> "$work/select-login-theme.sh"
 kcadm config credentials --server http://localhost:8080 --realm master --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD" >/dev/null
-kcadm create realms -s realm="$realm" -s enabled=true -s registrationAllowed=true -s verifyEmail=false -s resetPasswordAllowed=false -s actionTokenGeneratedByUserLifespan=137 -s actionTokenGeneratedByAdminLifespan=211 -s 'smtpServer={"host":"preserved.invalid","from":"fixture@example.invalid"}' >/dev/null
+kcadm create realms -s realm="$realm" -s enabled=true -s registrationAllowed=true -s verifyEmail=true -s resetPasswordAllowed=false -s actionTokenGeneratedByUserLifespan=137 -s actionTokenGeneratedByAdminLifespan=211 -s 'smtpServer={"host":"preserved.invalid","from":"fixture@example.invalid"}' >/dev/null
 created=true
 kcadm update authentication/required-actions/VERIFY_EMAIL -r "$realm" -s enabled=false
 kcadm update authentication/required-actions/UPDATE_PASSWORD -r "$realm" -s enabled=false
@@ -47,7 +47,7 @@ kcadm set-password -r "$realm" --username "$SHUTTERSPOOL_ADMIN_USERNAME" --new-p
 sh "$work/reconcile.sh" >/dev/null
 policy=$(kcadm get "realms/$realm")
 printf '%s' "$policy" | grep -Eq '"registrationAllowed"[[:space:]]*:[[:space:]]*false' || { printf 'Public registration was not disabled.\n' >&2; exit 1; }
-printf '%s' "$policy" | grep -Eq '"verifyEmail"[[:space:]]*:[[:space:]]*true' || { printf 'Realm email verification was not required.\n' >&2; exit 1; }
+printf '%s' "$policy" | grep -Eq '"verifyEmail"[[:space:]]*:[[:space:]]*false' || { printf 'Automatic realm email verification blocked SMTP-free bootstrap.\n' >&2; exit 1; }
 printf '%s' "$policy" | grep -Eq '"resetPasswordAllowed"[[:space:]]*:[[:space:]]*false' || { printf 'Disabled operator recovery policy changed.\n' >&2; exit 1; }
 printf '%s' "$policy" | grep -Eq '"actionTokenGeneratedByUserLifespan"[[:space:]]*:[[:space:]]*137' || { printf 'User recovery lifetime changed.\n' >&2; exit 1; }
 printf '%s' "$policy" | grep -Eq '"actionTokenGeneratedByAdminLifespan"[[:space:]]*:[[:space:]]*211' || { printf 'Native administration lifetime changed.\n' >&2; exit 1; }
@@ -75,7 +75,7 @@ retained=$(kcadm get users -r "$realm" -q username="$SHUTTERSPOOL_ADMIN_USERNAME
 [ "$retained" = "$actual" ] || { printf 'Existing bootstrap identity changed.\n' >&2; exit 1; }
 kcadm get "users/$actual/role-mappings/realm" -r "$realm" | grep -q operator-maintained || { printf 'Repeated reconciliation removed an operator grant.\n' >&2; exit 1; }
 [ "$(kcadm get "users/$actual/credentials" -r "$realm" --fields id)" = "$credentials" ] || { printf 'Existing bootstrap credentials changed on mismatch.\n' >&2; exit 1; }
-printf 'Keycloak check passed: native verification/registration policy and actions reconciled, explicit verification mapper installed, SMTP/recovery lifetimes preserved, interrupted bootstrap failed closed, operator credential recovery enabled reconciliation, partial username match preserved, repeated reconciliation succeeded, mismatched subject rejected, existing identity and credentials retained.\n'
+printf 'Keycloak check passed: SMTP-free bootstrap/registration policy and native verification actions reconciled, explicit verification mapper installed, SMTP/recovery lifetimes preserved, interrupted bootstrap failed closed, operator credential recovery enabled reconciliation, partial username match preserved, repeated reconciliation succeeded, mismatched subject rejected, existing identity and credentials retained.\n'
 '@
 $probe = $probe.Replace('__NONCE__', [Guid]::NewGuid().ToString('N')).Replace("`r`n", "`n")
 $output = $probe | docker exec -i $KeycloakContainer /bin/sh -s 2>&1
@@ -85,7 +85,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 $output | Where-Object { $_ -like 'Keycloak check passed:*' }
 
-# Qualify a newly created realm, including the stricter email setting used by enrollment.
+# Qualify a newly created realm; invitation enrollment uses explicit native verification actions.
 # Its initial Owner has no email address; no SMTP server is configured.
 $realm = 'shutterspool-fresh-' + [Guid]::NewGuid().ToString('N')
 $freshProbe = @'
@@ -131,7 +131,7 @@ sed -e "s#http://keycloak:8080#http://localhost:8080#g" -e "s#-r shutterspool#-r
 printf 'kcadm() { /opt/keycloak/bin/kcadm.sh "$@" --config "%s/kcadm.config"; }\n' "$work" > "$work/select-login-theme.sh"
 sed -e "s#realms/shutterspool#realms/$realm#g" -e "s#/bin/sh /opt/keycloak/bin/kcadm.sh#kcadm#g" /opt/shutterspool/select-login-theme.sh >> "$work/select-login-theme.sh"
 sh "$work/reconcile.sh" >/dev/null
-kcadm update "realms/$realm" -s verifyEmail=true >/dev/null
+kcadm get "realms/$realm" | grep -Eq '"verifyEmail"[[:space:]]*:[[:space:]]*false' || { printf 'Fresh bootstrap enabled automatic email verification.\n' >&2; exit 1; }
 kcadm get "realms/$realm" | grep -Eq '"resetPasswordAllowed"[[:space:]]*:[[:space:]]*false' || { printf 'Fresh bootstrap enabled recovery without SMTP.\n' >&2; exit 1; }
 smtp=$(kcadm get "realms/$realm" --fields smtpServer)
 if printf '%s' "$smtp" | grep -q '"host"'; then printf 'Fresh bootstrap fixture unexpectedly configured SMTP.\n' >&2; exit 1; fi

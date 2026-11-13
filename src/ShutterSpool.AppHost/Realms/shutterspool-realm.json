@@ -3,5 +3,5 @@
   "enabled": true,
   "displayName": "ShutterSpool",
   "registrationAllowed": false,
-  "verifyEmail": true
+  "verifyEmail": false
 }

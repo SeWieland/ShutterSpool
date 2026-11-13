@@ -15,10 +15,10 @@ RESOURCES = ['theme.properties', 'resources/css/shutterspool.v1.css',
 
 
 class ThemeSelectionTests(unittest.TestCase):
-    def test_fresh_realms_require_verification_disable_registration_and_leave_recovery_disabled(self):
+    def test_fresh_realms_allow_smtp_free_owners_disable_registration_and_leave_recovery_disabled(self):
         realm = json.loads((SCRIPT.parent / 'shutterspool-realm.json').read_text())
         self.assertIs(realm['registrationAllowed'], False)
-        self.assertIs(realm['verifyEmail'], True)
+        self.assertIs(realm['verifyEmail'], False)
         self.assertFalse(realm.get('resetPasswordAllowed', False))
         self.assertNotIn('actionTokenGeneratedByUserLifespan', realm)
 

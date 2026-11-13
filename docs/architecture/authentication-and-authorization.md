@@ -64,7 +64,7 @@ These ordinary access changes retain operation UUIDs for retry reconciliation. C
 
 ## Invited membership
 
-The identity provider owns account setup, email verification, passwords and recovery. The supported Keycloak companion disables public registration, enables native email verification and supplies the API's boolean `email_verified` claim. Email-based recovery is enabled by the operator when SMTP is configured; reconciliation preserves that choice.
+The identity provider owns account setup, email verification, passwords and recovery. The supported Keycloak companion disables public registration and supplies the API's boolean `email_verified` claim. Invitation setup explicitly requests native `VERIFY_EMAIL`; automatic realm-wide email verification is off, so an initial Owner without email can sign in and restore the issuer session. Email-based recovery is enabled by the operator when SMTP is configured; reconciliation preserves that choice.
 An operator verifies and records a minimal workspace-local recipient reference. Owners/Administrators may offer that recipient a non-Owner role; there is no global user directory or email-address-to-membership shortcut.
 The exact signed-in issuer/subject must explicitly accept using a fresh verified API access token. A browser profile, matching email or provider role cannot substitute for that check.
 See the [operator procedure](../../deploy/operations/README.md#prepare-invited-accounts-and-recipients) and [recipient guide](../workspaces.md#join-an-invited-workspace).
