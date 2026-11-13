@@ -65,7 +65,7 @@ async function get(fetchImpl, url, token, maxBytes) {
       const next = location && new URL(location, current);
       if (redirects !== 0 || original.hostname !== 'registry-1.docker.io' || !original.pathname.includes('/blobs/') ||
           !next || next.protocol !== 'https:' || next.hostname !== 'production.cloudfront.docker.com' || next.username || next.password)
-        throw new Error(`Untrusted redirect from ${original.hostname}`);
+        throw new Error(`Untrusted redirect from ${original.hostname} to ${next?.hostname || '(missing hostname)'}`);
       current = next;
       continue;
     }
