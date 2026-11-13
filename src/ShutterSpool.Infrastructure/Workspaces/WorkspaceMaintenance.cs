@@ -3,7 +3,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using ShutterSpool.Application.Workspaces;
-using ShutterSpool.Application.Security;
 using ShutterSpool.Infrastructure.Composition;
 using ShutterSpool.Infrastructure.Persistence;
 using ShutterSpool.Infrastructure.Security;
@@ -18,11 +17,6 @@ internal sealed class WorkspaceMaintenance(IConfiguration configuration)
 
     internal async Task RunAsync(string[] args, CancellationToken token)
     {
-        if (args.Length >= 2 && args[0] is "--workspace-access" or "--workspace-recover-owner" or "--workspace-recovery-notification")
-        {
-            await AccessAsync(args, token);
-            return;
-        }
         // Serialize aggregate allocation decisions and resumable provisioning across operator processes.
         await using var serial = new NpgsqlConnection(ControlMigration);
         await serial.OpenAsync(token);
@@ -43,55 +37,13 @@ internal sealed class WorkspaceMaintenance(IConfiguration configuration)
         else if (args is ["--workspace-allocation", var selected, var expectedText, var nextText]
             && long.TryParse(expectedText, out long expected) && long.TryParse(nextText, out long next) && next >= 10)
             await ChangeAllocationAsync(control, ready, selected, expected, next, token);
-        else throw new ArgumentException("Use --workspace-control-init, --workspace-provision <name>, --workspace-upgrade, --workspace-allocation <name> <expected bytes> <new bytes>, --workspace-access <name>, --workspace-recover-owner <name> <operation GUID> <protected request-file path>, or --workspace-recovery-notification <name> <operation GUID> <success|failed>.");
+        else throw new ArgumentException("Use --workspace-control-init, --workspace-provision <name>, --workspace-upgrade, --workspace-allocation <name> <expected bytes> <new bytes>.");
     }
 
     private async Task<WorkspaceDefinition[]> ListReadyAsync(CancellationToken token)
     {
         await using var control = WorkspaceControlDbContext.Create(WorkspaceControlDbContext.RuntimeConnection(configuration));
         return await EfWorkspaceRegistry.ReadReadyAsync(control, configuration, token);
-    }
-
-    private async Task AccessAsync(string[] args, CancellationToken token)
-    {
-        string name = WorkspaceManifest.CanonicalName(configuration, args[1]);
-        WorkspaceDefinition workspace = (await ListReadyAsync(token))
-            .SingleOrDefault(item => item.Name == name) ?? throw new WorkspaceOperator.RefusedException("The exact ready workspace is required.");
-        WorkspaceManifest manifest = WorkspaceManifest.Read(configuration, name);
-        await using ShutterSpoolDbContext database = CreateDatabase(manifest.MigrationConnection);
-        await WorkspaceRuntime.ValidateIdentityAsync(database, workspace, token);
-        var store = new EfAccessGrantStore(database);
-        var display = new JsonSerializerOptions(JsonSerializerDefaults.Web);
-        display.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
-        if (args is ["--workspace-access", _])
-        {
-            Console.WriteLine(JsonSerializer.Serialize(await store.InspectAsync(token), display));
-            return;
-        }
-        if (args.Length == 4 && Guid.TryParseExact(args[2], "D", out Guid operation) && operation != Guid.Empty)
-        {
-            if (args[0] == "--workspace-recover-owner")
-            {
-                string path = Path.GetFullPath(args[3]);
-                if (!Path.IsPathFullyQualified(args[3]) || !File.Exists(path) || new FileInfo(path).Length > 16_384
-                    || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
-                    throw new ArgumentException("Use a protected absolute recovery request-file path of at most 16 KiB.");
-                WorkspaceOwnerRecovery recovery = JsonSerializer.Deserialize<WorkspaceOwnerRecovery>(await File.ReadAllTextAsync(path, token),
-                    new JsonSerializerOptions(JsonSerializerDefaults.Web)) ?? throw new ArgumentException("The recovery request is required.");
-                if (!string.Equals(recovery.TargetIssuer, configuration["ShutterSpool:Security:Authority"]?.TrimEnd('/'), StringComparison.Ordinal))
-                    throw new ArgumentException("The independently verified target must use the configured public OIDC issuer.");
-                AccessChangeResult result = await store.RecoverOwnerAsync(operation, recovery, token);
-                Console.WriteLine(JsonSerializer.Serialize(result, display));
-                if (result.Status != "applied") throw new WorkspaceOperator.RefusedException("Recovery did not change grants; inspect current authority and reverify before a new operation.");
-                return;
-            }
-            if (args[0] == "--workspace-recovery-notification")
-            {
-                await store.RecordRecoveryNotificationAsync(operation, args[3], token);
-                return;
-            }
-        }
-        throw new ArgumentException("Provide the exact workspace access command arguments.");
     }
 
     private async Task InitializeControlAsync(WorkspaceControlDbContext control, CancellationToken token)

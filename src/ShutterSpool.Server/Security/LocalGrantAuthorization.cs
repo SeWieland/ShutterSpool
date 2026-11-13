@@ -1,10 +1,11 @@
 using Microsoft.AspNetCore.Authorization;
 using ShutterSpool.Application.Security;
+using ShutterSpool.Domain.Security;
 using System.Security.Claims;
 
 namespace ShutterSpool.Server.Security;
 
-public sealed class LocalGrantRequirement : IAuthorizationRequirement;
+public sealed record LocalGrantRequirement(string Permission) : IAuthorizationRequirement;
 
 public sealed class LocalGrantAuthorizationHandler(IServiceProvider services)
     : AuthorizationHandler<LocalGrantRequirement>
@@ -30,18 +31,15 @@ public sealed class LocalGrantAuthorizationHandler(IServiceProvider services)
             WorkspaceAccessContext access = services.GetRequiredService<WorkspaceAccessContext>();
             access.Membership = member;
             access.ViewerPolicy = await store.GetViewerPolicyAsync(timeout.Token);
-            string? template = (http?.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText;
-            if (member.Role == WorkspaceRole.Viewer && http?.Request.Method == "GET" && template is not null
-                && (template.StartsWith("/media/previews/", StringComparison.Ordinal)
-                    || template.StartsWith("/management/captures/{id", StringComparison.Ordinal))
-                && Guid.TryParse(http.Request.RouteValues["id"]?.ToString(), out Guid captureId)
-                && !await services.GetRequiredService<IWorkspaceMediaScope>().CanReadCaptureAsync(captureId, timeout.Token))
+            bool allowed = Enum.IsDefined(member.Role) && (requirement.Permission switch
             {
-                http.Items["access-denial"] = "media-not-found";
-                return;
-            }
-            if (http is not null && template is not null && WorkspaceEndpointPermissions.Allows(member.Role,
-                http.Request.Method, template))
+                WorkspacePolicies.Member => true,
+                WorkspacePolicies.Curate => member.Role != WorkspaceRole.Viewer,
+                WorkspacePolicies.Administer => WorkspaceAccessPolicy.CanAdminister(member.Role),
+                WorkspacePolicies.ManageOwners => member.Role == WorkspaceRole.Owner,
+                _ => false,
+            });
+            if (allowed)
                 context.Succeed(requirement);
             else if (http is not null) http.Items["access-denial"] = "permission-denied";
         }

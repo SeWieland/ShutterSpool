@@ -1,3 +1,4 @@
+using ShutterSpool.Server.Security;
 using ShutterSpool.Server.Hosting;
 
 namespace ShutterSpool.Server.Api.Sources;
@@ -9,7 +10,8 @@ public static class SourceDisplayEndpoints
 {
     public static RouteGroupBuilder MapSourceDisplayEndpoints(this RouteGroupBuilder management)
     {
-        management.MapGet("/sources/{id:guid}/display", ReadAsync)
+        RouteGroupBuilder authorized = management.MapGroup("").RequireAuthorization(WorkspacePolicies.Administer);
+        authorized.MapGet("/sources/{id:guid}/display", ReadAsync)
             .WithSummary("Read a bounded non-secret Source display projection")
             .Produces<SourceDisplayResponse>().ProducesProblem(404);
         return management;

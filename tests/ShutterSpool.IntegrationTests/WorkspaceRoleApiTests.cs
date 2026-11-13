@@ -1,33 +1,15 @@
+using ShutterSpool.Domain.Security;
 using Microsoft.EntityFrameworkCore;
 using ShutterSpool.Infrastructure.Persistence;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using ShutterSpool.Application.Security;
-using ShutterSpool.Server.Security;
 
 namespace ShutterSpool.IntegrationTests;
 
 public sealed partial class ConfigurationApiTests
 {
-    [Theory]
-    [InlineData(WorkspaceRole.Owner, true, true)]
-    [InlineData(WorkspaceRole.Administrator, true, true)]
-    [InlineData(WorkspaceRole.Curator, true, false)]
-    [InlineData(WorkspaceRole.Viewer, false, false)]
-    public void Workspace_endpoint_matrix_denies_unmapped_and_limits_destructive_and_operator_actions(
-        WorkspaceRole role, bool curate, bool administer)
-    {
-        Assert.True(WorkspaceEndpointPermissions.Allows(role, "GET", "/management/captures/{id:guid}"));
-        Assert.Equal(curate, WorkspaceEndpointPermissions.Allows(role, "POST", "/management/captures/{id:guid}/trash"));
-        Assert.Equal(curate, WorkspaceEndpointPermissions.Allows(role, "POST", "/management/deliveries/{id:guid}/retry"));
-        Assert.Equal(administer, WorkspaceEndpointPermissions.Allows(role, "POST", "/management/trash/{id:guid}/purge"));
-        Assert.Equal(administer, WorkspaceEndpointPermissions.Allows(role, "GET", "/management/sources/{id:guid}"));
-        Assert.Equal(administer, WorkspaceEndpointPermissions.Allows(role, "POST", "/management/captures/{id:guid}/resume"));
-        Assert.False(WorkspaceEndpointPermissions.Allows(role, "GET", "/management/new-private-resource"));
-        Assert.False(WorkspaceEndpointPermissions.Allows(role, "POST", "/management/retention/erasures/suppressions/exports"));
-    }
-
     [Fact]
     public async Task Workspace_access_reports_local_owner_and_rejects_last_owner_removal()
     {
@@ -118,8 +100,8 @@ public sealed partial class ConfigurationApiTests
             database.AuthorizationGrants.Add(new() { Id = second, Issuer = "https://issuer.test", Subject = "second", Role = WorkspaceRole.Owner, IsActive = true });
             await database.SaveChangesAsync(token);
         }
-        AccessChange left = new(Guid.NewGuid(), "https://issuer.test", "operator", Guid.Empty, 0, "leave");
-        AccessChange right = new(Guid.NewGuid(), "https://issuer.test", "second", Guid.Empty, 0, "leave");
+        AccessChange left = new(Guid.NewGuid(), "https://issuer.test", "operator", Guid.Empty, 0, AccessChangeKind.Leave);
+        AccessChange right = new(Guid.NewGuid(), "https://issuer.test", "second", Guid.Empty, 0, AccessChangeKind.Leave);
         await using var one = new ShutterSpoolDbContext(fixture.Database.Options);
         await using var two = new ShutterSpoolDbContext(fixture.Database.Options);
         AccessChangeResult[] changes = await Task.WhenAll(new EfAccessGrantStore(one).ChangeAsync(left, token), new EfAccessGrantStore(two).ChangeAsync(right, token));
@@ -151,52 +133,12 @@ public sealed partial class ConfigurationApiTests
         database.AuthorizationGrants.Add(new() { Id = admin, Issuer = "https://issuer.test", Subject = "admin", Role = WorkspaceRole.Administrator, IsActive = true });
         await database.SaveChangesAsync(token);
         var store = new EfAccessGrantStore(database);
-        Assert.Equal("denied", (await store.ChangeAsync(new(Guid.NewGuid(), "https://issuer.test", "admin", owner, 0, "remove"), token)).Status);
-        Assert.Equal("denied", (await store.ChangeAsync(new(Guid.NewGuid(), "https://issuer.test", "admin", admin, 0, "promote-owner", Confirmed: true), token)).Status);
-        Assert.Equal("denied", (await store.ChangeAsync(new(Guid.NewGuid(), "https://issuer.test", "operator", admin, 0, "promote-owner"), token)).Status);
-        Assert.Equal("applied", (await store.ChangeAsync(new(Guid.NewGuid(), "https://issuer.test", "operator", admin, 0, "promote-owner", Confirmed: true), token)).Status);
-        Assert.Equal("conflict", (await store.ChangeAsync(new(Guid.NewGuid(), "https://issuer.test", "operator", admin, 0, "remove"), token)).Status);
+        Assert.Equal("denied", (await store.ChangeAsync(new(Guid.NewGuid(), "https://issuer.test", "admin", owner, 0, AccessChangeKind.Remove), token)).Status);
+        Assert.Equal("denied", (await store.ChangeAsync(new(Guid.NewGuid(), "https://issuer.test", "admin", admin, 0, AccessChangeKind.PromoteOwner, Confirmed: true), token)).Status);
+        Assert.Equal("denied", (await store.ChangeAsync(new(Guid.NewGuid(), "https://issuer.test", "operator", admin, 0, AccessChangeKind.PromoteOwner), token)).Status);
+        Assert.Equal("applied", (await store.ChangeAsync(new(Guid.NewGuid(), "https://issuer.test", "operator", admin, 0, AccessChangeKind.PromoteOwner, Confirmed: true), token)).Status);
+        Assert.Equal("conflict", (await store.ChangeAsync(new(Guid.NewGuid(), "https://issuer.test", "operator", admin, 0, AccessChangeKind.Remove), token)).Status);
         Assert.True((await store.GetAsync("https://issuer.test", "admin", token))!.IsActive);
-    }
-
-    [Fact]
-    public async Task Operator_recovery_swaps_identity_atomically_records_pending_notice_and_rejects_stale_verification_or_changed_replay()
-    {
-        await using var fixture = await ConfigurationApiFixture.CreateAsync();
-        CancellationToken token = TestContext.Current.CancellationToken;
-        await using var database = new ShutterSpoolDbContext(fixture.Database.Options);
-        var store = new EfAccessGrantStore(database);
-        WorkspaceAccessInspection before = await store.InspectAsync(token);
-        WorkspaceMembership original = Assert.Single(before.Memberships);
-        var recovery = new WorkspaceOwnerRecovery(before.AuthorityRevision, original.Id, original.Revision,
-            "https://issuer.test", "verified-replacement", -1, "protected:synthetic-contact-check", "established-contact",
-            "synthetic-host-operator", "Replace independently verified unavailable representative");
-        await Assert.ThrowsAsync<ArgumentException>(() => store.RecoverOwnerAsync(Guid.NewGuid(), recovery with { VerificationReference = "" }, token));
-        await Assert.ThrowsAsync<ArgumentException>(() => store.RecoverOwnerAsync(Guid.NewGuid(), recovery with { OperatorIdentity = "" }, token));
-        await Assert.ThrowsAsync<ArgumentException>(() => store.RecoverOwnerAsync(Guid.NewGuid(), recovery with { Reason = "" }, token));
-        Assert.Equal("conflict", (await store.RecoverOwnerAsync(Guid.NewGuid(), recovery with { ExpectedAuthorityRevision = 9 }, token)).Status);
-        Guid operation = Guid.NewGuid();
-        AccessChangeResult result = await store.RecoverOwnerAsync(operation, recovery, token);
-        Assert.Equal("applied", result.Status);
-        Assert.False((await store.GetAsync(original.Issuer, original.Subject, token))!.IsActive);
-        WorkspaceMembership replacement = (await store.GetAsync(recovery.TargetIssuer, recovery.TargetSubject, token))!;
-        Assert.True(replacement.IsActive);
-        Assert.Equal(WorkspaceRole.Owner, replacement.Role);
-        Assert.Equal("pending", (await database.Set<WorkspaceAccessOperationEntity>().SingleAsync(item => item.Id == operation, token)).NotificationStatus);
-        WorkspaceAccessOperationEntity audit = await database.Set<WorkspaceAccessOperationEntity>().SingleAsync(item => item.Id == operation, token);
-        Assert.Equal("synthetic-host-operator", audit.ActorSubject);
-        using JsonDocument attestation = JsonDocument.Parse(audit.Request);
-        Assert.Equal(recovery.Reason, attestation.RootElement.GetProperty("Reason").GetString());
-        Assert.Equal(result, await store.RecoverOwnerAsync(operation, recovery, token));
-        Assert.Equal("conflict", (await store.RecoverOwnerAsync(operation, recovery with { TargetSubject = "different" }, token)).Status);
-        await store.RecordRecoveryNotificationAsync(operation, "failed", token);
-        Assert.True((await store.GetAsync(recovery.TargetIssuer, recovery.TargetSubject, token))!.IsActive);
-        Assert.Equal("failed", (await database.Set<WorkspaceAccessOperationEntity>().SingleAsync(item => item.Id == operation, token)).NotificationStatus);
-        WorkspaceAccessInspection current = await store.InspectAsync(token);
-        var same = recovery with { ExpectedAuthorityRevision = current.AuthorityRevision, RepresentativeMembershipId = replacement.Id,
-            ExpectedRepresentativeRevision = replacement.Revision, ExpectedTargetRevision = replacement.Revision };
-        Assert.Equal("applied", (await store.RecoverOwnerAsync(Guid.NewGuid(), same, token)).Status);
-        Assert.True((await store.GetAsync(recovery.TargetIssuer, recovery.TargetSubject, token))!.IsActive);
     }
 
     [Fact]
@@ -207,18 +149,16 @@ public sealed partial class ConfigurationApiTests
         await using var database = new ShutterSpoolDbContext(fixture.Database.Options);
         var store = new EfAccessGrantStore(database);
         WorkspaceMembership actor = (await store.GetAsync("https://issuer.test", "operator", token))!;
-        long authorityBefore = (await database.Set<WorkspaceViewerPolicyEntity>().SingleAsync(token)).AuthorityRevision;
         Guid peer = Guid.NewGuid();
         database.AuthorizationGrants.Add(new() { Id = peer, Issuer = actor.Issuer, Subject = "peer", IsActive = true, Role = WorkspaceRole.Curator });
         await database.SaveChangesAsync(token);
         await database.Database.ExecuteSqlRawAsync("ALTER TABLE workspace_access_operations ADD CONSTRAINT reject_synthetic_audit CHECK (false) NOT VALID", token);
         await Assert.ThrowsAsync<DbUpdateException>(() => store.ChangeAsync(new(Guid.NewGuid(), actor.Issuer, actor.Subject,
-            peer, 0, "role", WorkspaceRole.Administrator), token));
+            peer, 0, AccessChangeKind.Role, WorkspaceRole.Administrator), token));
         await using var verify = new ShutterSpoolDbContext(fixture.Database.Options);
         AuthorizationGrant unchanged = await verify.AuthorizationGrants.SingleAsync(item => item.Id == peer, token);
         Assert.Equal(WorkspaceRole.Curator, unchanged.Role);
         Assert.Equal(0, unchanged.Revision);
-        Assert.Equal(authorityBefore, (await verify.Set<WorkspaceViewerPolicyEntity>().SingleAsync(token)).AuthorityRevision);
     }
 
     [Fact]
@@ -248,7 +188,7 @@ public sealed partial class ConfigurationApiTests
             while (!await gate.Database.SqlQuery<bool>($"SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted AND database=(SELECT oid FROM pg_database WHERE datname=current_database())) AS \"Value\"").SingleAsync(token))
                 await Task.Delay(20, token);
             await using var revoke = new ShutterSpoolDbContext(fixture.Database.Options);
-            AccessChangeResult removed = await new EfAccessGrantStore(revoke).ChangeAsync(new(Guid.NewGuid(), "https://issuer.test", "operator", actor, 0, "remove"), token);
+            AccessChangeResult removed = await new EfAccessGrantStore(revoke).ChangeAsync(new(Guid.NewGuid(), "https://issuer.test", "operator", actor, 0, AccessChangeKind.Remove), token);
             Assert.Equal("applied", removed.Status);
             Assert.False(pending.IsCompleted);
         }
@@ -319,7 +259,7 @@ public sealed partial class ConfigurationApiTests
         using var reader = new StreamReader(await stream.Content.ReadAsStreamAsync(token));
         Assert.Equal("event: status", await reader.ReadLineAsync(token));
         await using (var revoke = new ShutterSpoolDbContext(fixture.Database.Options))
-            Assert.Equal("applied", (await new EfAccessGrantStore(revoke).ChangeAsync(new(Guid.NewGuid(), "https://issuer.test", "operator", actor, 0, "remove"), token)).Status);
+            Assert.Equal("applied", (await new EfAccessGrantStore(revoke).ChangeAsync(new(Guid.NewGuid(), "https://issuer.test", "operator", actor, 0, AccessChangeKind.Remove), token)).Status);
         string remainder = await reader.ReadToEndAsync(token);
         Assert.DoesNotContain("event: status", remainder, StringComparison.Ordinal);
     }

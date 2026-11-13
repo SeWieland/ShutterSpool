@@ -1,3 +1,4 @@
+using ShutterSpool.Domain.Security;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using ShutterSpool.Application.Security;

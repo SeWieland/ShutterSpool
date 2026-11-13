@@ -52,13 +52,15 @@ Requests check current membership and permission before execution. Already admit
 | `GET /management/viewer-policy` | Read the workspace's `includeUnreleased` policy as any active member. |
 | `PUT /management/viewer-policy` | Change the workspace's policy as Owner or Administrator. |
 
-Capabilities are `canCurate`, `canAdminister`, `canManageMembers` and `canManageOwners`; they describe the current member, not a client-supplied authorization decision.
+Capabilities are `canCurate`, `canAdminister`, `canManageMembers` and `canManageOwners`; clients use these returned flags for control availability, while Server authorization remains authoritative.
+Each endpoint selects a named ASP.NET workspace policy; unclassified management endpoints deny access.
+Authenticated `GET /management/access` caches the caller's IdP display name for member lists. Names are optional, display-only and fall back to the subject; no directory lookup is performed.
 Access mutations carry `operationId` and `expectedRevision`. Promotion also requires `confirmed: true`; policy updates use the current policy revision.
 The store commits the change, operation result and audit together. Reuse the same operation identity and inputs to reconcile an uncertain result; use current revisions for a new decision.
 Problem Details distinguish `last-owner` and `membership-conflict` (409), `permission-denied` (403) and `membership-not-found` (404).
 A forbidden action differs from revoked membership: it does not by itself require discarding a still-valid sign-in or workspace membership.
 There is no ordinary create-member or invitation endpoint.
-Exceptional Owner recovery uses the [protected operator procedure](../../deploy/operations/README.md#protected-owner-recovery), not a management endpoint or login claim.
+Owner login recovery uses [native identity-provider facilities](../../deploy/operations/README.md#owner-login-recovery). A provider role never grants local ownership; irrecoverable identity loss requires exceptional manual operator maintenance, with no custom recovery command.
 
 `GET /management/captures/{id}/delivery-summary` returns authorized safe outcomes: delivery `id`, `assetId`, `state` and `canRetry`, with at most 1,000 items and an explicit `truncated` flag.
 It exposes no provider paths or diagnostics. Raw decisions, delivery/attempt history and operational configuration require Owner or Administrator authority.

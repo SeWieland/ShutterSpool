@@ -1,3 +1,4 @@
+using ShutterSpool.Server.Security;
 using ShutterSpool.Application.Delivery;
 using ShutterSpool.Application.Destinations;
 using ShutterSpool.Application.Routing;
@@ -9,9 +10,10 @@ public static class RoutingEndpoints
 {
     public static RouteGroupBuilder MapRoutingEndpoints(this RouteGroupBuilder management)
     {
-        management.MapGet("/destinations/{id:guid}/routing", GetAsync).WithSummary("Get destination routing rules")
+        RouteGroupBuilder authorized = management.MapGroup("").RequireAuthorization(WorkspacePolicies.Administer);
+        authorized.MapGet("/destinations/{id:guid}/routing", GetAsync).WithSummary("Get destination routing rules")
             .Produces<DestinationRoutingResponse>().ProducesProblem(StatusCodes.Status404NotFound);
-        management.MapPut("/destinations/{id:guid}/routing", UpdateAsync).WithSummary("Replace destination routing rules")
+        authorized.MapPut("/destinations/{id:guid}/routing", UpdateAsync).WithSummary("Replace destination routing rules")
             .Produces<DestinationRoutingResponse>().ProducesValidationProblem().ProducesProblem(StatusCodes.Status404NotFound)
             .Produces<DestinationRoutingConflictProblemDetails>(409, "application/problem+json");
         management.MapRoutingHistoryEndpoints();

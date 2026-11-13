@@ -1,3 +1,4 @@
+using ShutterSpool.Server.Security;
 using Microsoft.AspNetCore.WebUtilities;
 using ShutterSpool.Application.Routing;
 using ShutterSpool.Domain.Delivery;
@@ -11,15 +12,16 @@ public static class RoutingHistoryEndpoints
 {
     public static RouteGroupBuilder MapRoutingHistoryEndpoints(this RouteGroupBuilder management)
     {
-        management.MapGet("/captures/{id:guid}/routing", DecisionsAsync).WithSummary("Page Asset routing decisions")
+        RouteGroupBuilder authorized = management.MapGroup("").RequireAuthorization(WorkspacePolicies.Administer);
+        authorized.MapGet("/captures/{id:guid}/routing", DecisionsAsync).WithSummary("Page Asset routing decisions")
             .Produces<RoutingDecisionPageResponse>().ProducesValidationProblem().ProducesProblem(404);
-        management.MapGet("/captures/{id:guid}/deliveries", DeliveriesAsync).WithSummary("Page recorded Asset deliveries")
+        authorized.MapGet("/captures/{id:guid}/deliveries", DeliveriesAsync).WithSummary("Page recorded Asset deliveries")
             .Produces<RoutingDeliveryPageResponse>().ProducesValidationProblem().ProducesProblem(404);
-        management.MapGet("/captures/{id:guid}/actions", ActionsAsync).WithSummary("Page explicit Asset actions")
+        authorized.MapGet("/captures/{id:guid}/actions", ActionsAsync).WithSummary("Page explicit Asset actions")
             .Produces<RoutingActionPageResponse>().ProducesValidationProblem().ProducesProblem(404);
-        management.MapGet("/deliveries/{id:guid}/attempts", AttemptsAsync).WithSummary("Page delivery attempts")
+        authorized.MapGet("/deliveries/{id:guid}/attempts", AttemptsAsync).WithSummary("Page delivery attempts")
             .Produces<RoutingAttemptPageResponse>().ProducesValidationProblem().ProducesProblem(404);
-        management.MapGet("/destinations/{id:guid}/work", DestinationWorkAsync).WithSummary("Page recorded work for a destination")
+        authorized.MapGet("/destinations/{id:guid}/work", DestinationWorkAsync).WithSummary("Page recorded work for a destination")
             .Produces<RoutingDeliveryPageResponse>().ProducesValidationProblem().ProducesProblem(404);
         return management;
     }

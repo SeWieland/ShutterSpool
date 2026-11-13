@@ -219,11 +219,11 @@ internal static class ServerComposition
         }));
 
         app.MapWorkspaceEndpoints();
-        var management = app.MapGroup("/management").RequireAuthorization(SecurityExtensions.ManagementAccessPolicy);
+        var management = app.MapManagementGroup();
         management.WithMetadata(new Microsoft.AspNetCore.Mvc.ProducesResponseTypeAttribute(typeof(Microsoft.AspNetCore.Mvc.ProblemDetails), StatusCodes.Status401Unauthorized),
             new Microsoft.AspNetCore.Mvc.ProducesResponseTypeAttribute(typeof(Microsoft.AspNetCore.Mvc.ProblemDetails), StatusCodes.Status403Forbidden),
             new Microsoft.AspNetCore.Mvc.ProducesResponseTypeAttribute(typeof(Microsoft.AspNetCore.Mvc.ProblemDetails), StatusCodes.Status503ServiceUnavailable));
-        management.MapGet("/status", () => Results.Ok());
+        management.MapGet("/status", () => Results.Ok()).RequireAuthorization(WorkspacePolicies.Member);
         management.MapWorkspaceAccessEndpoints();
         management.MapSourceEndpoints();
         management.MapCollectionEndpoints();
@@ -244,12 +244,12 @@ internal static class ServerComposition
         management.MapRoutingEndpoints();
         management.MapDeliveryEndpoints();
         app.MapPreviewEndpoints();
-        app.MapGet("/media/originals/{id}", (string id) => Results.NotFound()).RequireAuthorization(SecurityExtensions.ManagementAccessPolicy);
+        app.MapGet("/media/originals/{id}", (string id) => Results.NotFound()).RequireAuthorization(WorkspacePolicies.Member);
         app.MapGet("/live/status", LiveStatusEndpoint.StreamAsync)
-            .RequireAuthorization(SecurityExtensions.ManagementAccessPolicy)
+            .RequireAuthorization(WorkspacePolicies.Member)
             .Produces<string>(StatusCodes.Status200OK, contentType: "text/event-stream");
         app.MapHub<LiveChangesHub>("/live/changes", options => options.CloseOnAuthenticationExpiration = true)
-            .RequireAuthorization(SecurityExtensions.ManagementAccessPolicy).RequireCors("live-hub");
+            .RequireAuthorization(WorkspacePolicies.Member).RequireCors("live-hub");
         app.MapCameraIngressEndpoints(cameraIngress);
         app.MapFallbackToFile("index.html");
         app.MapDefaultEndpoints();

@@ -27,6 +27,15 @@ namespace ShutterSpool.Infrastructure.Persistence.Migrations
                 nullable: false,
                 defaultValue: "Owner");
 
+            migrationBuilder.AlterColumn<string>(
+                name: "Role", table: "authorization_grants", type: "character varying(32)", maxLength: 32,
+                nullable: false, oldClrType: typeof(string), oldType: "character varying(32)", oldMaxLength: 32,
+                oldDefaultValue: "Owner");
+
+            migrationBuilder.AddColumn<string>(
+                name: "DisplayName", table: "authorization_grants", type: "character varying(256)",
+                maxLength: 256, nullable: true);
+
             migrationBuilder.CreateTable(
                 name: "workspace_access_operations",
                 columns: table => new
@@ -39,7 +48,6 @@ namespace ShutterSpool.Infrastructure.Persistence.Migrations
                     Kind = table.Column<string>(type: "character varying(32)", maxLength: 32, nullable: false),
                     TargetId = table.Column<Guid>(type: "uuid", nullable: false),
                     RecordedAt = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
-                    NotificationStatus = table.Column<string>(type: "text", nullable: true),
                     BeforeState = table.Column<string>(type: "text", nullable: true),
                     AfterState = table.Column<string>(type: "text", nullable: true)
                 },
@@ -55,8 +63,7 @@ namespace ShutterSpool.Infrastructure.Persistence.Migrations
                     Id = table.Column<int>(type: "integer", nullable: false)
                         .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
                     IncludeUnreleased = table.Column<bool>(type: "boolean", nullable: false),
-                    Revision = table.Column<long>(type: "bigint", nullable: false),
-                    AuthorityRevision = table.Column<long>(type: "bigint", nullable: false)
+                    Revision = table.Column<long>(type: "bigint", nullable: false)
                 },
                 constraints: table =>
                 {
@@ -65,8 +72,8 @@ namespace ShutterSpool.Infrastructure.Persistence.Migrations
 
             migrationBuilder.InsertData(
                 table: "workspace_viewer_policy",
-                columns: new[] { "Id", "AuthorityRevision", "IncludeUnreleased", "Revision" },
-                values: new object[] { 1, 0L, false, 0L });
+                columns: new[] { "Id", "IncludeUnreleased", "Revision" },
+                values: new object[] { 1, false, 0L });
         }
 
         /// <inheritdoc />

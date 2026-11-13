@@ -1,3 +1,4 @@
+using ShutterSpool.Server.Security;
 using Microsoft.AspNetCore.Mvc;
 using ShutterSpool.Application.Preview;
 using ShutterSpool.Application.Retention;
@@ -99,7 +100,8 @@ public static class RetentionSettingsEndpoints
 {
     public static RouteGroupBuilder MapRetentionSettingsEndpoints(this RouteGroupBuilder management)
     {
-        RouteGroupBuilder retention = management.MapGroup("/retention");
+        RouteGroupBuilder authorized = management.MapGroup("").RequireAuthorization(WorkspacePolicies.Administer);
+        RouteGroupBuilder retention = authorized.MapGroup("/retention");
         retention.MapGet("/settings", GetAsync).WithSummary("Read retention and shared quota settings")
             .Produces<RetentionSettingsDocumentResponse>();
         retention.MapPost("/settings/preview", PreviewAsync).WithSummary("Preview retention and quota impact")

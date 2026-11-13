@@ -1,3 +1,4 @@
+using ShutterSpool.Domain.Security;
 using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using System.Net.Http.Json;
@@ -411,7 +412,7 @@ public sealed partial class WorkspaceTenancyHttpTests
             await using var scope = Storage.Scope(Server.Services, workspace);
             var database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
             AuthorizationGrant? grant = await database.AuthorizationGrants.SingleOrDefaultAsync(item => item.Issuer == Issuer && item.Subject == subject, Token);
-            if (grant is null) database.AuthorizationGrants.Add(new() { Issuer = Issuer, Subject = subject, IsActive = active });
+            if (grant is null) database.AuthorizationGrants.Add(new() { Issuer = Issuer, Subject = subject, IsActive = active, Role = WorkspaceRole.Owner });
             else grant.IsActive = active;
             await database.SaveChangesAsync(Token);
         }
