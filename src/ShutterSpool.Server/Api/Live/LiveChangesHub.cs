@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Authorization;
+using ShutterSpool.Domain.Security;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Options;
 using ShutterSpool.Application.Ingress;
@@ -20,7 +20,6 @@ public sealed record SourceActivityChangedHint(string Epoch, Guid TransferId, Gu
 public sealed record ResyncRequiredHint(string Epoch);
 public sealed record PreviewPreparationObservation(DateTimeOffset ObservedAt, long Version);
 
-[Authorize(Policy = SecurityExtensions.ManagementAccessPolicy)]
 public sealed class LiveChangesHub(IServiceScopeFactory scopes, IOptions<SecurityOptions> security, WorkspaceContext workspace) : Hub
 {
     private static readonly TimeSpan GrantCheckInterval = TimeSpan.FromSeconds(30);

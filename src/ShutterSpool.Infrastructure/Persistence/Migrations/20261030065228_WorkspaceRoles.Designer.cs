@@ -248,6 +248,10 @@ namespace ShutterSpool.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<string>("DisplayName")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean");
 
@@ -264,10 +268,8 @@ namespace ShutterSpool.Infrastructure.Persistence.Migrations
 
                     b.Property<string>("Role")
                         .IsRequired()
-                        .ValueGeneratedOnAdd()
                         .HasMaxLength(32)
-                        .HasColumnType("character varying(32)")
-                        .HasDefaultValue("Owner");
+                        .HasColumnType("character varying(32)");
 
                     b.Property<string>("Subject")
                         .IsRequired()
@@ -1980,9 +1982,6 @@ namespace ShutterSpool.Infrastructure.Persistence.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
 
-                    b.Property<string>("NotificationStatus")
-                        .HasColumnType("text");
-
                     b.Property<DateTimeOffset>("RecordedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -2031,9 +2030,6 @@ namespace ShutterSpool.Infrastructure.Persistence.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
-                    b.Property<long>("AuthorityRevision")
-                        .HasColumnType("bigint");
-
                     b.Property<bool>("IncludeUnreleased")
                         .HasColumnType("boolean");
 
@@ -2048,7 +2044,6 @@ namespace ShutterSpool.Infrastructure.Persistence.Migrations
                         new
                         {
                             Id = 1,
-                            AuthorityRevision = 0L,
                             IncludeUnreleased = false,
                             Revision = 0L
                         });

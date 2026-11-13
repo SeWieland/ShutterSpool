@@ -53,20 +53,24 @@ Live status is a long-lived exception only in transport, not in policy. The Serv
 
 The fixed Owner, Administrator, Curator and Viewer roles belong to each workspace membership.
 The [user guide](../workspaces.md#understand-your-role) owns their capability comparison and Viewer visibility rules.
-Endpoint permissions and media predicates apply on the Server; private operations without a mapped permission deny access.
+Named ASP.NET authorization policies attached to endpoints enforce workspace permissions; unclassified private operations deny access. Domain policies own pure role/access and media-visibility decisions; Infrastructure applies visibility predicates before projection and paging.
 Operational/configuration diagnostics remain administrative. Nonadministrative media reads use safe outcomes without provider paths or raw attempt diagnostics.
 
 Membership, Owner and Viewer-policy changes serialize in a short transaction inside the selected tenant database.
 After acquiring that boundary, the operation rechecks the current actor, target role, expected revision and remaining active Owner count.
 The change, operation result and audit commit together. An earlier request check cannot authorize a later access change after the actor loses that authority.
 Owner promotion is a separate confirmed action; an Administrator cannot alter an Owner, and the last active Owner cannot leave or be removed/demoted.
-Protected operator recovery uses the same atomic authority and audit boundary; it does not grant routine media access to the operator.
+These ordinary access changes retain operation UUIDs for retry reconciliation. Clients use the capability flags returned by the Server to gate controls; the Server remains authoritative.
 
 ## Bootstrap and recovery
 
 [Explicit workspace provisioning](../../deploy/operations/README.md#workspace-provisioning) creates the initial Owner membership and its operator-attributed audit once, against a verified issuer/subject.
 An ordinary restart never replays that grant or substitutes the deployment operator as a workspace member.
-There is no default password, automatic first-login enrollment or unauthenticated recovery endpoint.
+Initial provisioning works without SMTP or a verified email. There is no default password, automatic first-login enrollment or unauthenticated recovery endpoint.
+
+Recover the same existing Owner identity through native IdP self-service or trusted administration, then use normal local Owner management. If no Owner identity is recoverable, a trusted application/database operator may repair the local grant as exceptional maintenance; there is no application recovery subsystem. See [Owner login recovery](../../deploy/operations/README.md#owner-login-recovery) for the operational boundary. Provider administration and attribution belong to the operator; a Server audit entry identifies the authenticated principal and does not prove which operator used IdP impersonation.
+
+Member names are display-only claims cached when the member calls authenticated `GET /management/access`. Missing names fall back to the subject and may remain absent until that person accesses the workspace. There is no identity directory lookup, and names never authorize a grant.
 
 For an operator without an existing issuer, the supported profile supplies a Keycloak companion. Deployment secrets create its operational bootstrap and initial ShutterSpool administrator; versioned realm, client and audience-mapper configuration is reconciled without requiring a Keycloak-console visit. Keycloak’s own master administrator is deployment plumbing, not a ShutterSpool login.
 

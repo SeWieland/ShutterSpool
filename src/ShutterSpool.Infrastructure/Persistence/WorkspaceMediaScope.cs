@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using ShutterSpool.Application.Security;
+using ShutterSpool.Domain.Captures;
 using ShutterSpool.Domain.Delivery;
 using ShutterSpool.Domain.Routing;
 
@@ -7,23 +8,28 @@ namespace ShutterSpool.Infrastructure.Persistence;
 
 internal static class WorkspaceCaptureVisibility
 {
-    internal static IQueryable<CaptureEntity> Apply(IQueryable<CaptureEntity> query, WorkspaceAccessContext? access)
-    {
-        if (access?.IsViewer == true)
+    internal static IQueryable<Guid> VisibleCaptureIds(IQueryable<CaptureEntity> captures, WorkspaceAccessContext? access) =>
+        captures.Select(item => new CaptureVisibilityFacts
         {
-            query = query.Where(item => item.RetentionDisposition == "Active");
-            if (access.ReleasedOnly) query = query.Where(item => item.ReleasedAt != null && item.Rating != -1);
-        }
-        return query;
-    }
+            CaptureId = item.Id,
+            IsViewer = access != null && access.IsViewer,
+            ReleasedOnly = access != null && access.ReleasedOnly,
+            IsActive = item.RetentionDisposition == "Active",
+            IsReleased = item.ReleasedAt != null,
+            Rating = item.Rating,
+        }).Where(CaptureVisibilityPolicy.IsVisible).Select(facts => facts.CaptureId);
 }
 
 internal sealed class WorkspaceMediaScope(ShutterSpoolDbContext database, WorkspaceAccessContext access) : IWorkspaceMediaScope
 {
-    public Task<bool> CanReadCaptureAsync(Guid captureId, CancellationToken token) =>
-        WorkspaceCaptureVisibility.Apply(database.Captures.AsNoTracking(), access).AnyAsync(item => item.Id == captureId
-            && !database.PrivacyErasureAssets.Any(erased => database.CaptureAssets.Any(member =>
-                member.CaptureId == item.Id && member.AssetId == erased.AssetId)), token);
+    public Task<bool> CanReadCaptureAsync(Guid captureId, CancellationToken token)
+    {
+        IQueryable<Guid> visibleCaptureIds = WorkspaceCaptureVisibility.VisibleCaptureIds(database.Captures.AsNoTracking(), access);
+        return database.Captures.AsNoTracking().Where(item => visibleCaptureIds.Contains(item.Id))
+            .AnyAsync(item => item.Id == captureId
+                && !database.PrivacyErasureAssets.Any(erased => database.CaptureAssets.Any(member =>
+                    member.CaptureId == item.Id && member.AssetId == erased.AssetId)), token);
+    }
 
     public async Task<SafeDelivery[]?> GetDeliveriesAsync(Guid captureId, CancellationToken token)
     {

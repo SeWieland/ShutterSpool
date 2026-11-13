@@ -131,9 +131,13 @@ internal sealed class EfCollectionManagementStore(ShutterSpoolDbContext database
     private Task<int> LockAssignmentsAsync(CancellationToken token) => database.Database.ExecuteSqlRawAsync(
         "SELECT pg_advisory_xact_lock(hashtextextended('shutterspool-collection-assignment', 0))", token);
 
-    private IQueryable<CaptureEntity> VisibleCaptures() => WorkspaceCaptureVisibility.Apply(database.Captures, access)
-        .Where(capture => !database.PrivacyErasureAssets.Any(erased => database.CaptureAssets.Any(member =>
-            member.CaptureId == capture.Id && member.AssetId == erased.AssetId)));
+    private IQueryable<CaptureEntity> VisibleCaptures()
+    {
+        IQueryable<Guid> visibleCaptureIds = WorkspaceCaptureVisibility.VisibleCaptureIds(database.Captures, access);
+        return database.Captures.Where(capture => visibleCaptureIds.Contains(capture.Id))
+            .Where(capture => !database.PrivacyErasureAssets.Any(erased => database.CaptureAssets.Any(member =>
+                member.CaptureId == capture.Id && member.AssetId == erased.AssetId)));
+    }
 
     private static string EncodeCursor(CollectionEntity item) => $"{item.Path}|{item.Id:N}";
 

@@ -1,3 +1,4 @@
+using ShutterSpool.Server.Security;
 using Microsoft.AspNetCore.WebUtilities;
 using ShutterSpool.Application.Captures;
 using ShutterSpool.Application.Retention;
@@ -101,12 +102,12 @@ public static class CaptureReadEndpoints
 {
     public static RouteGroupBuilder MapCaptureReadEndpoints(this RouteGroupBuilder management)
     {
-        management.MapGet("/tags", GetTagsAsync).WithSummary("Suggest existing Capture tags")
+        management.MapGet("/tags", GetTagsAsync).RequireAuthorization(WorkspacePolicies.Member).WithSummary("Suggest existing Capture tags")
             .Produces<TagSuggestionsResponse>().ProducesValidationProblem();
         RouteGroupBuilder captures = management.MapGroup("/captures");
-        captures.MapGet("", GetInboxAsync).WithSummary("Browse accepted Captures")
+        captures.MapGet("", GetInboxAsync).RequireAuthorization(WorkspacePolicies.Member).WithSummary("Browse accepted Captures")
             .Produces<CaptureInboxResponse>().ProducesValidationProblem();
-        captures.MapGet("/{id:guid}", GetAsync).WithSummary("Read a Capture and its delivery history")
+        captures.MapGet("/{id:guid}", GetAsync).RequireAuthorization(WorkspacePolicies.Member).WithSummary("Read a Capture and its delivery history")
             .Produces<CaptureDetailResponse>().ProducesProblem(StatusCodes.Status404NotFound);
         return management;
     }

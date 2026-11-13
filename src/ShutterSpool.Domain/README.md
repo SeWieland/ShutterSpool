@@ -3,7 +3,7 @@
 Domain answers business questions without performing I/O: do these originals belong to one shot, which route matches, or has a lifetime boundary been reached?
 Keeping decisions pure lets tests exercise them without a camera, database or provider.
 
-It contains immutable Asset identity, conservative Capture grouping and timestamp compatibility, curation/Hold/Restore/release, typed routing values/operators/templates, delivery/reconciliation/completion policy, and accepted per-Asset retention lifetime/tier decisions.
+It contains immutable Asset identity, conservative Capture grouping and timestamp compatibility, curation/Hold/Restore/release, typed routing values/operators/templates, delivery/reconciliation/completion policy, accepted per-Asset retention lifetime/tier decisions, and fixed workspace role/access and media-visibility predicates.
 
 Source protocol intent is explicit through `SourceType` and `SourceConnectionProfile`; the current type is `CameraFtpUpload`, with `ModernFtps`, `LegacyFtps` and `PlainFtpLan` connection profiles. Deployment availability is evaluated outside Domain.
 

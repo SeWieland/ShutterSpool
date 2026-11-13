@@ -21,7 +21,7 @@ const pending = shallowRef<Pending>();
 let sequence = 0;
 let disposed = false;
 let controller: AbortController | undefined;
-function identity(member: Member) { return member.subject || 'Identity unavailable'; }
+function identity(member: Member) { return member.displayName?.trim() || member.subject || 'Identity unavailable'; }
 function roleChoice(member: Member) { return (member.role === 'Owner' ? 'Administrator' : member.role) as Exclude<WorkspaceRole, 'Owner'>; }
 function editable(member: Member) {
     return member.isActive && (member.role !== 'Owner' || workspaceAccess.value?.capabilities.canManageOwners);
@@ -137,7 +137,7 @@ onUnmounted(() => { disposed = true; sequence++; controller?.abort(); pending.va
             <h3>Members</h3>
             <ul class="member-list">
                 <li v-for="member in members" :key="String(member.id)" class="member-row">
-                    <div class="member-identity"><strong>{{ identity(member) }}<template v-if="String(member.id) === workspaceAccess?.membershipId"> · You</template></strong><span>{{ member.role }}{{ member.isActive ? '' : ' · inactive' }}</span><details class="section-disclosure"><summary><UIcon name="i-lucide-chevron-right" class="disclosure-chevron" aria-hidden="true" />Identity details</summary><p>Sign-in issuer: {{ member.issuer }}</p><p>Membership: {{ member.id }}</p></details></div>
+                    <div class="member-identity"><strong>{{ identity(member) }}<template v-if="String(member.id) === workspaceAccess?.membershipId"> · You</template></strong><span>{{ member.role }}{{ member.isActive ? '' : ' · inactive' }}</span><details class="section-disclosure"><summary><UIcon name="i-lucide-chevron-right" class="disclosure-chevron" aria-hidden="true" />Identity details</summary><p>Sign-in issuer: {{ member.issuer }}</p><p>Subject: {{ member.subject }}</p><p>Membership: {{ member.id }}</p></details></div>
                     <div v-if="editable(member)" class="member-actions">
                         <label>Role for {{ identity(member) }}<select v-model="roles[String(member.id)]" :disabled="busy || loading || !!error || !!pending || !online"><option>Administrator</option><option>Curator</option><option>Viewer</option></select></label>
                         <div class="actions"><button type="button" :disabled="busy || loading || !!error || !!pending || !online || roles[String(member.id)] === member.role" @click="changeRole(member)">{{ member.role === 'Owner' ? 'Demote Owner' : 'Save role' }}</button><button type="button" :disabled="busy || loading || !!error || !!pending || !online" @click="remove(member)">Remove member</button></div>

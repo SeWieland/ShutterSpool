@@ -1,3 +1,4 @@
+using ShutterSpool.Server.Security;
 using Microsoft.AspNetCore.Mvc;
 using ShutterSpool.Application.Delivery;
 using ShutterSpool.Application.Destinations;
@@ -19,15 +20,16 @@ public static class LocalDestinationEndpoints
 {
     public static RouteGroupBuilder MapLocalDestinationEndpoints(this RouteGroupBuilder management)
     {
-        management.MapGet("/destinations/{id:guid}/local", GetAsync).WithSummary("Get local destination root")
+        RouteGroupBuilder authorized = management.MapGroup("").RequireAuthorization(WorkspacePolicies.Administer);
+        authorized.MapGet("/destinations/{id:guid}/local", GetAsync).WithSummary("Get local destination root")
             .Produces<LocalDestinationResponse>().ProducesProblem(StatusCodes.Status404NotFound);
-        management.MapPut("/destinations/{id:guid}/local", UpdateAsync).WithSummary("Configure local destination root")
+        authorized.MapPut("/destinations/{id:guid}/local", UpdateAsync).WithSummary("Configure local destination root")
             .Produces<LocalDestinationResponse>().ProducesValidationProblem()
             .ProducesProblem(StatusCodes.Status404NotFound)
             .Produces<LocalDestinationConflictProblemDetails>(StatusCodes.Status409Conflict, "application/problem+json");
-        management.MapPost("/destinations/{id:guid}/local/test", TestAsync).WithSummary("Test local destination root")
+        authorized.MapPost("/destinations/{id:guid}/local/test", TestAsync).WithSummary("Test local destination root")
             .Produces<LocalDestinationTestResponse>().ProducesProblem(StatusCodes.Status404NotFound);
-        management.MapGet("/destinations/local-folders", BrowseAsync).WithSummary("Browse local destination folders")
+        authorized.MapGet("/destinations/local-folders", BrowseAsync).WithSummary("Browse local destination folders")
             .Produces<LocalDirectoryListingResponse>().ProducesValidationProblem();
         return management;
     }

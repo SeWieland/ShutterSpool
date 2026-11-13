@@ -168,57 +168,15 @@ Workspace quotas cannot exceed their allocation or disable its cap. Receive, ori
 Unused allocation cannot be borrowed; physical free-space checks still apply.
 Application tests do not establish filesystem enforcement, power-loss recovery or hosted readiness; qualify those on the selected platform.
 
-## Protected Owner recovery
+## Owner login recovery
 
-Use the identity provider's native account recovery first: retaining the same issuer and subject retains the workspace membership.
-If another Owner can sign in, prefer ordinary membership administration. An Administrator role, an email-address match or knowledge of private photographs does not prove ownership.
-The following exceptional procedure is a host-authenticated operator command, with no public recovery endpoint and no automatic staff membership.
+Recover access to the same existing Owner identity through the identity provider's native self-service recovery or trusted administration. Preserve its exact issuer and subject so the existing local membership still applies. If another Owner can sign in, that Owner can use **Settings → Members** to manage existing memberships, with separate confirmation for Owner promotion and protection for the last active Owner.
 
-Before onboarding, keep a minimal verified recovery contact and designated current Owner in a protected operator record outside the workspace login dependency.
-Keep that designation current: Owner removal, demotion or disablement invalidates it. Routine contact or representative changes require a current Owner's request or authorization; verify it through the established channel, confirm the new representative and audit the change in the protected record.
-A suspected compromised contact must not authorize its own replacement. Independently establish current customer authority or leave access unchanged.
-For a personally known customer, direct confirmation can establish that authority. A replacement contact supplied only by the recovery requester is insufficient.
+Native recovery depends on the provider and configured account factors; email recovery requires SMTP. The operator is responsible for trusted identity administration and its attribution. An identity-provider administrator or realm role alone grants no local workspace Owner authority. Application audit records the authenticated principal; it cannot establish which operator used provider impersonation or another identity-administration facility.
 
-1. Authenticate to the protected operator host and identify the exact workspace. Confirm the request through the established, uncompromised channel and verify the representative still has current authority. Obtain fresh authenticated proof of control of the target OIDC issuer and subject through the identity provider. Keep the evidence in the protected operator record, not application logs.
-2. Inspect current tenant authority using the canonical workspace name:
+If no existing Owner identity can be recovered, a trusted application/database operator may repair the workspace grant manually as exceptional maintenance. This requires privileged access and responsibility for the exact principal, workspace, remaining Owners and current authorization state. ShutterSpool supplies no custom recovery command, request, representative/contact registry or notification workflow.
 
-   ```sh
-   docker compose run --rm --no-deps maintenance --workspace-access studio
-   ```
-
-   The output contains `authorityRevision` and current membership identities, roles, active state and revisions. Protect this output. Match the designated representative to an active Owner; use `-1` for the target revision only when the exact target issuer/subject has no membership.
-3. Create a protected JSON request of at most 16 KiB in `secrets/recovery.json`, readable by the operator container's UID 1654. It requires the following fields:
-
-   | Field | Value |
-   | --- | --- |
-   | `expectedAuthorityRevision` | Current inspected authority revision. |
-   | `representativeMembershipId`, `expectedRepresentativeRevision` | Verified designated Owner's membership and revision. |
-   | `targetIssuer`, `targetSubject`, `expectedTargetRevision` | Freshly verified target principal and its current revision, or `-1` if absent. The issuer must exactly match the configured public OIDC authority. |
-   | `verificationReference`, `verificationMethod` | Reference to the protected evidence and a short description of how it was verified. No evidence copies, credentials or tokens. |
-   | `operatorIdentity`, `reason` | Identifiable authenticated operator and the reason for this exceptional recovery, retained in the access audit. |
-
-4. Recheck the protected designation/contact record immediately before executing the change. Serialize this manual recovery procedure with contact/designation updates; a changed or disputed designation requires new verification. Use a new operation GUID for the verified decision and retain it with the request:
-
-   ```sh
-   docker compose run --rm --no-deps \
-     --volume "./secrets/recovery.json:/run/recovery.json:ro" maintenance \
-     --workspace-recover-owner studio 33333333-3333-4333-8333-333333333333 /run/recovery.json
-   ```
-
-   The command checks tenant identity/schema, current authority and membership revisions inside the access-change transaction. It grants the target Owner, revokes the replaced representative's membership, and records the result and audit atomically. It does not change IdP credentials, other workspaces or media. Already admitted work can finish under the ordinary admission boundary.
-   The verification fields are the operator's attestation: the application does not independently authenticate a human or validate external contact evidence. Missing or disputed proof must stop the procedure before invoking the command.
-5. If the result is uncertain, retry the same operation GUID and unchanged request to retrieve its recorded result. A conflict requires inspecting current authority and fresh verification for a new operation; do not merely substitute newer revision numbers.
-6. Confirm successful sign-in. After identity replacement, explicitly establish and verify the new recovery designation; do not silently transfer the former principal's contact authority. Send the completion notice manually through the established contact channel, then record its outcome:
-
-   ```sh
-   docker compose run --rm --no-deps maintenance --workspace-recovery-notification studio 33333333-3333-4333-8333-333333333333 success
-   ```
-
-   Use `failed` for an unsuccessful notice and follow up through the protected procedure. The application initially records `pending`; notification failure does not undo committed recovery. There is no application mail queue.
-
-These access commands do not require a storage-maintenance shutdown, but require the same protected migration credentials and exact tenant configuration. Never expose those credentials to ordinary Server operation.
-Before opening hosted access, name the operator/contact custodian, choose minimal evidence and audit retention and notification handling, and rehearse independent host access and synthetic recovery.
-Keep a current authorization checkpoint outside backups. After restore, reconcile current memberships, credentials, contact designations and offers against that checkpoint before reopening; an older database alone cannot establish current authority.
+Initial Owner provisioning remains explicit, locally audited and independent of SMTP. Ordinary restart cannot take over a workspace or replay its initial grant. Keep a current authorization checkpoint outside backups and reconcile current memberships and credentials before reopening restored state; an older database alone cannot establish current authority.
 
 ## Supported recovery boundary
 

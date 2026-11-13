@@ -35,7 +35,9 @@ Changing database or storage targets requires stopped writers and a restart; ini
 `EfAccessGrantStore` owns tenant-local memberships, fixed roles, Viewer visibility and access-operation results/audit. Ordinary requests and each bulk item read current authority at admission; an admitted workflow keeps its existing transaction and lifecycle guards and may finish after access changes.
 Membership, Owner and Viewer-policy changes instead acquire the tenant access-change lock before checking current actor/target roles and revisions. They commit the change, last-Owner safeguard and audit/result together; this lock does not span media streaming or ordinary workflow transactions.
 Media query adapters apply the current Viewer predicate before projection, filters, counts and paging. Personal filters cannot broaden it; caches are not permission sources.
-The [authorization guide](../../docs/architecture/authentication-and-authorization.md) owns the request boundary and the [packaged operator procedure](../../deploy/operations/README.md#protected-owner-recovery) owns exceptional recovery. Operator evidence remains in the protected external record; tenant audit retains its reference and the bounded grant transition.
+New grants require an explicit role. Display names are optional cached authenticated claims, never an identity or permission source.
+Domain owns pure access/visibility predicates; query adapters apply those predicates to authoritative facts.
+The [authorization guide](../../docs/architecture/authentication-and-authorization.md) owns the request boundary and the [operator guide](../../deploy/operations/README.md#owner-login-recovery) explains native Owner login recovery and exceptional manual maintenance.
 
 ## Retention persistence and cleanup
 

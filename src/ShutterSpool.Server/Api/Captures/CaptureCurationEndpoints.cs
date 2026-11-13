@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using ShutterSpool.Application.Curation;
+using ShutterSpool.Application.Security;
 using ShutterSpool.Server.Api.Live;
 using ShutterSpool.Server.Security;
 using System.Text.Json.Serialization;
@@ -49,36 +50,38 @@ public static class CaptureCurationEndpoints
     public static RouteGroupBuilder MapCaptureCurationEndpoints(this RouteGroupBuilder management)
     {
         RouteGroupBuilder captures = management.MapGroup("/captures");
-        captures.MapGet("/{id:guid}/curation", GetAsync)
+        captures.MapGet("/{id:guid}/curation", GetAsync).RequireAuthorization(WorkspacePolicies.Member)
             .WithSummary("Read current and released Capture curation")
             .Produces<CaptureCurationResponse>().ProducesProblem(StatusCodes.Status404NotFound);
-        captures.MapPut("/{id:guid}/curation", UpdateAsync)
+        captures.MapPut("/{id:guid}/curation", UpdateAsync).RequireAuthorization(WorkspacePolicies.Curate)
             .WithSummary("Update Capture rating, label and tags")
             .WithDescription("Supply the current Capture revision. A stale revision returns 409 with the current state in the ProblemDetails current extension. Post-release edits update current curation only.")
             .Produces<CaptureCurationResponse>().Produces<CaptureConflictProblemDetails>(StatusCodes.Status409Conflict, "application/problem+json")
             .ProducesValidationProblem().ProducesProblem(StatusCodes.Status404NotFound);
-        captures.MapPost("/{id:guid}/hold", HoldAsync)
+        captures.MapPost("/{id:guid}/hold", HoldAsync).RequireAuthorization(WorkspacePolicies.Curate)
             .WithSummary("Hold an unreleased Capture indefinitely")
             .Produces<CaptureCurationResponse>().Produces<CaptureConflictProblemDetails>(StatusCodes.Status409Conflict, "application/problem+json")
             .ProducesValidationProblem().ProducesProblem(StatusCodes.Status404NotFound);
-        captures.MapPost("/{id:guid}/restore", RestoreAsync)
+        captures.MapPost("/{id:guid}/restore", RestoreAsync).RequireAuthorization(WorkspacePolicies.Curate)
             .WithSummary("Restore the Capture's saved Source policy")
             .Produces<CaptureCurationResponse>().Produces<CaptureConflictProblemDetails>(StatusCodes.Status409Conflict, "application/problem+json")
             .ProducesValidationProblem().ProducesProblem(StatusCodes.Status404NotFound);
-        captures.MapPost("/{id:guid}/release", ReleaseAsync)
+        captures.MapPost("/{id:guid}/release", ReleaseAsync).RequireAuthorization(WorkspacePolicies.Curate)
             .WithSummary("Release a Capture now")
             .WithDescription("Repeated calls return the existing release decision. A stale revision conflict includes the latest Capture state in the ProblemDetails current extension.")
             .Produces<CaptureCurationResponse>().Produces<CaptureConflictProblemDetails>(StatusCodes.Status409Conflict, "application/problem+json")
             .ProducesValidationProblem().ProducesProblem(StatusCodes.Status404NotFound);
-        captures.MapPost("/batch/curation", UpdateManyAsync).WithSummary("Update selected Capture curation").Produces<CaptureBulkResponse>().ProducesValidationProblem();
-        captures.MapPost("/batch/hold", HoldManyAsync).WithSummary("Hold selected Captures").Produces<CaptureBulkResponse>().ProducesValidationProblem();
-        captures.MapPost("/batch/restore", RestoreManyAsync).WithSummary("Restore selected Captures").Produces<CaptureBulkResponse>().ProducesValidationProblem();
-        captures.MapPost("/batch/release", ReleaseManyAsync).WithSummary("Release selected Captures").Produces<CaptureBulkResponse>().ProducesValidationProblem();
+        captures.MapPost("/batch/curation", UpdateManyAsync).RequireAuthorization(WorkspacePolicies.Curate).WithSummary("Update selected Capture curation").Produces<CaptureBulkResponse>().ProducesValidationProblem();
+        captures.MapPost("/batch/hold", HoldManyAsync).RequireAuthorization(WorkspacePolicies.Curate).WithSummary("Hold selected Captures").Produces<CaptureBulkResponse>().ProducesValidationProblem();
+        captures.MapPost("/batch/restore", RestoreManyAsync).RequireAuthorization(WorkspacePolicies.Curate).WithSummary("Restore selected Captures").Produces<CaptureBulkResponse>().ProducesValidationProblem();
+        captures.MapPost("/batch/release", ReleaseManyAsync).RequireAuthorization(WorkspacePolicies.Curate).WithSummary("Release selected Captures").Produces<CaptureBulkResponse>().ProducesValidationProblem();
         return management;
     }
 
-    private static async Task<IResult> GetAsync(Guid id, CaptureCurationService service, CancellationToken cancellationToken)
+    private static async Task<IResult> GetAsync(Guid id, CaptureCurationService service, WorkspaceAccessContext access,
+        IWorkspaceMediaScope media, CancellationToken cancellationToken)
     {
+        if (access.IsViewer && !await media.CanReadCaptureAsync(id, cancellationToken)) return Missing();
         CaptureCurationState? state = await service.GetAsync(id, cancellationToken);
         return state is null ? Missing() : Results.Ok(CaptureCurationResponse.From(state));
     }
@@ -145,7 +148,7 @@ public static class CaptureCurationEndpoints
         foreach (CaptureBulkCurationItem item in items)
         {
             if (accessRevoked || !(await authorization.AuthorizeAsync(context.User, context,
-                    SecurityExtensions.ManagementAccessPolicy)).Succeeded)
+                    WorkspacePolicies.Curate)).Succeeded)
             {
                 accessRevoked = true;
                 results.Add(new(item.Id, "forbidden", null, "MANAGEMENT_ACCESS_REVOKED"));

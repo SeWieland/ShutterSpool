@@ -1,3 +1,4 @@
+using ShutterSpool.Domain.Security;
 using ShutterSpool.Infrastructure.Composition;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -99,7 +100,12 @@ public sealed class ArchitectureDatabaseTests
         await File.WriteAllBytesAsync(original, [5, 8, 13], token);
         await new DatabaseInitializer(database).InitializeAsync(fixture.SpoolRoot, cancellationToken: token);
         AuthorizationGrant[] grants = await database.AuthorizationGrants.AsNoTracking().ToArrayAsync(token);
-        Assert.All(grants, item => Assert.Equal(ShutterSpool.Application.Security.WorkspaceRole.Owner, item.Role));
+        Assert.All(grants, item => Assert.Equal(WorkspaceRole.Owner, item.Role));
+        Assert.All(grants, item => Assert.Null(item.DisplayName));
+        Assert.True(await database.Database.SqlQuery<bool>($"""
+            SELECT column_default IS NULL AS "Value" FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'authorization_grants' AND column_name = 'Role'
+            """).SingleAsync(token));
         Assert.True(Assert.Single(grants, item => item.Id == active).IsActive);
         Assert.False(Assert.Single(grants, item => item.Id == inactive).IsActive);
         Assert.Equal("existing-synthetic", (await database.Captures.SingleAsync(item => item.Id == capture, token)).NormalizedStem);

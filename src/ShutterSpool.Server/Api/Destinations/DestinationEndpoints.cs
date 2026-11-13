@@ -1,3 +1,4 @@
+using ShutterSpool.Server.Security;
 using Microsoft.AspNetCore.WebUtilities;
 using ShutterSpool.Application.Destinations;
 using ShutterSpool.Application.Security;
@@ -28,17 +29,18 @@ public static class DestinationEndpoints
 {
     public static RouteGroupBuilder MapDestinationEndpoints(this RouteGroupBuilder management)
     {
-        management.MapGet("/destinations/capabilities", (DestinationCapabilities capabilities) =>
+        RouteGroupBuilder authorized = management.MapGroup("").RequireAuthorization(WorkspacePolicies.Administer);
+        authorized.MapGet("/destinations/capabilities", (DestinationCapabilities capabilities) =>
             Results.Ok(new DestinationCapabilitiesResponse(capabilities.EnabledKinds)))
             .WithSummary("Read destination deployment capabilities").Produces<DestinationCapabilitiesResponse>();
-        management.MapGet("/destinations", ListAsync).WithSummary("List configured Destinations").Produces<DestinationConfigurationPageResponse>().ProducesValidationProblem();
-        management.MapGet("/destinations/{id:guid}", GetAsync).WithSummary("Read Destination configuration").Produces<DestinationResponse>().ProducesProblem(404);
-        management.MapPut("/destinations/{id:guid}", UpdateAsync).WithSummary("Update Destination name")
+        authorized.MapGet("/destinations", ListAsync).WithSummary("List configured Destinations").Produces<DestinationConfigurationPageResponse>().ProducesValidationProblem();
+        authorized.MapGet("/destinations/{id:guid}", GetAsync).WithSummary("Read Destination configuration").Produces<DestinationResponse>().ProducesProblem(404);
+        authorized.MapPut("/destinations/{id:guid}", UpdateAsync).WithSummary("Update Destination name")
             .Produces<DestinationResponse>().ProducesValidationProblem().Produces<DestinationConfigurationConflictProblemDetails>(409, "application/problem+json");
-        management.MapDelete("/destinations/{id:guid}", RemoveAsync).WithSummary("Remove or archive a Destination")
+        authorized.MapDelete("/destinations/{id:guid}", RemoveAsync).WithSummary("Remove or archive a Destination")
             .Produces<DestinationRemovalResponse>().ProducesProblem(404)
             .Produces<DestinationConfigurationConflictProblemDetails>(409, "application/problem+json");
-        management.MapPost("/destinations", CreateAsync)
+        authorized.MapPost("/destinations", CreateAsync)
             .WithSummary("Create a Destination")
             .WithDescription("Supported kinds are local and webdav. Configure provider settings separately; credentials are write-only.")
             .Produces<DestinationResponse>(StatusCodes.Status201Created).ProducesValidationProblem()

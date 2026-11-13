@@ -1,5 +1,7 @@
+using ShutterSpool.Domain.Security;
 using ShutterSpool.Application.Security;
 using ShutterSpool.Server.Api.Live;
+using ShutterSpool.Server.Security;
 using System.Security.Claims;
 
 namespace ShutterSpool.Server.Api.Workspaces;
@@ -8,10 +10,10 @@ public sealed record WorkspaceCapabilitiesResponse(bool CanCurate, bool CanAdmin
 public sealed record WorkspaceViewerPolicyResponse(bool IncludeUnreleased, long Revision);
 public sealed record WorkspaceAccessResponse(Guid MembershipId, string Role, long Revision,
     WorkspaceCapabilitiesResponse Capabilities, WorkspaceViewerPolicyResponse ViewerPolicy);
-public sealed record WorkspaceMemberResponse(Guid Id, string Issuer, string Subject, string Role, long Revision, bool IsActive)
+public sealed record WorkspaceMemberResponse(Guid Id, string Issuer, string Subject, string Role, long Revision, bool IsActive, string? DisplayName)
 {
     internal static WorkspaceMemberResponse From(WorkspaceMembership item) => new(item.Id, item.Issuer, item.Subject,
-        item.Role.ToString(), item.Revision, item.IsActive);
+        item.Role.ToString(), item.Revision, item.IsActive, item.DisplayName);
 }
 public sealed record WorkspaceMembersResponse(WorkspaceMemberResponse[] Items);
 public sealed record SafeDeliveryResponse(Guid Id, Guid AssetId, string State, bool CanRetry);
@@ -38,49 +40,55 @@ public static class WorkspaceAccessEndpoints
             SafeDelivery[]? items = await media.GetDeliveriesAsync(id, token);
             return items is null ? Results.NotFound() : Results.Ok(new SafeDeliverySummaryResponse(
                 [.. items.Take(1000).Select(item => new SafeDeliveryResponse(item.Id, item.AssetId, item.State, item.CanRetry))], items.Length > 1000));
-        }).Produces<SafeDeliverySummaryResponse>().ProducesProblem(404);
-        management.MapGet("/access", (WorkspaceAccessContext access) =>
+        }).RequireAuthorization(WorkspacePolicies.Member).Produces<SafeDeliverySummaryResponse>().ProducesProblem(404);
+        management.MapGet("/access", async (WorkspaceAccessContext access, HttpContext http, IAccessGrantStore store, CancellationToken token) =>
         {
             WorkspaceMembership member = access.Membership!;
             WorkspaceViewerPolicy policy = access.ViewerPolicy!;
+            string? displayName = http.User.FindFirstValue(ClaimTypes.Name) ?? http.User.FindFirstValue("name");
+            displayName = string.IsNullOrWhiteSpace(displayName) ? null : displayName.Trim();
+            if (displayName?.Length > 256)
+                displayName = displayName[..(char.IsHighSurrogate(displayName[255]) ? 255 : 256)];
+            if (member.DisplayName != displayName)
+                await store.UpdateDisplayNameAsync(member.Issuer, member.Subject, displayName, token);
             return Results.Ok(new WorkspaceAccessResponse(member.Id, member.Role.ToString(), member.Revision,
                 new(member.Role != WorkspaceRole.Viewer, access.IsAdministrator, access.IsAdministrator,
                     member.Role == WorkspaceRole.Owner), new(policy.IncludeUnreleased, policy.Revision)));
-        }).Produces<WorkspaceAccessResponse>();
+        }).RequireAuthorization(WorkspacePolicies.Member).Produces<WorkspaceAccessResponse>();
         management.MapGet("/members", async (IAccessGrantStore store, CancellationToken token) =>
             Results.Ok(new WorkspaceMembersResponse([.. (await store.ListAsync(token)).Select(WorkspaceMemberResponse.From)])))
-            .Produces<WorkspaceMembersResponse>();
+            .RequireAuthorization(WorkspacePolicies.Administer).Produces<WorkspaceMembersResponse>();
         management.MapGet("/viewer-policy", (WorkspaceAccessContext access) => Results.Ok(
             new WorkspaceViewerPolicyResponse(access.ViewerPolicy!.IncludeUnreleased, access.ViewerPolicy.Revision)))
-            .Produces<WorkspaceViewerPolicyResponse>();
+            .RequireAuthorization(WorkspacePolicies.Member).Produces<WorkspaceViewerPolicyResponse>();
         management.MapPut("/viewer-policy", (WorkspaceViewerPolicyRequest request, HttpContext http,
             IAccessGrantStore store, LiveChangeNotifier changes) => ChangeAsync(http, store, changes, request.OperationId,
-                request.ExpectedRevision, Guid.Empty, "viewer-policy", includeUnreleased: request.IncludeUnreleased))
-            .Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(403, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(404, "application/problem+json").ProducesValidationProblem();
+                request.ExpectedRevision, Guid.Empty, AccessChangeKind.ViewerPolicy, includeUnreleased: request.IncludeUnreleased))
+            .RequireAuthorization(WorkspacePolicies.Administer).Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(403, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(404, "application/problem+json").ProducesValidationProblem();
         management.MapPost("/members/{id:guid}/role", (Guid id, WorkspaceMemberRoleRequest request, HttpContext http,
             IAccessGrantStore store, LiveChangeNotifier changes) =>
         {
             if (!Enum.TryParse(request.Role, out WorkspaceRole role) || !Enum.IsDefined(role) || role.ToString() != request.Role)
                 return Task.FromResult<IResult>(Results.ValidationProblem(new Dictionary<string, string[]> { ["role"] = ["Provide a fixed workspace role."] }));
-            return ChangeAsync(http, store, changes, request.OperationId, request.ExpectedRevision, id, "role", role);
-        }).Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(403, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(404, "application/problem+json").ProducesValidationProblem();
+            return ChangeAsync(http, store, changes, request.OperationId, request.ExpectedRevision, id, AccessChangeKind.Role, role);
+        }).RequireAuthorization(WorkspacePolicies.Administer).Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(403, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(404, "application/problem+json").ProducesValidationProblem();
         management.MapPost("/members/{id:guid}/promote-owner", (Guid id, WorkspaceOwnerPromotionRequest request,
             HttpContext http, IAccessGrantStore store, LiveChangeNotifier changes) => ChangeAsync(http, store, changes,
-                request.OperationId, request.ExpectedRevision, id, "promote-owner", confirmed: request.Confirmed))
-            .Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(403, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(404, "application/problem+json").ProducesValidationProblem();
+                request.OperationId, request.ExpectedRevision, id, AccessChangeKind.PromoteOwner, confirmed: request.Confirmed))
+            .RequireAuthorization(WorkspacePolicies.ManageOwners).Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(403, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(404, "application/problem+json").ProducesValidationProblem();
         management.MapPost("/members/{id:guid}/remove", (Guid id, WorkspaceMemberChangeRequest request,
             HttpContext http, IAccessGrantStore store, LiveChangeNotifier changes) => ChangeAsync(http, store, changes,
-                request.OperationId, request.ExpectedRevision, id, "remove"))
-            .Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(403, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(404, "application/problem+json").ProducesValidationProblem();
+                request.OperationId, request.ExpectedRevision, id, AccessChangeKind.Remove))
+            .RequireAuthorization(WorkspacePolicies.Administer).Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(403, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(404, "application/problem+json").ProducesValidationProblem();
         management.MapPost("/membership/leave", (WorkspaceMemberChangeRequest request,
             HttpContext http, IAccessGrantStore store, LiveChangeNotifier changes) => ChangeAsync(http, store, changes,
-                request.OperationId, request.ExpectedRevision, Guid.Empty, "leave"))
-            .Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(403, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(404, "application/problem+json").ProducesValidationProblem();
+                request.OperationId, request.ExpectedRevision, Guid.Empty, AccessChangeKind.Leave))
+            .RequireAuthorization(WorkspacePolicies.Member).Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(403, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(404, "application/problem+json").ProducesValidationProblem();
         return management;
     }
 
     private static async Task<IResult> ChangeAsync(HttpContext http, IAccessGrantStore store, LiveChangeNotifier changes,
-        Guid operation, long revision, Guid target, string kind, WorkspaceRole? role = null, bool confirmed = false,
+        Guid operation, long revision, Guid target, AccessChangeKind kind, WorkspaceRole? role = null, bool confirmed = false,
         bool includeUnreleased = false)
     {
         if (operation == Guid.Empty || revision < 0)

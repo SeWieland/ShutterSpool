@@ -4214,6 +4214,7 @@ export function deserializeIntoWorkspaceMemberChangeRequest(workspaceMemberChang
 // @ts-ignore
 export function deserializeIntoWorkspaceMemberResponse(workspaceMemberResponse: Partial<WorkspaceMemberResponse> | undefined = {}) : Record<string, (node: ParseNode) => void> {
     return {
+        "displayName": n => { workspaceMemberResponse.displayName = n.getStringValue(); },
         "id": n => { workspaceMemberResponse.id = n.getGuidValue(); },
         "isActive": n => { workspaceMemberResponse.isActive = n.getBooleanValue(); },
         "issuer": n => { workspaceMemberResponse.issuer = n.getStringValue(); },
@@ -7799,6 +7800,7 @@ export function serializeWorkspaceMemberChangeRequest(writer: SerializationWrite
 // @ts-ignore
 export function serializeWorkspaceMemberResponse(writer: SerializationWriter, workspaceMemberResponse: Partial<WorkspaceMemberResponse> | undefined | null = {}, isSerializingDerivedType: boolean = false) : void {
     if (!workspaceMemberResponse || isSerializingDerivedType) { return; }
+    writer.writeStringValue("displayName", workspaceMemberResponse.displayName);
     writer.writeGuidValue("id", workspaceMemberResponse.id);
     writer.writeBooleanValue("isActive", workspaceMemberResponse.isActive);
     writer.writeStringValue("issuer", workspaceMemberResponse.issuer);
@@ -8611,6 +8613,10 @@ export interface WorkspaceMemberChangeRequest extends Parsable {
     operationId?: Guid | null;
 }
 export interface WorkspaceMemberResponse extends Parsable {
+    /**
+     * The displayName property
+     */
+    displayName?: string | null;
     /**
      * The id property
      */

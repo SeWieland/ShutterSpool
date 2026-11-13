@@ -14,7 +14,7 @@ public static class LiveStatusEndpoint
         do
         {
             if (!HasUnexpiredToken(context.User, DateTimeOffset.UtcNow)) return;
-            AuthorizationResult access = await authorization.AuthorizeAsync(context.User, null, SecurityExtensions.ManagementAccessPolicy);
+            AuthorizationResult access = await authorization.AuthorizeAsync(context.User, null, WorkspacePolicies.Member);
             if (!access.Succeeded) return;
 
             await context.Response.WriteAsync("event: status\ndata: {}\n\n", cancellationToken);

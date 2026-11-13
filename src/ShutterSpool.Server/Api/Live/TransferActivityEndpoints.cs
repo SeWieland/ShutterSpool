@@ -1,3 +1,4 @@
+using ShutterSpool.Server.Security;
 using Microsoft.AspNetCore.WebUtilities;
 using ShutterSpool.Application.Ingress;
 using ShutterSpool.Application.Preview;
@@ -15,7 +16,8 @@ public static class TransferActivityEndpoints
 {
     public static RouteGroupBuilder MapTransferActivityEndpoints(this RouteGroupBuilder management)
     {
-        management.MapGet("/activity/transfers", ReadAsync)
+        RouteGroupBuilder authorized = management.MapGroup("").RequireAuthorization(WorkspacePolicies.Administer);
+        authorized.MapGet("/activity/transfers", ReadAsync)
             .WithSummary("Read bounded Source transfer activity")
             .Produces<TransferActivitySnapshotResponse>().ProducesValidationProblem();
         return management;

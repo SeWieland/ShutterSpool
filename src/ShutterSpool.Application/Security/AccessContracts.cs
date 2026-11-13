@@ -1,3 +1,5 @@
+using ShutterSpool.Domain.Security;
+
 namespace ShutterSpool.Application.Security;
 
 public interface IAccessGrantStore
@@ -5,15 +7,16 @@ public interface IAccessGrantStore
     Task<bool> IsActiveAsync(string issuer, string subject, CancellationToken cancellationToken);
     Task<WorkspaceMembership?> GetAsync(string issuer, string subject, CancellationToken cancellationToken);
     Task<WorkspaceMembership[]> ListAsync(CancellationToken cancellationToken);
+    Task UpdateDisplayNameAsync(string issuer, string subject, string? displayName, CancellationToken cancellationToken);
     Task<WorkspaceViewerPolicy> GetViewerPolicyAsync(CancellationToken cancellationToken);
     Task<AccessChangeResult> ChangeAsync(AccessChange change, CancellationToken cancellationToken);
 }
 
-public enum WorkspaceRole { Owner, Administrator, Curator, Viewer }
-public sealed record WorkspaceMembership(Guid Id, string Issuer, string Subject, WorkspaceRole Role, long Revision, bool IsActive);
+public enum AccessChangeKind { Role, PromoteOwner, Remove, Leave, ViewerPolicy }
+public sealed record WorkspaceMembership(Guid Id, string Issuer, string Subject, WorkspaceRole Role, long Revision, bool IsActive, string? DisplayName = null);
 public sealed record WorkspaceViewerPolicy(bool IncludeUnreleased, long Revision);
 public sealed record AccessChange(Guid OperationId, string ActorIssuer, string ActorSubject, Guid TargetId,
-    long ExpectedRevision, string Kind, WorkspaceRole? Role = null, bool Confirmed = false,
+    long ExpectedRevision, AccessChangeKind Kind, WorkspaceRole? Role = null, bool Confirmed = false,
     bool IncludeUnreleased = false);
 public sealed record AccessChangeResult(Guid OperationId, string Status, WorkspaceMembership? Membership = null,
     WorkspaceViewerPolicy? ViewerPolicy = null);
@@ -31,7 +34,7 @@ public sealed class WorkspaceAccessContext
     public WorkspaceViewerPolicy? ViewerPolicy { get; set; }
     public bool IsViewer => Membership?.Role == WorkspaceRole.Viewer;
     public bool ReleasedOnly => IsViewer && ViewerPolicy?.IncludeUnreleased != true;
-    public bool IsAdministrator => Membership?.Role is WorkspaceRole.Owner or WorkspaceRole.Administrator;
+    public bool IsAdministrator => Membership is not null && WorkspaceAccessPolicy.CanAdminister(Membership.Role);
 }
 
 public sealed class AccessGrantService(IAccessGrantStore store)

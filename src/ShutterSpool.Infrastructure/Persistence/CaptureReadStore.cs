@@ -15,8 +15,9 @@ internal sealed class CaptureReadStore(ShutterSpoolDbContext database, TimeProvi
     public async Task<CaptureInboxPage> GetInboxAsync(int limit, DateTimeOffset? before, Guid? beforeId,
         CaptureReadFilter filter, CancellationToken cancellationToken)
     {
-        IQueryable<CaptureEntity> query = WorkspaceCaptureVisibility.Apply(database.Captures.AsNoTracking(), access)
-            .Where(capture => capture.RetentionDisposition == "Active"
+        IQueryable<Guid> visibleCaptureIds = WorkspaceCaptureVisibility.VisibleCaptureIds(database.Captures.AsNoTracking(), access);
+        IQueryable<CaptureEntity> query = database.Captures.AsNoTracking()
+            .Where(capture => visibleCaptureIds.Contains(capture.Id) && capture.RetentionDisposition == "Active"
                 && !database.PrivacyErasureAssets.Any(erased => database.CaptureAssets.Any(member =>
                     member.CaptureId == capture.Id && member.AssetId == erased.AssetId)));
         if (filter.FavoritesOnly) query = query.Where(capture => capture.IsFavorite);
@@ -86,7 +87,8 @@ internal sealed class CaptureReadStore(ShutterSpoolDbContext database, TimeProvi
         bool anySourceUsesCuration = access?.IsViewer != true && await database.Sources.AsNoTracking()
             .AnyAsync(source => !source.IsArchived
                 && source.CurationMode != ShutterSpool.Domain.Sources.SourceCurationMode.Immediate, cancellationToken);
-        bool anyCaptureNeedsCuration = await WorkspaceCaptureVisibility.Apply(database.Captures.AsNoTracking(), access).AnyAsync(capture =>
+        bool anyCaptureNeedsCuration = await database.Captures.AsNoTracking().AnyAsync(capture =>
+            visibleCaptureIds.Contains(capture.Id) &&
             capture.RetentionDisposition == "Active" && capture.ReleasedAt == null
             && !database.CaptureAssets.Any(member => member.CaptureId == capture.Id
                 && database.PrivacyErasureAssets.Any(erased => erased.AssetId == member.AssetId))
@@ -96,8 +98,9 @@ internal sealed class CaptureReadStore(ShutterSpoolDbContext database, TimeProvi
 
     public async Task<CaptureRead?> GetAsync(Guid captureId, CancellationToken cancellationToken)
     {
-        CaptureEntity? capture = await WorkspaceCaptureVisibility.Apply(database.Captures.AsNoTracking(), access)
-            .SingleOrDefaultAsync(item => item.Id == captureId
+        IQueryable<Guid> visibleCaptureIds = WorkspaceCaptureVisibility.VisibleCaptureIds(database.Captures.AsNoTracking(), access);
+        CaptureEntity? capture = await database.Captures.AsNoTracking()
+            .SingleOrDefaultAsync(item => visibleCaptureIds.Contains(item.Id) && item.Id == captureId
                 && !database.PrivacyErasureAssets.Any(erased => database.CaptureAssets.Any(member =>
                     member.CaptureId == item.Id && member.AssetId == erased.AssetId)), cancellationToken);
         return capture is null ? null : (await LoadReadsAsync([capture], compactAssets: false, cancellationToken))[0];

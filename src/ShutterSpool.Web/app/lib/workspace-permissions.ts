@@ -11,16 +11,16 @@ export function validateWorkspaceAccess(value: unknown): WorkspaceAccess {
     const access = value as WorkspaceAccess | undefined;
     if (!access || typeof access.membershipId !== 'string' || !access.membershipId || !['Owner', 'Administrator', 'Curator', 'Viewer'].includes(access.role)
         || !Number.isSafeInteger(access.revision) || !Number.isSafeInteger(access.viewerPolicy?.revision)
-        || typeof access.viewerPolicy?.includeUnreleased !== 'boolean') throw new Error('Workspace access could not be confirmed.');
-    const expected = { canCurate: access.role !== 'Viewer', canAdminister: ['Owner', 'Administrator'].includes(access.role),
-        canManageMembers: ['Owner', 'Administrator'].includes(access.role), canManageOwners: access.role === 'Owner' };
-    for (const key of Object.keys(expected) as (keyof typeof expected)[])
-        if (access.capabilities?.[key] !== expected[key]) throw new Error('Workspace permissions could not be confirmed.');
+        || typeof access.viewerPolicy?.includeUnreleased !== 'boolean'
+        || typeof access.capabilities?.canCurate !== 'boolean' || typeof access.capabilities.canAdminister !== 'boolean'
+        || typeof access.capabilities.canManageMembers !== 'boolean' || typeof access.capabilities.canManageOwners !== 'boolean')
+        throw new Error('Workspace access could not be confirmed.');
     return access;
 }
 
 export function accessFingerprint(access: WorkspaceAccess) {
     return JSON.stringify([access.membershipId, access.role, access.revision,
+        access.capabilities.canCurate, access.capabilities.canAdminister, access.capabilities.canManageMembers, access.capabilities.canManageOwners,
         ...(access.role === 'Viewer' ? [access.viewerPolicy.revision, access.viewerPolicy.includeUnreleased] : [])]);
 }
 

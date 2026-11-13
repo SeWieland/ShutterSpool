@@ -41,6 +41,7 @@ Individual Viewer restrictions by tag, Collection or rating are unavailable.
 
 Owners and Administrators can change non-Owner roles and remove non-Owner members.
 Open **Settings → Members** to review existing memberships and make a change.
+A member's display name comes from their authenticated identity claims and may be absent until they access the workspace. Names are labels only; the stable subject is shown when no name is available.
 Only an Owner can promote an existing active member to Owner or demote/remove another Owner. Promotion requires a separate confirmation.
 To transfer ownership, promote the new Owner first, then change or leave the previous membership.
 The last active Owner cannot leave, be removed or be demoted.
@@ -50,8 +51,8 @@ Open **Settings → Workspace → Workspace membership** to leave.
 Leaving or removal affects only this workspace: it does not delete the account, another membership or any photographs.
 Member administration applies to existing memberships; invitation creation is unavailable.
 
-If the only Owner cannot sign in, use the identity provider's recovery first, then contact the deployment operator through the established recovery channel.
-Ordinary restart or signing in with an operator account cannot take over a workspace.
+If an Owner cannot sign in, use the identity provider's native account recovery or ask its trusted administrator to restore access to that same account. Another Owner who can sign in can manage membership normally. If no Owner account can be recovered, contact the deployment operator for exceptional maintenance.
+Ordinary restart or an identity-provider administrator role cannot take over a workspace.
 
 ## When access changes
 

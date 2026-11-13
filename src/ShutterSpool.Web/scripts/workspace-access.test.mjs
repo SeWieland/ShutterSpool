@@ -11,10 +11,12 @@ const access = role => ({ membershipId: 'member', role, revision: 4,
     capabilities: { canCurate: role !== 'Viewer', canAdminister: ['Owner', 'Administrator'].includes(role), canManageMembers: ['Owner', 'Administrator'].includes(role), canManageOwners: role === 'Owner' },
     viewerPolicy: { includeUnreleased: false, revision: 2 } });
 
-test('permission context validates fixed roles and fails closed for missing or contradictory capabilities', () => {
+test('permission context validates its shape and trusts server capabilities independently of role', () => {
     for (const role of ['Owner', 'Administrator', 'Curator', 'Viewer']) assert.equal(validateWorkspaceAccess(access(role)).role, role);
     assert.throws(() => validateWorkspaceAccess({ ...access('Viewer'), role: 'FutureRole' }));
-    assert.throws(() => validateWorkspaceAccess({ ...access('Viewer'), capabilities: { ...access('Viewer').capabilities, canCurate: true } }));
+    const serverCapabilities = { canCurate: false, canAdminister: true, canManageMembers: false, canManageOwners: true };
+    assert.deepEqual(validateWorkspaceAccess({ ...access('Viewer'), capabilities: serverCapabilities }).capabilities, serverCapabilities);
+    assert.throws(() => validateWorkspaceAccess({ ...access('Viewer'), capabilities: { ...serverCapabilities, canManageOwners: undefined } }));
     assert.throws(() => validateWorkspaceAccess({ ...access('Viewer'), viewerPolicy: { includeUnreleased: true } }));
 });
 
@@ -27,6 +29,7 @@ test('membership and Viewer policy revisions invalidate cached private state eve
         const member = validateWorkspaceAccess(access(role));
         assert.equal(accessFingerprint(member), accessFingerprint({ ...member, viewerPolicy: { includeUnreleased: true, revision: 3 } }), 'Viewer policy does not invalidate an unrelated member role or its drafts');
     }
+    assert.notEqual(accessFingerprint(value), accessFingerprint({ ...value, capabilities: { ...value.capabilities, canManageMembers: true } }), 'server permission changes invalidate cached private state');
 });
 
 test('denied actions preserve login while revoked membership and authority failure close workspace access', () => {
@@ -137,6 +140,15 @@ test('background membership reconciliation preserves an unsaved role or Viewer v
     client.run("roles.target = 'Curator'; includeUnreleased.value = true");
     client.refresh(); await settle();
     assert.equal(reads, 1); assert.equal(client.run('roles.target'), 'Curator'); assert.equal(client.run('includeUnreleased.value'), true);
+});
+
+test('member identity uses the IdP display name and falls back to its subject in rows and confirmations', () => {
+    const client = membershipComponent('WorkspaceMembers', {});
+    assert.equal(client.run("identity({ displayName: '  Ada Example  ', subject: 'sub-ada' })"), 'Ada Example');
+    assert.equal(client.run("identity({ displayName: '   ', subject: 'sub-ada' })"), 'sub-ada');
+    assert.equal(client.run("identity({ displayName: null, subject: 'sub-ada' })"), 'sub-ada');
+    client.run("promote({ id: 'target', displayName: 'Ada Example', subject: 'sub-ada', role: 'Curator', revision: 7 })");
+    assert.match(client.confirmations[0], /Make Ada Example an Owner/);
 });
 
 test('saving one membership or Viewer policy preserves the other unsaved choices', async () => {

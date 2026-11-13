@@ -1,3 +1,4 @@
+using ShutterSpool.Server.Security;
 using ShutterSpool.Application.Collections;
 using ShutterSpool.Application.Captures;
 using ShutterSpool.Application.Retention;
@@ -21,10 +22,10 @@ public static class CaptureCollectionEndpoints
     public static RouteGroupBuilder MapCaptureCollectionEndpoints(this RouteGroupBuilder management)
     {
         RouteGroupBuilder captures = management.MapGroup("/captures");
-        captures.MapPut("/{id:guid}/collection", MoveOneAsync).WithSummary("Move an active Capture to a Collection")
+        captures.MapPut("/{id:guid}/collection", MoveOneAsync).RequireAuthorization(WorkspacePolicies.Curate).WithSummary("Move an active Capture to a Collection")
             .Produces<CaptureDetailResponse>().ProducesValidationProblem().ProducesProblem(404)
             .Produces<CaptureCollectionConflictProblemDetails>(409, "application/problem+json");
-        captures.MapPost("/collection-moves", MoveManyAsync).WithSummary("Move selected Captures to a Collection")
+        captures.MapPost("/collection-moves", MoveManyAsync).RequireAuthorization(WorkspacePolicies.Curate).WithSummary("Move selected Captures to a Collection")
             .Produces<BulkMoveCaptureCollectionResponse>().ProducesValidationProblem();
         return management;
     }
@@ -63,7 +64,7 @@ public static class CaptureCollectionEndpoints
             foreach (BulkMoveCaptureItemRequest item in request.Items)
             {
                 if (denied || !(await authorization.AuthorizeAsync(http.User, http,
-                    ShutterSpool.Server.Security.SecurityExtensions.ManagementAccessPolicy)).Succeeded)
+                    WorkspacePolicies.Curate)).Succeeded)
                 {
                     denied = true;
                     admitted.Add(new(item.CaptureId, CollectionMoveStatus.Forbidden, null, null));

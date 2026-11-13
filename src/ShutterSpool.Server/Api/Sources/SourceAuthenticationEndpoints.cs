@@ -1,3 +1,4 @@
+using ShutterSpool.Server.Security;
 using ShutterSpool.Application.Sources;
 using ShutterSpool.Server.Hosting;
 
@@ -11,6 +12,7 @@ internal static class SourceAuthenticationEndpoints
 {
     public static void MapSourceAuthenticationEndpoints(this RouteGroupBuilder management) =>
         management.MapGet("/sources/authentication-observations", ReadAsync)
+            .RequireAuthorization(WorkspacePolicies.Administer)
             .WithSummary("Read bounded Source authentication observations")
             .Produces<SourceAuthenticationObservationsResponse>().ProducesValidationProblem();
 

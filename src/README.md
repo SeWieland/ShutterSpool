@@ -4,7 +4,7 @@ ShutterSpool is a modular monolith with six .NET projects and one Nuxt applicati
 
 | Project | Owns |
 | --- | --- |
-| [Domain](ShutterSpool.Domain/README.md) | Asset vocabulary and pure Capture grouping, curation, routing and delivery policies. |
+| [Domain](ShutterSpool.Domain/README.md) | Asset vocabulary and pure Capture grouping, curation, routing, delivery, retention and workspace access policies. |
 | [Application](ShutterSpool.Application/README.md) | Use cases, workflow coordination, commands/results and necessary ports. |
 | [Infrastructure](ShutterSpool.Infrastructure/README.md) | Internal PostgreSQL persistence, spool, secret protection, metadata, previews, Valkey and local/WebDAV delivery adapters. |
 | [Server](ShutterSpool.Server/README.md) | Named HTTP DTOs/mapping, authorization, hosted loops and composition. |
