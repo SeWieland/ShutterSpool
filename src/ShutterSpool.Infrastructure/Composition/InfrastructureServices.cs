@@ -77,6 +77,8 @@ public static class InfrastructureServices
         services.AddSingleton<ICredentialProtector, SecretProtector>();
         services.TryAddSingleton(new CameraCredentialPolicy());
         services.AddScoped<IAccessGrantStore, EfAccessGrantStore>();
+        services.AddScoped<WorkspaceAccessContext>();
+        services.AddScoped<IWorkspaceMediaScope, WorkspaceMediaScope>();
         services.AddScoped<AccessGrantService>();
         services.AddScoped<ISourceConfigurationStore, EfSourceConfigurationStore>();
         services.AddScoped<ICollectionManagementStore, EfCollectionManagementStore>();

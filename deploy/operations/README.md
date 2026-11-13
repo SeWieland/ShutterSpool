@@ -28,7 +28,7 @@ Keep Server and camera edges stopped while preparing:
 1. An empty control database and an empty database per workspace, each with a migration owner and a separate restricted runtime login. Runtime logins must not own databases/schemas, create objects, inherit other roles or hold privileged PostgreSQL attributes.
 2. Database connection grants limited to the intended roles, with `PUBLIC` access revoked. Tenant roles must have no access to the control database or another tenant. The provisioning command grants required schema/table access inside its selected database.
 3. An empty, filesystem-enforced allocation per workspace. Use bounded volumes or native filesystem quotas; a directory or bind mount alone does not enforce a budget. Total allocations must fit usable capacity after reserves and other host data.
-4. The first member's verified OIDC issuer and subject. Deployment administration alone grants no workspace membership.
+4. The first Owner's verified OIDC issuer and subject, plus the identity of the trusted operator performing setup. Deployment administration alone grants no workspace membership.
 
 For the bundled PostgreSQL example, `package/workspace-databases.sql` creates `shutterspool_control` and `shutterspool_studio`, the migration owner and the two runtime roles.
 Supply `CONTROL_RUNTIME_PASSWORD`, `STUDIO_RUNTIME_PASSWORD` and `MIGRATION_PASSWORD` as exported environment variables through your private secret-management process; do not place their values in command history.
@@ -59,7 +59,7 @@ Edit the supplied files for your installation. Server selects Production; the op
 There are no custom file readers or configuration-loading hooks.
 Workspace definitions exist once in the shared base. Keep runtime credentials and the encryption key consistent where both environment files need them.
 
-The `studio` definition in `appsettings.json` contains only its allocation and initial identity:
+The `studio` definition in `appsettings.json` contains its allocation, initial Owner and setup attribution:
 
 ```json
 "Workspaces": {
@@ -69,7 +69,8 @@ The `studio` definition in `appsettings.json` contains only its allocation and i
       "StorageRoot": "/srv/shutterspool/studio",
       "AllocatedBytes": 107374182400,
       "OwnerIssuer": "https://identity.example.invalid/realms/shutterspool",
-      "OwnerSubject": "the-verified-subject"
+      "OwnerSubject": "the-verified-subject",
+      "SetupOperatorIdentity": "the-verified-operator"
     }
   }
 }
@@ -124,8 +125,11 @@ One-off maintenance containers publish no service ports and exit without startin
 Only start the normal graph after every workspace provisions successfully.
 
 Provisioning refuses unknown nonempty databases/roots, creates schema, keys, defaults and identity markers, then activates the workspace.
+The initial Owner grant and its operator-attributed audit/result commit together; an audit failure leaves no active initial grant.
+Set `ShutterSpool:Workspaces:Definitions:<name>:SetupOperatorIdentity` before unfinished initial setup can commit. This is a trusted-host attestation, not application authentication of the operator; keep verification evidence in the protected onboarding record.
 Retry the same name and inputs after interruption; changed initial targets or member identity are a conflict.
 Repeating a completed provision never regrants removed membership. Do not erase registry rows, markers or migration history to force a retry.
+Completed provisioning and upgrades do not require a new setup attestation or fabricate historical operator evidence.
 
 Startup validates database identity, privileges, exact schema, keys and storage markers, then completes recovery.
 Resolved mappings remain fixed until restart. Startup does not migrate schemas or replay the initial grant.
@@ -143,6 +147,8 @@ Server holds `.shutterspool-writers.lock` in each root for its lifetime; mainten
 Operator changes serialize through the control database, while EF/Npgsql handles migration locking.
 These safeguards do not stop unrelated tools. Keep the instance closed after any failed upgrade, identity, key or recovery check.
 Repair forward or restore a complete eligible set under the [recovery boundary](#supported-recovery-boundary).
+The workspace-role migration preserves existing grants and their active/inactive state, assigning them Owner authority to retain their prior administrative access. It starts Viewer visibility at released, non-rejected Active Captures and preserves existing media and workflow state.
+Review current Owners after upgrading. The migration deliberately refuses a downgrade that would discard role or access-audit state; repair forward or restore a complete eligible recovery set.
 
 ### Resize an allocation
 
@@ -161,6 +167,16 @@ The command records a budget; it does not resize storage or delete media.
 Workspace quotas cannot exceed their allocation or disable its cap. Receive, original, quarantine, temporary-copy and preview writes stay within that boundary.
 Unused allocation cannot be borrowed; physical free-space checks still apply.
 Application tests do not establish filesystem enforcement, power-loss recovery or hosted readiness; qualify those on the selected platform.
+
+## Owner login recovery
+
+Recover access to the same existing Owner identity through the identity provider's native self-service recovery or trusted administration. Preserve its exact issuer and subject so the existing local membership still applies. If another Owner can sign in, that Owner can use **Settings → Members** to manage existing memberships, with separate confirmation for Owner promotion and protection for the last active Owner.
+
+Native recovery depends on the provider and configured account factors; email recovery requires SMTP. The operator is responsible for trusted identity administration and its attribution. An identity-provider administrator or realm role alone grants no local workspace Owner authority. Application audit records the authenticated principal; it cannot establish which operator used provider impersonation or another identity-administration facility.
+
+If no existing Owner identity can be recovered, a trusted application/database operator may repair the workspace grant manually as exceptional maintenance. This requires privileged access and responsibility for the exact principal, workspace, remaining Owners and current authorization state. ShutterSpool supplies no custom recovery command, request, representative/contact registry or notification workflow.
+
+Initial Owner provisioning remains explicit, locally audited and independent of SMTP. Ordinary restart cannot take over a workspace or replay its initial grant. Keep a current authorization checkpoint outside backups and reconcile current memberships and credentials before reopening restored state; an older database alone cannot establish current authority.
 
 ## Supported recovery boundary
 

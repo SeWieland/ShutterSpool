@@ -1011,14 +1011,22 @@ public sealed partial class ConfigurationApiTests
             try { client = server.CreateClient(); }
             catch { await server.DisposeAsync(); await storage.DisposeAsync(); throw; }
             client.DefaultRequestHeaders.Add(WorkspaceSelection.Header, workspace.Id.ToString("D"));
+            var fixture = new ConfigurationApiFixture(storage, workspace, server, client);
+            fixture.SetAuthenticatedDisplayName(null);
+            return fixture;
+        }
+
+        public void SetAuthenticatedDisplayName(string? displayName)
+        {
+            List<Claim> claims = [new(ClaimTypes.NameIdentifier, "operator"), new(ClaimTypes.Role, "shutterspool-admin")];
+            if (displayName is not null) claims.Add(new(ClaimTypes.Name, displayName));
             var token = new JwtSecurityToken(
                 issuer: "https://issuer.test",
                 audience: "shutterspool",
-                claims: [new(ClaimTypes.NameIdentifier, "operator"), new(ClaimTypes.Role, "shutterspool-admin")],
+                claims: claims,
                 expires: DateTime.UtcNow.AddMinutes(5),
                 signingCredentials: new(new SymmetricSecurityKey(SigningKey), SecurityAlgorithms.HmacSha256));
-            client.DefaultRequestHeaders.Authorization = new("Bearer", new JwtSecurityTokenHandler().WriteToken(token));
-            return new(storage, workspace, server, client);
+            Client.DefaultRequestHeaders.Authorization = new("Bearer", new JwtSecurityTokenHandler().WriteToken(token));
         }
 
         private sealed class RevokeBatchAuthorizationHandler(bool failDependency) : AuthorizationHandler<LocalGrantRequirement>

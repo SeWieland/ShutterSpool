@@ -37,7 +37,7 @@ internal sealed class WorkspaceMaintenance(IConfiguration configuration)
         else if (args is ["--workspace-allocation", var selected, var expectedText, var nextText]
             && long.TryParse(expectedText, out long expected) && long.TryParse(nextText, out long next) && next >= 10)
             await ChangeAllocationAsync(control, ready, selected, expected, next, token);
-        else throw new ArgumentException("Use --workspace-control-init, --workspace-provision <name>, --workspace-upgrade, or --workspace-allocation <name> <expected bytes> <new bytes>.");
+        else throw new ArgumentException("Use --workspace-control-init, --workspace-provision <name>, --workspace-upgrade, --workspace-allocation <name> <expected bytes> <new bytes>.");
     }
 
     private async Task<WorkspaceDefinition[]> ListReadyAsync(CancellationToken token)
@@ -110,7 +110,8 @@ internal sealed class WorkspaceMaintenance(IConfiguration configuration)
                 throw new WorkspaceOperator.RefusedException("The tenant database belongs to another workspace or provisioning operation.");
             if (!identity.BootstrapComplete)
             {
-                database.AuthorizationGrants.Add(new AuthorizationGrant { Issuer = manifest.OwnerIssuer, Subject = manifest.OwnerSubject, IsActive = true, IsBootstrap = true });
+                await new EfAccessGrantStore(database).PrepareInitialOwnerAsync(record.OperationId, manifest.OwnerIssuer, manifest.OwnerSubject,
+                    configuration[$"ShutterSpool:Workspaces:Definitions:{name}:SetupOperatorIdentity"], token);
                 SpoolQuotaSettingsEntity quota = await database.SpoolQuotaSettings.SingleAsync(item => item.Id == 1, token);
                 quota.IsActive = true; quota.QuotaBytes = definition.AllocatedBytes;
                 quota.HighWatermarkBytes = Math.Max(1, definition.AllocatedBytes * 9 / 10);
@@ -122,9 +123,7 @@ internal sealed class WorkspaceMaintenance(IConfiguration configuration)
             await transaction.CommitAsync(token);
             var protector = new SecretProtector(Options.Create(configuration.GetSection("ShutterSpool:Security").Get<CredentialProtectionOptions>() ?? new()));
             await initializer.ValidateSecretKeyAsync(protector, enroll: true, token);
-            string role = new NpgsqlConnectionStringBuilder(manifest.ConnectionString).Username!;
-            string privileges = $"REVOKE CREATE ON SCHEMA public FROM PUBLIC; GRANT USAGE ON SCHEMA public TO {Quote(role)}; GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO {Quote(role)}; GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO {Quote(role)}; REVOKE INSERT,UPDATE,DELETE ON workspace_identity,\"__EFMigrationsHistory\",deployment_key_checks FROM {Quote(role)}";
-            await database.Database.ExecuteSqlRawAsync(privileges, token);
+            await GrantRuntimeAsync(database, manifest.ConnectionString, token);
         }
         string markerPath = Path.Combine(definition.StorageRoot, WorkspaceRuntime.Marker);
         if (!File.Exists(markerPath))
@@ -152,7 +151,15 @@ internal sealed class WorkspaceMaintenance(IConfiguration configuration)
             if (!applied.SequenceEqual(database.Database.GetMigrations().Take(applied.Length), StringComparer.Ordinal))
                 throw new WorkspaceOperator.RefusedException("A tenant schema has an unsupported migration history.");
             await database.Database.MigrateAsync(token);
+            await GrantRuntimeAsync(database, manifest.ConnectionString, token);
         }
+    }
+
+    private static Task GrantRuntimeAsync(ShutterSpoolDbContext database, string connection, CancellationToken token)
+    {
+        string role = new NpgsqlConnectionStringBuilder(connection).Username!;
+        string privileges = $"REVOKE CREATE ON SCHEMA public FROM PUBLIC; GRANT USAGE ON SCHEMA public TO {Quote(role)}; GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO {Quote(role)}; GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO {Quote(role)}; REVOKE INSERT,UPDATE,DELETE ON workspace_identity,\"__EFMigrationsHistory\",deployment_key_checks FROM {Quote(role)}";
+        return database.Database.ExecuteSqlRawAsync(privileges, token);
     }
 
     private async Task ChangeAllocationAsync(WorkspaceControlDbContext control, WorkspaceDefinition[] ready,

@@ -3,18 +3,21 @@ using ShutterSpool.Application.Captures;
 using ShutterSpool.Application.Curation;
 using ShutterSpool.Domain.Captures;
 using ShutterSpool.Domain.Delivery;
+using ShutterSpool.Application.Security;
 
 namespace ShutterSpool.Infrastructure.Persistence;
 
-internal sealed class CaptureReadStore(ShutterSpoolDbContext database, TimeProvider? clock = null) : ICaptureReadStore
+internal sealed class CaptureReadStore(ShutterSpoolDbContext database, TimeProvider? clock = null,
+    WorkspaceAccessContext? access = null) : ICaptureReadStore
 {
     private const int InboxAssetPreviewLimit = 8;
 
     public async Task<CaptureInboxPage> GetInboxAsync(int limit, DateTimeOffset? before, Guid? beforeId,
         CaptureReadFilter filter, CancellationToken cancellationToken)
     {
+        IQueryable<Guid> visibleCaptureIds = WorkspaceCaptureVisibility.VisibleCaptureIds(database.Captures.AsNoTracking(), access);
         IQueryable<CaptureEntity> query = database.Captures.AsNoTracking()
-            .Where(capture => capture.RetentionDisposition == "Active"
+            .Where(capture => visibleCaptureIds.Contains(capture.Id) && capture.RetentionDisposition == "Active"
                 && !database.PrivacyErasureAssets.Any(erased => database.CaptureAssets.Any(member =>
                     member.CaptureId == capture.Id && member.AssetId == erased.AssetId)));
         if (filter.FavoritesOnly) query = query.Where(capture => capture.IsFavorite);
@@ -81,10 +84,11 @@ internal sealed class CaptureReadStore(ShutterSpoolDbContext database, TimeProvi
         CaptureEntity[] captures = [.. page.Take(limit)];
         CaptureRead[] items = await LoadReadsAsync(captures, compactAssets: true, cancellationToken);
         CaptureEntity? last = hasMore ? captures[^1] : null;
-        bool anySourceUsesCuration = await database.Sources.AsNoTracking()
+        bool anySourceUsesCuration = access?.IsViewer != true && await database.Sources.AsNoTracking()
             .AnyAsync(source => !source.IsArchived
                 && source.CurationMode != ShutterSpool.Domain.Sources.SourceCurationMode.Immediate, cancellationToken);
         bool anyCaptureNeedsCuration = await database.Captures.AsNoTracking().AnyAsync(capture =>
+            visibleCaptureIds.Contains(capture.Id) &&
             capture.RetentionDisposition == "Active" && capture.ReleasedAt == null
             && !database.CaptureAssets.Any(member => member.CaptureId == capture.Id
                 && database.PrivacyErasureAssets.Any(erased => erased.AssetId == member.AssetId))
@@ -94,8 +98,9 @@ internal sealed class CaptureReadStore(ShutterSpoolDbContext database, TimeProvi
 
     public async Task<CaptureRead?> GetAsync(Guid captureId, CancellationToken cancellationToken)
     {
+        IQueryable<Guid> visibleCaptureIds = WorkspaceCaptureVisibility.VisibleCaptureIds(database.Captures.AsNoTracking(), access);
         CaptureEntity? capture = await database.Captures.AsNoTracking()
-            .SingleOrDefaultAsync(item => item.Id == captureId
+            .SingleOrDefaultAsync(item => visibleCaptureIds.Contains(item.Id) && item.Id == captureId
                 && !database.PrivacyErasureAssets.Any(erased => database.CaptureAssets.Any(member =>
                     member.CaptureId == item.Id && member.AssetId == erased.AssetId)), cancellationToken);
         return capture is null ? null : (await LoadReadsAsync([capture], compactAssets: false, cancellationToken))[0];
@@ -103,10 +108,14 @@ internal sealed class CaptureReadStore(ShutterSpoolDbContext database, TimeProvi
 
     public async Task<string[]> GetTagsAsync(string query, CancellationToken cancellationToken)
     {
+        bool viewer = access?.IsViewer == true;
+        bool releasedOnly = access?.ReleasedOnly == true;
         string[] tags = await database.Database.SqlQuery<string>($"""
             SELECT DISTINCT ON (lower(tag)) tag AS "Value"
             FROM captures CROSS JOIN LATERAL unnest("Tags") AS tags(tag)
             WHERE strpos(lower(tag), lower({query})) > 0
+              AND (NOT {viewer} OR "RetentionDisposition" = 'Active')
+              AND (NOT {releasedOnly} OR ("ReleasedAt" IS NOT NULL AND "Rating" <> -1))
               AND NOT EXISTS (
                   SELECT 1
                   FROM capture_assets AS member

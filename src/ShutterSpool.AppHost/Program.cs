@@ -130,6 +130,7 @@ if (!builder.ExecutionContext.IsPublishMode)
             .WithEnvironment("ShutterSpool__Workspaces__Definitions__studio__StorageRoot", storageRoot)
             .WithEnvironment("ShutterSpool__Workspaces__Definitions__studio__OwnerIssuer", keycloakAuthority)
             .WithEnvironment("ShutterSpool__Workspaces__Definitions__studio__OwnerSubject", shutterspoolAdministratorSubject)
+            .WithEnvironment("ShutterSpool__Workspaces__Definitions__studio__SetupOperatorIdentity", Environment.UserName)
             .WithEnvironment("ConnectionStrings__shutterspool-control", ReferenceExpression.Create(
                 $"Host={postgresEndpoint.Property(EndpointProperty.Host)};Port={postgresEndpoint.Property(EndpointProperty.Port)};Database=shutterspool_control;Username=shutterspool_control_runtime;Password={controlRuntimePassword}"))
             .WithEnvironment("ConnectionStrings__Workspaces__studio__Runtime", ReferenceExpression.Create(

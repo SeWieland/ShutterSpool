@@ -1,3 +1,4 @@
+using ShutterSpool.Server.Security;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.WebUtilities;
 using ShutterSpool.Application.Security;
@@ -39,26 +40,27 @@ public static class SourceEndpoints
 {
     public static RouteGroupBuilder MapSourceEndpoints(this RouteGroupBuilder management)
     {
-        management.MapGet("/sources", ListAsync).WithSummary("List configured Sources").Produces<SourceConfigurationPageResponse>().ProducesValidationProblem();
+        RouteGroupBuilder authorized = management.MapGroup("").RequireAuthorization(WorkspacePolicies.Administer);
+        authorized.MapGet("/sources", ListAsync).WithSummary("List configured Sources").Produces<SourceConfigurationPageResponse>().ProducesValidationProblem();
         management.MapSourceCapabilityEndpoints();
-        management.MapGet("/sources/{id:guid}", GetAsync).WithSummary("Read Source configuration").Produces<SourceConfigurationResponse>().ProducesProblem(404);
-        management.MapPut("/sources/{id:guid}", UpdateAsync).WithSummary("Update Source configuration")
+        authorized.MapGet("/sources/{id:guid}", GetAsync).WithSummary("Read Source configuration").Produces<SourceConfigurationResponse>().ProducesProblem(404);
+        authorized.MapPut("/sources/{id:guid}", UpdateAsync).WithSummary("Update Source configuration")
             .Produces<SourceConfigurationResponse>().ProducesValidationProblem().Produces<SourceConfigurationConflictProblemDetails>(409, "application/problem+json");
-        management.MapPost("/sources", CreateAsync)
+        authorized.MapPost("/sources", CreateAsync)
             .WithSummary("Create a camera Source")
             .WithDescription("Source curation defaults to Delay for one hour. Delay accepts 1 to 31,536,000 seconds. The returned secret is shown once.")
             .Produces<CreatedSourceResponse>(StatusCodes.Status201Created).ProducesValidationProblem().ProducesProblem(409);
-        management.MapPost("/sources/{id:guid}/regenerate-secret", RegenerateAsync)
+        authorized.MapPost("/sources/{id:guid}/regenerate-secret", RegenerateAsync)
             .WithSummary("Regenerate a Source ingest secret").Produces<RegeneratedSourceSecretResponse>()
             .ProducesValidationProblem()
             .ProducesProblem(404).Produces<SourceConfigurationConflictProblemDetails>(409, "application/problem+json");
-        management.MapPut("/sources/{id:guid}/ingress", SetIngressAsync)
+        authorized.MapPut("/sources/{id:guid}/ingress", SetIngressAsync)
             .WithSummary("Suspend or re-enable Source ingress").Produces<SourceConfigurationResponse>()
             .ProducesProblem(404).Produces<SourceConfigurationConflictProblemDetails>(409, "application/problem+json");
-        management.MapDelete("/sources/{id:guid}", RemoveAsync).WithSummary("Remove or archive a Source")
+        authorized.MapDelete("/sources/{id:guid}", RemoveAsync).WithSummary("Remove or archive a Source")
             .Produces<SourceRemovalResponse>().ProducesProblem(404)
             .Produces<SourceConfigurationConflictProblemDetails>(409, "application/problem+json");
-        management.MapPut("/sources/{id:guid}/curation-policy", UpdatePolicyAsync)
+        authorized.MapPut("/sources/{id:guid}/curation-policy", UpdatePolicyAsync)
             .WithSummary("Change a Source's curation policy")
             .WithDescription("The change applies to Captures first grouped after the update. Existing Captures retain their policy and deadline anchor.")
             .Produces<SourceConfigurationResponse>().ProducesValidationProblem().ProducesProblem(404)

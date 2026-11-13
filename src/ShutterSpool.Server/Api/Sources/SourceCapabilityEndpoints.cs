@@ -1,3 +1,4 @@
+using ShutterSpool.Server.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -19,13 +20,14 @@ public static class SourceCapabilityEndpoints
 
     public static RouteGroupBuilder MapSourceCapabilityEndpoints(this RouteGroupBuilder management)
     {
-        management.MapGet("/source-capabilities", (CameraIngressSettings settings, CameraCredentialPolicy policy) =>
+        RouteGroupBuilder authorized = management.MapGroup("").RequireAuthorization(WorkspacePolicies.Administer);
+        authorized.MapGet("/source-capabilities", (CameraIngressSettings settings, CameraCredentialPolicy policy) =>
                 Results.Ok(new SourceCapabilitiesResponse(Enum.GetValues<SourceConnectionProfile>()
                     .Select(profile => Describe(settings, profile)).ToArray(),
                     new(policy.MinimumLength, CameraCredentialPolicy.MaximumLength, policy.GeneratedLength, policy.WeakerProtection))))
             .WithSummary("Read deployment-enabled Source connection profiles")
             .Produces<SourceCapabilitiesResponse>();
-        management.MapGet("/source-capabilities/{profile}/ca-root", (string profile, CameraIngressSettings settings) =>
+        authorized.MapGet("/source-capabilities/{profile}/ca-root", (string profile, CameraIngressSettings settings) =>
             {
                 if (!Enum.TryParse(profile, ignoreCase: false, out SourceConnectionProfile selected) || !Enum.IsDefined(selected)
                     || selected == SourceConnectionProfile.PlainFtpLan) return Results.NotFound();

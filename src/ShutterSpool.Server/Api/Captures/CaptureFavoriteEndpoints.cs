@@ -1,3 +1,4 @@
+using ShutterSpool.Server.Security;
 using ShutterSpool.Application.Retention;
 using ShutterSpool.Server.Api.Live;
 
@@ -11,7 +12,7 @@ public static class CaptureFavoriteEndpoints
 {
     public static RouteGroupBuilder MapCaptureFavoriteEndpoints(this RouteGroupBuilder management)
     {
-        management.MapPut("/captures/{id:guid}/favorite", SetAsync)
+        management.MapPut("/captures/{id:guid}/favorite", SetAsync).RequireAuthorization(WorkspacePolicies.Curate)
             .WithSummary("Set the Capture retention Favorite")
             .Produces<CaptureFavoriteResponse>()
             .ProducesProblem(StatusCodes.Status404NotFound)
