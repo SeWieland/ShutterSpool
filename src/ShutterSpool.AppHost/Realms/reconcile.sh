@@ -26,6 +26,12 @@ if ! /opt/keycloak/bin/kcadm.sh get realms/shutterspool >/dev/null 2>&1; then
   /opt/keycloak/bin/kcadm.sh update users/profile -r shutterspool -f /opt/shutterspool/shutterspool-user-profile.json
 fi
 
+# SMTP-free Owners have no email; explicit native enrollment actions still verify invited accounts.
+/opt/keycloak/bin/kcadm.sh update realms/shutterspool --no-merge -s registrationAllowed=false -s verifyEmail=false
+for action in VERIFY_EMAIL UPDATE_PASSWORD; do
+  /opt/keycloak/bin/kcadm.sh update "authentication/required-actions/$action" -r shutterspool -s enabled=true
+done
+
 /bin/sh /opt/shutterspool/select-login-theme.sh
 
 client_id() {
@@ -56,6 +62,7 @@ reconcile_mapper() {
 reconcile_client shutterspool-server shutterspool-server-client.json >/dev/null
 web_client=$(reconcile_client shutterspool-web shutterspool-web-client.json)
 reconcile_mapper "$web_client" shutterspool-server-audience shutterspool-server-audience-mapper.json
+reconcile_mapper "$web_client" shutterspool-email-verified shutterspool-email-verified-mapper.json
 
 administrator_id() {
   /opt/keycloak/bin/kcadm.sh get users -r shutterspool -q username="$SHUTTERSPOOL_ADMIN_USERNAME" -q exact=true --fields id | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'

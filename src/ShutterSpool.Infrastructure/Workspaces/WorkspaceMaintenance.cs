@@ -17,6 +17,11 @@ internal sealed class WorkspaceMaintenance(IConfiguration configuration)
 
     internal async Task RunAsync(string[] args, CancellationToken token)
     {
+        if (args.Length >= 1 && args[0] == "--workspace-recipient")
+        {
+            await RecordRecipientAsync(args, token);
+            return;
+        }
         // Serialize aggregate allocation decisions and resumable provisioning across operator processes.
         await using var serial = new NpgsqlConnection(ControlMigration);
         await serial.OpenAsync(token);
@@ -37,13 +42,36 @@ internal sealed class WorkspaceMaintenance(IConfiguration configuration)
         else if (args is ["--workspace-allocation", var selected, var expectedText, var nextText]
             && long.TryParse(expectedText, out long expected) && long.TryParse(nextText, out long next) && next >= 10)
             await ChangeAllocationAsync(control, ready, selected, expected, next, token);
-        else throw new ArgumentException("Use --workspace-control-init, --workspace-provision <name>, --workspace-upgrade, --workspace-allocation <name> <expected bytes> <new bytes>.");
+        else throw new ArgumentException("Use --workspace-control-init, --workspace-provision <name>, --workspace-upgrade, --workspace-allocation <name> <expected bytes> <new bytes>, or --workspace-recipient <name> <operation GUID> <protected request-file path>.");
     }
 
     private async Task<WorkspaceDefinition[]> ListReadyAsync(CancellationToken token)
     {
         await using var control = WorkspaceControlDbContext.Create(WorkspaceControlDbContext.RuntimeConnection(configuration));
         return await EfWorkspaceRegistry.ReadReadyAsync(control, configuration, token);
+    }
+
+    private async Task RecordRecipientAsync(string[] args, CancellationToken token)
+    {
+        if (args.Length != 4 || !Guid.TryParseExact(args[2], "D", out Guid operation) || operation == Guid.Empty)
+            throw new ArgumentException("Provide the exact workspace recipient command arguments.");
+        string name = WorkspaceManifest.CanonicalName(configuration, args[1]);
+        WorkspaceDefinition workspace = (await ListReadyAsync(token))
+            .SingleOrDefault(item => item.Name == name) ?? throw new WorkspaceOperator.RefusedException("The exact ready workspace is required.");
+        WorkspaceManifest manifest = WorkspaceManifest.Read(configuration, name);
+        await using ShutterSpoolDbContext database = CreateDatabase(manifest.MigrationConnection);
+        await WorkspaceRuntime.ValidateIdentityAsync(database, workspace, token);
+        string path = Path.GetFullPath(args[3]);
+        if (!Path.IsPathFullyQualified(args[3]) || !File.Exists(path) || new FileInfo(path).Length > 16_384
+            || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            throw new ArgumentException("Use a protected absolute recipient request-file path of at most 16 KiB.");
+        WorkspaceRecipientHandoff handoff = JsonSerializer.Deserialize<WorkspaceRecipientHandoff>(await File.ReadAllTextAsync(path, token),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web)) ?? throw new ArgumentException("The recipient handoff is required.");
+        if (!string.Equals(handoff.Issuer, configuration["ShutterSpool:Security:Authority"]?.TrimEnd('/'), StringComparison.Ordinal))
+            throw new ArgumentException("The verified recipient must use the configured public OIDC issuer.");
+        var store = new EfAccessGrantStore(database);
+        Console.WriteLine(JsonSerializer.Serialize(await store.RecordRecipientAsync(operation, handoff, token),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web)));
     }
 
     private async Task InitializeControlAsync(WorkspaceControlDbContext control, CancellationToken token)

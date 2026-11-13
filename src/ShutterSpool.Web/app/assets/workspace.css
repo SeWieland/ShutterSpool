@@ -591,4 +591,7 @@ body:has(.fullscreen-viewer) { overflow:hidden; }
 .member-policy { margin-block: 24px 32px; }
 .member-policy label, .member-actions label { display: grid; gap: 8px; }
 .member-policy > button { margin-top: 12px; }
+.invitation-page { padding-top: 24px; }
+.invitation-page > .back { margin-left: max(16px, calc((100% - 720px) / 2)); }
+.workspace-identity .workspace-invitation-access { width: auto; flex: 0 0 auto; margin-left: auto; padding-inline: 10px; }
 @media (max-width: 760px) { .member-row { grid-template-columns: minmax(0, 1fr); gap: 16px; } }
