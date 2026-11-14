@@ -2,7 +2,8 @@
 import { api, cancellable, handleFailure } from '../lib/api';
 import { accessGeneration, onAccessLost } from '../lib/session';
 import { workspaceChangeError } from '../lib/workspace-permissions';
-const emit = defineEmits<{ joined: [] }>();
+const props = defineProps<{ welcome?: boolean; email?: string }>();
+const emit = defineEmits<{ joined: [workspaceId: string]; count: [count: number] }>();
 type Offer = NonNullable<NonNullable<Awaited<ReturnType<typeof api.workspaceOffers.get>>>['items']>[number];
 const offers = shallowRef<Offer[]>([]);
 const incomplete = shallowRef(false);
@@ -24,6 +25,8 @@ async function read() {
         if (disposed || signal.aborted || request !== sequence || access !== accessGeneration()) return false;
         if (!page?.items || typeof page.incomplete !== 'boolean') throw new Error('Invitations unavailable');
         offers.value = page.items; incomplete.value = page.incomplete; loaded.value = true;
+        const count = offers.value.filter(offer => offer.status === 'pending').length;
+        if (!incomplete.value || count) emit('count', count);
         return true;
     } catch (failure) {
         if (!disposed && !signal.aborted && request === sequence && access === accessGeneration()) {
@@ -48,7 +51,7 @@ async function join(offer?: Offer) {
         if (String(result?.operationId) !== operation.operationId || !['applied', 'existingMember'].includes(result?.status ?? '')) throw new Error('Join outcome unavailable');
         pending.value = undefined;
         feedback.value = 'Workspace membership confirmed. Refreshing your workspaces…';
-        emit('joined');
+        emit('joined', operation.workspaceId);
         await read();
     } catch (failure) {
         if (disposed || access !== accessGeneration()) return;
@@ -69,7 +72,7 @@ onUnmounted(() => { disposed = true; sequence++; controller?.abort(); pending.va
 <template>
     <section class="workspace-invitations" aria-labelledby="workspace-invitations-title" :aria-busy="loading || busy">
         <div class="actions"><h2 id="workspace-invitations-title">Workspace invitations</h2><button type="button" :disabled="loading || busy" @click="read">Refresh invitations</button></div>
-        <p>Join only a workspace you recognize. Signing in or completing account setup does not join a workspace.</p>
+        <p v-if="offers.length">Join only a workspace you recognize. Signing in or completing account setup does not join a workspace.</p>
         <p v-if="error" class="notice error" role="alert">{{ error }}</p>
         <p v-if="feedback" class="notice" role="status">{{ feedback }}</p>
         <button v-if="pending" type="button" :disabled="busy || loading" @click="checkPrevious">Check membership</button>
@@ -77,11 +80,11 @@ onUnmounted(() => { disposed = true; sequence++; controller?.abort(); pending.va
         <p v-if="incomplete" class="notice" role="status">Some invitations could not be checked. Refresh to check again; listed invitations remain available.</p>
         <ul class="member-list">
             <li v-for="offer in offers" :key="`${offer.workspaceId}:${offer.id}`" class="member-row">
-                <div class="member-identity"><strong>{{ offer.workspaceName }}</strong><span>Offered role: {{ offer.role }}</span><span>Status: {{ offer.status }}</span></div>
-                <div class="member-actions"><button v-if="offer.status === 'pending'" type="button" :disabled="busy || loading || !!error || !!pending" @click="join(offer)">Join workspace</button><p v-else-if="offer.status !== 'accepted'" class="muted">Ask the workspace owner for a new invitation.</p><p v-else class="muted">Check your workspace list for access.</p></div>
+                <div class="member-identity"><strong>{{ offer.workspaceName }}</strong><span>Offered role: {{ offer.role }}</span></div>
+                <div class="member-actions"><button v-if="offer.status === 'pending'" type="button" :disabled="busy || loading || !!error || !!pending" @click="join(offer)">{{ busy && pending?.id === String(offer.id) ? 'Joining…' : 'Join workspace' }}</button><p v-else-if="offer.status === 'expired'" class="muted">This invitation has expired.</p><p v-else-if="offer.status !== 'accepted'" class="muted">This invitation is no longer available.</p><p v-else class="muted">Membership confirmed. Check your workspace list for access.</p></div>
             </li>
         </ul>
-        <p v-if="loaded && !offers.length && !error" class="muted">No invitations are available for this account. Check that you signed in with the invited email address, or contact the workspace owner.</p>
+        <template v-if="loaded && !offers.length && !error && !incomplete"><p class="muted">{{ props.welcome ? 'You don’t belong to a workspace yet. Ask the person managing your workspace to invite you.' : 'You have no pending invitations.' }}</p><p v-if="props.welcome && props.email" class="muted">Ask them to invite {{ props.email }}.</p></template>
     </section>
 </template>
 

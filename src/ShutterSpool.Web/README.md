@@ -7,8 +7,9 @@ versioned curation autosave, release controls and per-Asset delivery evidence.
 For UI design, implementation and review, use [PRODUCT.md](../../PRODUCT.md) and the
 [Impeccable UI workflow](../../docs/ui.md). The workspace uses tailored Nuxt UI/native controls, shared
 dark-neutral tokens, the approved shutter artwork and locally served Manrope with its license.
+Nuxt Icon bundles the used Lucide icons, including framework defaults and dynamic usages, from the pinned local icon collection; runtime icon-provider fetching is disabled.
 Read the [core workflow](../../docs/core-workflow.md) for behavior and [system boundaries](../../docs/architecture/system-boundaries.md) for ownership.
-The shared **About & licenses** control in the app header exposes ShutterSpool licensing and pinned SFTPGo attribution, with matching source, license and notice links generated from the camera-edge image metadata.
+**Profile → About & licenses** is available before and after sign-in and exposes ShutterSpool licensing, bundled icon notices and pinned SFTPGo attribution, with matching SFTPGo source, license and notice links generated from the camera-edge image metadata.
 
 ## Build and check
 
@@ -31,7 +32,10 @@ If your npm policy defers esbuild's postinstall, run `npm install-scripts approv
 ## Workspace and state
 
 Sources configures shared incoming upload connections; Curation handles photographic decisions; Gallery browses accepted Captures; Delivery explains outgoing work.
+One header contains the brand, permitted desktop workflow tabs and separate Settings/Profile icon buttons; phones retain bottom workflow navigation.
+Settings and workflow navigation appear only after workspace access is confirmed.
 Settings opens Workspace for personal width, motion and advanced preview-quality preferences; Storage holds shared policy and capacity.
+Profile shows the signed-in identity, workspace membership and role, workspace switching when several are available, received Invitations, About & licenses and Sign out.
 Owners and Administrators also have Settings → Members for membership, Viewer visibility and invitations by email with a non-Owner role; all members can leave through Settings → Workspace → Workspace membership, subject to the last-Owner safeguard.
 The [workspace guide](../../docs/workspaces.md) explains the fixed roles and access-change boundary.
 Gallery has a separate recoverable Trash view; its **Storage settings** action opens Storage directly.
@@ -44,10 +48,13 @@ Keep photographs and curation controls prominent; disclose operational evidence 
 
 The SPA uses same-origin `/auth/config`, generated Kiota requests and `/live/changes` hints.
 After sign-in, the shell loads the authenticated user's workspace memberships and confirms any URL selection before mounting private content.
-Complete discovery with exactly one accessible workspace and no explicit selection opens that workspace automatically.
+Session restoration, callback completion and access discovery share the quiet **Opening ShutterSpool…** presentation.
+Complete discovery with exactly one accessible workspace and no explicit selection binds its scope and replaces the route URL within the loaded app before scoped requests or private content mount; it does not reload the page.
 Otherwise, choose a listed workspace. An incomplete query stays retryable and permits explicitly choosing a confirmed workspace; it never opens an unconfirmed workspace or replaces an invalid or unavailable URL selection.
 The selected workspace ID stays in the page URL as `?workspace=<guid>` and is sent as `X-ShutterSpool-Workspace` on scoped API and authenticated preview requests. The live hub receives the same ID in its URL because WebSocket handshakes cannot set the scope header. Server membership checks remain authoritative; a URL value never grants access.
-Workspace invitations appear on the chooser and through the Invitations action while a workspace is open. The recipient sees the workspace and role before explicitly joining; successful Join refreshes memberships without silently switching the active workspace. Incomplete discovery and uncertain Join results remain retryable. Invitation administration distinguishes a saved offer from its setup-email result and exposes explicit retry when email fails. Native account setup and verification stay on the identity provider; the client neither accepts setup tokens nor creates credentials.
+Complete discovery with no memberships opens a welcome page with received invitations and, when none are pending, guidance to request an invitation using the signed-in email when available.
+**Profile → Invitations** opens the same invitation content without discarding workspace drafts; **Back to workspace** returns to the open workspace. Invitation discovery does not delay workspace entry. Known nonzero pending counts appear in Profile and its badge; failed discovery cannot establish a zero count.
+The recipient sees the workspace and role before explicitly joining. Confirmed Join opens the joined workspace, retaining the unsaved-work departure guard when leaving another workspace; destination entry checks membership and access normally. Incomplete discovery and uncertain Join results remain retryable. Invitation administration distinguishes a saved offer from its setup-email result and exposes explicit retry when email fails. Native account setup and verification stay on the identity provider; the client neither accepts setup tokens nor creates credentials.
 The shell retains one selected workspace across `/` and `/captures/:id`; explicit Capture links open the requested photograph in Gallery. Switching workspaces confirms the existing unsaved-work departure guard, then reloads the shell so private drafts, previews and live state cannot cross workspace boundaries.
 It loads current workspace access before mounting private controls and uses the returned Server capability flags rather than deriving permissions from role names. Member lists use optional claim-backed display names with subject fallback; a name may be absent until that member accesses the workspace. Permission gates cover requests, navigation, keyboard actions, autosave and queued bulk items, not only visible buttons.
 An ordinary `permission-denied` response preserves a valid sign-in; reconciliation refreshes permissions. Revoked membership closes the selected workspace and requires explicit selection again.

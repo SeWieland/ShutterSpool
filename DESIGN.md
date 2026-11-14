@@ -74,6 +74,8 @@ Wrap long names in detail and expose a full accessible name when inbox titles tr
 
 Standard workspace width is at most 1440px, with 24px desktop gutters and 16px phone gutters; Full width expands the shell.
 The header is 80px high on desktop and 68px at widths of 760px or less.
+Keep one steady header row: brand at left, permitted workflow tabs centered on desktop, and separate Settings/Profile icon buttons at right.
+Phones retain the existing bottom workflow navigation. Workspace navigation and Settings appear only after access is confirmed; no additional workspace strip is used.
 Settings keeps one bounded content column beside a compact Workspace/Storage rail; on phones the two labeled choices sit above it.
 Form content remains bounded even with Full width selected.
 The desktop detail preview sits beside a 384px inspector with a charcoal surface background; below 760px they stack.
@@ -98,8 +100,15 @@ Borders provide separation on the dark surfaces; avoid decorative depth.
 
 ## Components
 
-The shared header provides About & licenses before and after sign-in. Open attribution in a native dialog without navigating away or disturbing workspace drafts.
-Keep a labeled Close action, keyboard focus within the dialog while open, Escape dismissal and focus return to its trigger. Source and license links are underlined and open separately from the workspace.
+Settings and Profile use icon-only 44px targets with accessible names and tooltips. Profile opens a viewport-bounded native popover with the signed-in identity, workspace and role, or multiple workspace choices with the current one marked.
+Received Invitations and About & licenses follow the membership section; Sign out is separated at the bottom. Known nonzero invitation counts appear beside Invitations and as a small Profile badge; failed discovery never implies zero.
+Profile provides About & licenses before and after sign-in. Open attribution in a native dialog without navigating away or disturbing workspace drafts.
+Keep a labeled Close action, keyboard focus within the dialog while open, Escape dismissal and focus return to Profile. Source and license links are underlined and open separately from the workspace.
+
+Startup uses one quiet Opening ShutterSpool… presentation through session restoration, callback completion and access discovery, without artificial delays.
+The signed-in welcome page leads with Join a workspace to get started and received invitations; a confirmed empty result explains how to request an invitation and shows the signed-in email when available.
+Invitations occupies the main content area under the same header, with Back to workspace preserving drafts. Explicit Join opens the joined workspace after confirmation; switching workspace, joining another workspace and signing out retain unsaved-work protection.
+Loading, incomplete discovery, unavailable offers and uncertain Join outcomes remain distinct from confirmed empty or successful results.
 
 Collapsible sections use native `details`/`summary` controls with a highlighted summary row at least 44px high.
 Use one decorative chevron: right when closed, down when open. Keep the label and keyboard focus visible.

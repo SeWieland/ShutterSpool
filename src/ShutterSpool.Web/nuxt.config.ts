@@ -6,6 +6,10 @@ export default defineNuxtConfig({
   css: ['~/assets/main.css', '~/assets/workspace.css'],
   colorMode: { preference: 'dark', fallback: 'dark' },
   ui: { fonts: false },
+  icon: {
+    provider: 'none',
+    clientBundle: { scan: { globInclude: ['app/**/*.{vue,ts}'] } },
+  },
   appConfig: { sftpgo },
   hooks: {
     'build:manifest': manifest => {

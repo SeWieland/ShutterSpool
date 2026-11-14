@@ -41,7 +41,8 @@ test('recipient discovery never accepts an offer and Join uses its exact revisio
     await client.run('join(offers.value[0])');
     assert.equal(writes.length, 1); assert.equal(writes[0].workspace, 'workspace'); assert.equal(writes[0].id, 'offer');
     assert.deepEqual(Object.keys(writes[0].body).sort(), ['expectedRevision', 'operationId']);
-    assert.equal(writes[0].body.expectedRevision, 2); assert.equal(client.events[0][0], 'joined');
+    assert.equal(writes[0].body.expectedRevision, 2); assert.deepEqual(client.events.find(event => event[0] === 'joined'), ['joined', 'workspace']);
+    assert.deepEqual(client.events[0], ['count', 1]);
 });
 
 test('unverified email keeps sign-in usable, refreshes offer status and never announces membership', async () => {
@@ -51,7 +52,7 @@ test('unverified email keeps sign-in usable, refreshes offer status and never an
     } });
     await client.run('read()'); await client.run('join(offers.value[0])');
     assert.match(client.run('feedback.value'), /verification.*sign.in service/i);
-    assert.equal(client.events.length, 0); assert.equal(client.run('pending.value'), undefined);
+    assert.equal(client.events.filter(event => event[0] === 'joined').length, 0); assert.equal(client.run('pending.value'), undefined);
 });
 
 test('unknown Join is preserved and deliberate check rereads before retrying the identical operation', async () => {
@@ -65,11 +66,11 @@ test('unknown Join is preserved and deliberate check rereads before retrying the
         } } }) }),
     } });
     await client.run('read()'); await client.run('join(offers.value[0])');
-    assert.match(client.run('feedback.value'), /could not confirm whether you joined.*Check membership/); assert.equal(client.events.length, 0);
+    assert.match(client.run('feedback.value'), /could not confirm whether you joined.*Check membership/); assert.equal(client.events.filter(event => event[0] === 'joined').length, 0);
     await client.run('join(offers.value[0])'); assert.equal(writes.length, 1, 'a second action is blocked while the first is uncertain');
     fail = false; await client.run('checkPrevious()');
     assert.deepEqual(calls.slice(2, 4), ['read', 'write']); assert.deepEqual(writes[1], writes[0]);
-    assert.equal(client.events[0][0], 'joined');
+    assert.equal(client.events.find(event => event[0] === 'joined')[1], 'workspace');
 });
 
 test('late offer responses cannot repopulate a signed-out interface and incomplete discovery remains explicit', async () => {
@@ -79,6 +80,24 @@ test('late offer responses cannot repopulate a signed-out interface and incomple
     assert.equal(client.run('offers.value.length'), 0);
     const partial = component('WorkspaceInvitations', { workspaceOffers: { get: async () => ({ items: [offer], incomplete: true }) } });
     await partial.run('read()'); assert.equal(partial.run('incomplete.value'), true);
+});
+
+test('received invitation count refreshes after Join and incomplete discovery cannot claim a zero count', async () => {
+    let joined = false, incomplete = false;
+    const client = component('WorkspaceInvitations', { workspaceOffers: {
+        get: async () => ({ items: joined ? [] : [offer], incomplete }),
+        byWorkspaceId: () => ({ byId: () => ({ accept: { post: async body => {
+            joined = true; return { operationId: body.operationId, status: 'applied' };
+        } } }) }),
+    } });
+    await client.run('read()');
+    assert.deepEqual(client.events.at(-1), ['count', 1]);
+    await client.run('join(offers.value[0])');
+    assert.deepEqual(client.events.at(-1), ['count', 0]);
+    const before = client.events.length;
+    incomplete = true;
+    await client.run('read()');
+    assert.equal(client.events.length, before, 'an incomplete empty page does not overwrite known count');
 });
 
 test('expired, cancelled and accepted offers never submit a new Join, and malformed responses block stale actions', async () => {
@@ -213,7 +232,7 @@ test('late Join and creation replies cannot announce success after access is los
     await recipient.run('read()'); await manager.run('read()'); manager.run("email.value = 'photographer@example.test'");
     const join = recipient.run('join(offers.value[0])'), create = manager.run('create()');
     recipient.loseAccess(); manager.loseAccess(); resolveJoin(); resolveCreate(); await Promise.all([join, create]);
-    assert.equal(recipient.events.length, 0); assert.equal(recipient.run('feedback.value'), '');
+    assert.equal(recipient.events.filter(event => event[0] === 'joined').length, 0); assert.equal(recipient.run('feedback.value'), '');
     assert.equal(manager.run('feedback.value'), ''); assert.equal(manager.run('email.value'), '');
     assert.equal(manager.run('pending.value'), undefined); assert.equal(recipient.run('pending.value'), undefined);
 });
@@ -290,11 +309,11 @@ test('cancellation needs no renewal role and retains only its own operation and 
     assert.deepEqual(Object.keys(client.run('pending.value')).sort(), ['expectedRevision', 'id', 'kind', 'operationId']);
 });
 
-test('opening invitations from a role-resolved workspace honors departure without retargeting its page', () => {
+test('browsing invitations preserves same-workspace drafts while Sign out still requires departure', () => {
     const workspaceId = '2f2ed010-2a51-468a-a38a-a2372fba8211';
     const navigations = [];
     const context = vm.createContext({ exports: {}, ref, shallowRef, computed,
-        useRoute: () => ({ path: '/', params: {} }), useAppConfig: () => ({ sftpgo: {} }), watch: () => () => {}, onMounted() {}, onUnmounted() {},
+        useRoute: () => ({ path: '/', params: {} }), useRouter: () => ({}), useAppConfig: () => ({ sftpgo: {} }), watch: () => () => {}, onMounted() {}, onUnmounted() {},
         window: { location: { assign: path => navigations.push(path), replace: path => navigations.push(path) } },
         require: name => name.endsWith('/session') ? { session: ref({}), onAccessLost: () => () => {} }
             : name.endsWith('/workspace-access') ? { workspaceAccess: ref({}), workspaceRevoked: ref(false) }
@@ -304,9 +323,13 @@ test('opening invitations from a role-resolved workspace honors departure withou
     vm.runInContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
     vm.runInContext(`memberships.value = [{ id: '${workspaceId}', name: 'Synthetic studio' }]; hasDiscovery.value = true`, context);
     assert.equal(vm.runInContext('canMountOperationalWorkspace.value', context), true);
-    vm.runInContext('workspace.value = { requestDeparture: () => false }; openInvitations()', context);
-    assert.equal(vm.runInContext('invitationsVisible.value', context), false);
-    vm.runInContext('workspace.value = { requestDeparture: () => true }; openInvitations()', context);
+    vm.runInContext("let draft = 'unfinished bulk tag'; let departures = 0; workspace.value = { requestDeparture: () => { departures++; draft = ''; return false; } }; openInvitations()", context);
     assert.equal(vm.runInContext('invitationsVisible.value', context), true);
+    assert.equal(vm.runInContext('draft', context), 'unfinished bulk tag');
+    assert.equal(vm.runInContext('departures', context), 0);
+    vm.runInContext('invitationsVisible.value = false', context);
+    assert.equal(vm.runInContext('draft', context), 'unfinished bulk tag');
+    vm.runInContext('leaveSession()', context);
+    assert.equal(vm.runInContext('departures', context), 1);
     assert.deepEqual(navigations, [], 'opening invitations keeps the immutable selected page and uses explicit Join separately');
 });

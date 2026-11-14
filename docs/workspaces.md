@@ -6,19 +6,22 @@ Your account can belong to several workspaces and have a different role in each.
 ## Choose a workspace
 
 Sign in. If a complete check finds exactly one accessible workspace and no workspace was selected in the URL, it opens automatically. Otherwise, choose an assigned workspace and select **Open workspace**.
-Use the header's **Workspace** selector to switch. Resolve or explicitly abandon unsaved edits when prompted; switching reloads the page.
+Open **Profile** in the header to see your workspace and role. If you belong to several workspaces, select another one there to switch.
+Resolve or explicitly abandon unsaved edits when prompted; switching reloads the page.
 Each tab keeps its selected workspace in its URL, so you can use different workspaces in separate tabs. A shared URL grants no access.
 
 If some memberships could not be checked, explicitly open a listed, confirmed workspace or choose **Retry**.
 An unavailable or unconfirmed URL selection never opens another workspace automatically.
-If **No workspace access** appears after a complete check, contact the operator if you expected access.
+If you have no memberships after a complete check, the welcome page shows your received invitations.
+If none are pending, ask the person managing your workspace to invite you using the signed-in email shown, when available.
 
 ## Join an invited workspace
 
 Complete any account-setup steps from the sign-in service, then sign in to ShutterSpool through its ordinary application URL.
-On the workspace chooser, review **Workspace invitations**. If you already have a workspace open, select **Invitations**.
+Review **Workspace invitations** on the welcome page, or open **Profile → Invitations**.
+Opening Invitations preserves work in your current workspace; **Back to workspace** returns to it.
 Check the workspace name and offered role, then choose **Join workspace** only for a workspace you recognize.
-After joining, open it from the workspace list. Joining another workspace does not retarget work in the current one.
+After confirmed success, the joined workspace opens. If this leaves another workspace, resolve or explicitly abandon unsaved edits when prompted; cancelling keeps that workspace open.
 
 The invitation is tied to the intended account. Sharing an application URL cannot let a different signed-in account accept it.
 Your sign-in service must confirm email verification in a fresh sign-in; finishing account setup alone does not create a membership.
@@ -26,7 +29,7 @@ Keep account-setup emails private: someone who controls a setup link may gain co
 
 Workspace invitations expire 24 hours after creation. An expired or cancelled invitation needs a new invitation from a workspace Owner or Administrator.
 Account-setup links have their own expiry. Renewing a workspace invitation preserves existing credentials and may send another native setup email if account setup is still needed.
-If a Join result is uncertain, use **Check previous Join** to reconcile it. **Refresh invitations** retries an incomplete or unavailable check.
+If a Join result is uncertain, use **Check membership** to reconcile it. **Refresh invitations** retries an incomplete or unavailable check.
 An unavailable invitation check is not proof that no invitation exists.
 
 ## Understand your role

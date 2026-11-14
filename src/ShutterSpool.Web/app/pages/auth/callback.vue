@@ -15,4 +15,4 @@ onMounted(async () => {
     }
 })
 </script>
-<template><main class="empty"><h1>{{ failed ? 'Sign-in did not complete' : 'Completing sign-in…' }}</h1><NuxtLink v-if="failed" to="/" class="back">Return to ShutterSpool</NuxtLink></main></template>
+<template><main class="empty" :aria-busy="!failed" :role="failed ? 'alert' : 'status'"><h1>{{ failed ? 'Sign-in did not complete' : 'Opening ShutterSpool…' }}</h1><NuxtLink v-if="failed" to="/" class="back">Return to ShutterSpool</NuxtLink></main></template>

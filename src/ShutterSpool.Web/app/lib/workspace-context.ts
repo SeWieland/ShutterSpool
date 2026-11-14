@@ -59,6 +59,14 @@ export let pageWorkspaceId = typeof window === 'undefined' || window.location.pa
     : readWorkspaceId(window.location.search);
 let pageWorkspaceScopeInitialized = typeof window !== 'undefined' && !window.location.pathname.startsWith('/auth/');
 
+export function bindInitialWorkspace(memberships: WorkspaceMembership[], incomplete: boolean): boolean {
+    if (pageWorkspaceId !== null || incomplete) return false;
+    const selection = workspaceSelection(memberships, incomplete, null);
+    if (selection.state !== 'selected') return false;
+    pageWorkspaceId = selection.workspace.id;
+    return true;
+}
+
 export function initializePageWorkspaceFromReturnTarget(target: string): boolean {
     if (pageWorkspaceScopeInitialized || !authCallbackPage || typeof window === 'undefined') return false;
     pageWorkspaceScopeInitialized = true;
