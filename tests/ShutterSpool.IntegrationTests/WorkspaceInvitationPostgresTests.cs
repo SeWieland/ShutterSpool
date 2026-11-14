@@ -22,8 +22,8 @@ public sealed partial class ConfigurationApiTests
             var store = new EfAccessGrantStore(database);
             string subject = kind + index;
             WorkspaceInvitation offer = await CreateInvitationAsync(store, subject, token);
-            var accept = new WorkspaceInvitationChange(Guid.NewGuid(), "https://issuer.test", subject, "accept", offer.Id, offer.Revision, EmailVerified: true);
-            var admin = new WorkspaceInvitationChange(Guid.NewGuid(), "https://issuer.test", "operator", kind, offer.Id, offer.Revision, WorkspaceRole.Administrator);
+            var accept = new WorkspaceInvitationAccept(Guid.NewGuid(), "https://issuer.test", subject, offer.Id, offer.Revision, EmailVerified: true);
+            var admin = AdminChange(kind, offer, WorkspaceRole.Administrator);
             if (index == 0)
             {
                 WorkspaceInvitationResult changed = await store.ChangeInvitationAsync(admin, token);
@@ -64,8 +64,8 @@ public sealed partial class ConfigurationApiTests
         var store = new EfAccessGrantStore(first);
         WorkspaceInvitation offer = await CreateInvitationAsync(store, "racing", token);
         WorkspaceInvitationResult[] results = await Task.WhenAll(
-            store.ChangeInvitationAsync(new(Guid.NewGuid(), "https://issuer.test", "racing", "accept", offer.Id, offer.Revision, EmailVerified: true), token),
-            new EfAccessGrantStore(second).ChangeInvitationAsync(new(Guid.NewGuid(), "https://issuer.test", kind == "accept" ? "racing" : "operator", kind, offer.Id, offer.Revision, EmailVerified: kind == "accept"), token));
+            store.ChangeInvitationAsync(new WorkspaceInvitationAccept(Guid.NewGuid(), "https://issuer.test", "racing", offer.Id, offer.Revision, EmailVerified: true), token),
+            new EfAccessGrantStore(second).ChangeInvitationAsync(kind == "accept" ? new WorkspaceInvitationAccept(Guid.NewGuid(), "https://issuer.test", "racing", offer.Id, offer.Revision, true) : AdminChange(kind, offer), token));
         Assert.Single(results, item => item.Status == "applied");
         WorkspaceInvitation current = Assert.Single(await store.ListOwnInvitationsAsync("https://issuer.test", "racing", token));
         WorkspaceMembership? membership = await store.GetAsync("https://issuer.test", "racing", token);
@@ -96,7 +96,7 @@ public sealed partial class ConfigurationApiTests
         await using var waiter = new ShutterSpoolDbContext(fixture.Database.Options);
         await waiter.Database.OpenConnectionAsync(token);
         int process = ((NpgsqlConnection)waiter.Database.GetDbConnection()).ProcessID;
-        var accept = new WorkspaceInvitationChange(Guid.NewGuid(), "https://issuer.test", "clock-wait", "accept", offer.Id, offer.Revision, EmailVerified: true);
+        var accept = new WorkspaceInvitationAccept(Guid.NewGuid(), "https://issuer.test", "clock-wait", offer.Id, offer.Revision, EmailVerified: true);
         Task<WorkspaceInvitationResult> pending = new EfAccessGrantStore(waiter).ChangeInvitationAsync(accept, token);
         await WaitForAccessLockAsync(gate, process, token);
         await gate.Database.ExecuteSqlRawAsync("SELECT pg_sleep(1.1)", token);
@@ -104,16 +104,16 @@ public sealed partial class ConfigurationApiTests
         Assert.Equal("expired", (await pending).Status);
         Assert.Equal("expired", (await new EfAccessGrantStore(waiter).ChangeInvitationAsync(accept, token)).Status);
         Assert.Null(await store.GetAsync("https://issuer.test", "clock-wait", token));
-        WorkspaceInvitationResult renewed = await store.ChangeInvitationAsync(new(Guid.NewGuid(), "https://issuer.test", "operator", "renew", offer.Id, offer.Revision), token);
+        WorkspaceInvitationResult renewed = await store.ChangeInvitationAsync(new WorkspaceInvitationRenew(Guid.NewGuid(), "https://issuer.test", "operator", offer.Id, offer.Revision), token);
         Assert.Equal(TimeSpan.FromHours(24), renewed.Offer!.ExpiresAt - renewed.Offer.CreatedAt);
         Assert.Equal("expired", (await new EfAccessGrantStore(waiter).ChangeInvitationAsync(accept, token)).Status);
         Assert.Equal("pending", (await new EfAccessGrantStore(waiter).ChangeInvitationAsync(accept, token)).Offer!.Status);
     }
 
     [Theory]
-    [InlineData(WorkspaceRole.Administrator, false)]
-    [InlineData(WorkspaceRole.Curator, true)]
-    public async Task Workspace_invitation_authority_loss_invalidates_offers_atomically_but_owner_to_admin_preserves_them(WorkspaceRole next, bool invalidated)
+    [InlineData(WorkspaceRole.Administrator)]
+    [InlineData(WorkspaceRole.Curator)]
+    public async Task Workspace_invitation_survives_inviter_role_loss(WorkspaceRole next)
     {
         await using var fixture = await ConfigurationApiFixture.CreateAsync();
         CancellationToken token = TestContext.Current.CancellationToken;
@@ -124,16 +124,10 @@ public sealed partial class ConfigurationApiTests
         WorkspaceInvitation offer = await CreateInvitationAsync(store, "authority-test", token);
         WorkspaceMembership owner = (await store.GetAsync("https://issuer.test", "operator", token))!;
         Assert.Equal("applied", (await store.ChangeAsync(new(Guid.NewGuid(), owner.Issuer, "remaining-owner", owner.Id, owner.Revision, AccessChangeKind.Role, next), token)).Status);
-        Assert.Equal(invalidated ? "invalidated" : "pending", Assert.Single(await store.ListOwnInvitationsAsync(owner.Issuer, "authority-test", token)).Status);
-        if (invalidated)
-        {
-            WorkspaceMembership changed = (await store.GetAsync(owner.Issuer, owner.Subject, token))!;
-            await store.ChangeAsync(new(Guid.NewGuid(), owner.Issuer, "remaining-owner", owner.Id, changed.Revision, AccessChangeKind.Role, WorkspaceRole.Administrator), token);
-            Assert.Equal("invalidated", Assert.Single(await store.ListOwnInvitationsAsync(owner.Issuer, "authority-test", token)).Status);
-        }
-        WorkspaceInvitationResult result = await store.ChangeInvitationAsync(new(Guid.NewGuid(), owner.Issuer, "authority-test", "accept", offer.Id, offer.Revision, EmailVerified: true), token);
-        Assert.Equal(invalidated ? "conflict" : "applied", result.Status);
-        Assert.Equal(!invalidated, (await store.GetAsync(owner.Issuer, "authority-test", token))?.IsActive == true);
+        Assert.Equal("pending", Assert.Single(await store.ListOwnInvitationsAsync(owner.Issuer, "authority-test", token)).Status);
+        WorkspaceInvitationResult result = await store.ChangeInvitationAsync(new WorkspaceInvitationAccept(Guid.NewGuid(), owner.Issuer, "authority-test", offer.Id, offer.Revision, true), token);
+        Assert.Equal("applied", result.Status);
+        Assert.True(result.Membership!.IsActive);
     }
 
     [Fact]
@@ -155,8 +149,7 @@ public sealed partial class ConfigurationApiTests
             await using var waiter = new ShutterSpoolDbContext(fixture.Database.Options);
             await waiter.Database.OpenConnectionAsync(token);
             int process = ((NpgsqlConnection)waiter.Database.GetDbConnection()).ProcessID;
-            Task<WorkspaceInvitationResult> pending = new EfAccessGrantStore(waiter).ChangeInvitationAsync(new(Guid.NewGuid(), "https://issuer.test", "member-" + kind,
-                "accept", offer.Id, offer.Revision, EmailVerified: true), token);
+            Task<WorkspaceInvitationResult> pending = new EfAccessGrantStore(waiter).ChangeInvitationAsync(new WorkspaceInvitationAccept(Guid.NewGuid(), "https://issuer.test", "member-" + kind, offer.Id, offer.Revision, EmailVerified: true), token);
             await WaitForAccessLockAsync(gate, process, token);
             if (kind == "role") await gate.Database.ExecuteSqlInterpolatedAsync($"UPDATE authorization_grants SET \"Role\"='Curator', \"Revision\"=1 WHERE \"Subject\"={"member-" + kind}", token);
             else
@@ -182,7 +175,7 @@ public sealed partial class ConfigurationApiTests
         await using var database = new ShutterSpoolDbContext(fixture.Database.Options);
         var store = new EfAccessGrantStore(database);
         WorkspaceInvitation offer = await CreateInvitationAsync(store, "audit-failure", token);
-        var accept = new WorkspaceInvitationChange(Guid.NewGuid(), "https://issuer.test", "audit-failure", "accept", offer.Id, offer.Revision, EmailVerified: true);
+        var accept = new WorkspaceInvitationAccept(Guid.NewGuid(), "https://issuer.test", "audit-failure", offer.Id, offer.Revision, EmailVerified: true);
         await database.Database.ExecuteSqlRawAsync("ALTER TABLE workspace_access_operations ADD CONSTRAINT reject_invitation_audit CHECK (false) NOT VALID", token);
         await Assert.ThrowsAsync<DbUpdateException>(() => store.ChangeInvitationAsync(accept, token));
         await using var restarted = new ShutterSpoolDbContext(fixture.Database.Options);
@@ -206,14 +199,73 @@ public sealed partial class ConfigurationApiTests
         Assert.Single(await uncertain.AuthorizationGrants.Where(item => item.Subject == "audit-failure").ToArrayAsync(token));
     }
 
+    [Theory]
+    [InlineData("cancel")]
+    [InlineData("renew")]
+    [InlineData("expire")]
+    public async Task Workspace_invitation_setup_follows_commit_and_replay_never_sends_for_changed_or_expired_offer(string action)
+    {
+        await using var fixture = await ConfigurationApiFixture.CreateAsync();
+        CancellationToken token = TestContext.Current.CancellationToken;
+        await using var database = new ShutterSpoolDbContext(fixture.Database.Options);
+        var store = new EfAccessGrantStore(database);
+        int sends = 0;
+        var enrollment = new SetupEnrollment(async account =>
+        {
+            await using var committed = new ShutterSpoolDbContext(fixture.Database.Options);
+            WorkspaceInvitationEntity saved = await committed.Set<WorkspaceInvitationEntity>().SingleAsync(token);
+            Assert.Equal(account.Subject, saved.RecipientSubject);
+            Assert.Equal("pending", saved.Status);
+            Assert.Empty(await committed.AuthorizationGrants.Where(item => item.Subject == account.Subject).ToArrayAsync(token));
+            return ++sends == 1 ? "setup-email-failed" : "setup-email-sent";
+        });
+        var service = new WorkspaceInvitationService(store, enrollment);
+        Guid operation = Guid.NewGuid();
+        WorkspaceInvitationResult first = await service.CreateAsync(operation, "https://issuer.test", "admitted-admin", "setup@example.test", WorkspaceRole.Viewer, token);
+        Assert.Equal("applied", first.Status);
+        Assert.Equal("setup-email-failed", first.SetupEmailStatus);
+        WorkspaceInvitationResult retry = await service.CreateAsync(operation, "https://issuer.test", "admitted-admin", "setup@example.test", WorkspaceRole.Viewer, token);
+        Assert.Equal(first.Offer, retry.Offer);
+        Assert.Equal("setup-email-sent", retry.SetupEmailStatus);
+        Assert.Equal(2, sends);
+        WorkspaceInvitation offer = first.Offer!;
+        if (action == "expire")
+            await database.Database.ExecuteSqlInterpolatedAsync($"UPDATE workspace_invitations SET \"ExpiresAt\"=clock_timestamp()-interval '1 second' WHERE \"Id\"={offer.Id}", token);
+        else
+            Assert.Equal("applied", (await store.ChangeInvitationAsync(AdminChange(action, offer), token)).Status);
+        WorkspaceInvitationResult stale = await service.CreateAsync(operation, "https://issuer.test", "admitted-admin", "setup@example.test", WorkspaceRole.Viewer, token);
+        Assert.Null(stale.SetupEmailStatus);
+        Assert.Equal(action == "expire" ? "expired" : action == "cancel" ? "cancelled" : "pending", stale.Offer!.Status);
+        Assert.Equal(2, sends);
+        if (action == "renew")
+        {
+            var renewal = new WorkspaceInvitationRenew(Guid.NewGuid(), "https://issuer.test", "admitted-admin", offer.Id, stale.Offer.Revision, WorkspaceRole.Curator);
+            WorkspaceInvitationResult renewed = await service.RenewAsync(renewal, token);
+            Assert.Equal("setup-email-sent", renewed.SetupEmailStatus);
+            Assert.Equal(WorkspaceRole.Curator, renewed.Offer!.Role);
+            Assert.Equal(TimeSpan.FromHours(24), renewed.Offer.ExpiresAt - renewed.Offer.CreatedAt);
+            Assert.Equal(3, sends);
+        }
+    }
+
+    private sealed class SetupEnrollment(Func<AccountEnrollmentIdentity, Task<string>> send) : IAccountEnrollment
+    {
+        public Task<AccountEnrollmentResult> ResolveAsync(string email, CancellationToken cancellationToken) =>
+            Task.FromResult(new AccountEnrollmentResult("resolved", new("https://issuer.test", "setup-account", email)));
+        public Task<string> SendSetupEmailAsync(AccountEnrollmentIdentity account, CancellationToken cancellationToken) => send(account);
+    }
+
     private static async Task<WorkspaceInvitation> CreateInvitationAsync(EfAccessGrantStore store, string subject, CancellationToken token)
     {
-        WorkspaceInvitationRecipient recipient = await store.RecordRecipientAsync(Guid.NewGuid(),
-            new("https://issuer.test", subject, "Synthetic " + subject, "synthetic-host-operator"), token);
-        WorkspaceInvitationResult result = await store.ChangeInvitationAsync(new(Guid.NewGuid(), "https://issuer.test", "operator", "create", recipient.Id), token);
+        WorkspaceInvitationResult result = await store.ChangeInvitationAsync(new WorkspaceInvitationCreate(Guid.NewGuid(), "https://issuer.test", "operator",
+            new("https://issuer.test", subject, "Synthetic " + subject)), token);
         Assert.Equal("applied", result.Status);
         return result.Offer!;
     }
+
+    private static WorkspaceInvitationChange AdminChange(string kind, WorkspaceInvitation offer, WorkspaceRole role = WorkspaceRole.Viewer) =>
+        kind == "cancel" ? new WorkspaceInvitationCancel(Guid.NewGuid(), "https://issuer.test", "operator", offer.Id, offer.Revision)
+            : new WorkspaceInvitationRenew(Guid.NewGuid(), "https://issuer.test", "operator", offer.Id, offer.Revision, role);
 
     private static async Task WaitForAccessLockAsync(ShutterSpoolDbContext database, int process, CancellationToken token)
     {
@@ -233,47 +285,67 @@ public sealed partial class ConfigurationApiTests
         var store = new EfAccessGrantStore(database);
         WorkspaceInvitation offer = await CreateInvitationAsync(store, "expiry-boundary", token);
         await database.Database.ExecuteSqlInterpolatedAsync($"UPDATE workspace_invitations SET \"ExpiresAt\"=clock_timestamp()+{remainingMicroseconds}*interval '1 microsecond' WHERE \"Id\"={offer.Id}", token);
-        WorkspaceInvitationResult result = await store.ChangeInvitationAsync(new(Guid.NewGuid(), "https://issuer.test", "expiry-boundary", "accept", offer.Id, offer.Revision, EmailVerified: true), token);
+        WorkspaceInvitationResult result = await store.ChangeInvitationAsync(new WorkspaceInvitationAccept(Guid.NewGuid(), "https://issuer.test", "expiry-boundary", offer.Id, offer.Revision, EmailVerified: true), token);
         Assert.Equal(allowed ? "applied" : "expired", result.Status);
         Assert.Equal(allowed, (await store.GetAsync("https://issuer.test", "expiry-boundary", token))?.IsActive == true);
     }
 
     [Fact]
-    public async Task Workspace_invitation_removal_invalidates_pending_offer_and_reinvitation_after_acceptance_uses_new_identity()
+    public async Task Workspace_invitation_removal_requires_new_offer_identity_and_old_commands_never_restore_membership()
     {
         await using var fixture = await ConfigurationApiFixture.CreateAsync();
         CancellationToken token = TestContext.Current.CancellationToken;
         await using var database = new ShutterSpoolDbContext(fixture.Database.Options);
         var store = new EfAccessGrantStore(database);
-        WorkspaceInvitation pending = await CreateInvitationAsync(store, "pending-removal", token);
+        var pendingCreate = new WorkspaceInvitationCreate(Guid.NewGuid(), "https://issuer.test", "operator",
+            new("https://issuer.test", "pending-removal", "Synthetic pending removal"));
+        WorkspaceInvitation pending = (await store.ChangeInvitationAsync(pendingCreate, token)).Offer!;
         database.AuthorizationGrants.Add(new() { Issuer = "https://issuer.test", Subject = "pending-removal", Role = WorkspaceRole.Curator, IsActive = true });
         await database.SaveChangesAsync(token);
         WorkspaceMembership member = (await store.GetAsync("https://issuer.test", "pending-removal", token))!;
         AccessChangeResult removal = await store.ChangeAsync(new(Guid.NewGuid(), "https://issuer.test", "operator", member.Id, member.Revision, AccessChangeKind.Remove), token);
         Assert.Equal("applied", removal.Status);
-        Assert.Equal("invalidated", Assert.Single(await store.ListOwnInvitationsAsync("https://issuer.test", "pending-removal", token)).Status);
+        WorkspaceInvitation invalidated = Assert.Single(await store.ListOwnInvitationsAsync("https://issuer.test", "pending-removal", token));
+        Assert.Equal("invalidated", invalidated.Status);
         WorkspaceAccessOperationEntity audit = await database.Set<WorkspaceAccessOperationEntity>().SingleAsync(item => item.Id == removal.OperationId, token);
         using JsonDocument after = JsonDocument.Parse(audit.AfterState!);
         Assert.Equal(pending.Id, Assert.Single(after.RootElement.GetProperty("InvalidatedOffers").EnumerateArray()).GetGuid());
         Assert.False((await store.GetAsync("https://issuer.test", "pending-removal", token))!.IsActive);
 
+        var renewRemoved = new WorkspaceInvitationRenew(Guid.NewGuid(), "https://issuer.test", "operator", pending.Id, invalidated.Revision);
+        Assert.Equal("invalidated", (await store.ChangeInvitationAsync(renewRemoved, token)).Status);
+        Assert.Equal("invalidated", (await store.ChangeInvitationAsync(
+            new WorkspaceInvitationCancel(Guid.NewGuid(), "https://issuer.test", "operator", pending.Id, invalidated.Revision), token)).Status);
+        var acceptRemoved = new WorkspaceInvitationAccept(Guid.NewGuid(), "https://issuer.test", "pending-removal", pending.Id, invalidated.Revision, true);
+        Assert.Equal("invalidated", (await store.ChangeInvitationAsync(acceptRemoved, token)).Status);
+        WorkspaceInvitationResult replacement = await store.ChangeInvitationAsync(pendingCreate with { OperationId = Guid.NewGuid() }, token);
+        Assert.Equal("applied", replacement.Status);
+        Assert.NotEqual(pending.Id, replacement.Offer!.Id);
+        Assert.Equal("pending", replacement.Offer.Status);
+        Assert.Equal(TimeSpan.FromHours(24), replacement.Offer.ExpiresAt - replacement.Offer.CreatedAt);
+        Assert.Equal("conflict", (await store.ChangeInvitationAsync(pendingCreate, token)).Status);
+        Assert.Equal("conflict", (await store.ChangeInvitationAsync(renewRemoved, token)).Status);
+        Assert.Equal("invalidated", (await store.ChangeInvitationAsync(acceptRemoved, token)).Status);
+        Assert.False((await store.GetAsync("https://issuer.test", "pending-removal", token))!.IsActive);
+        Assert.Equal(replacement.Offer.Id, Assert.Single(await store.ListOwnInvitationsAsync("https://issuer.test", "pending-removal", token)).Id);
+
         WorkspaceInvitation first = await CreateInvitationAsync(store, "new-decision", token);
-        var accept = new WorkspaceInvitationChange(Guid.NewGuid(), "https://issuer.test", "new-decision", "accept", first.Id, first.Revision, EmailVerified: true);
+        var accept = new WorkspaceInvitationAccept(Guid.NewGuid(), "https://issuer.test", "new-decision", first.Id, first.Revision, EmailVerified: true);
         WorkspaceInvitationResult accepted = await store.ChangeInvitationAsync(accept, token);
         member = accepted.Membership!;
         await store.ChangeAsync(new(Guid.NewGuid(), "https://issuer.test", "operator", member.Id, member.Revision, AccessChangeKind.Remove), token);
-        Assert.Equal("accepted", (await store.ChangeInvitationAsync(new(Guid.NewGuid(), "https://issuer.test", "operator", "renew", first.Id, accepted.Offer!.Revision), token)).Status);
-        WorkspaceInvitationResult fresh = await store.ChangeInvitationAsync(new(Guid.NewGuid(), "https://issuer.test", "operator", "create", first.RecipientId, Role: WorkspaceRole.Curator), token);
+        Assert.Equal("accepted", (await store.ChangeInvitationAsync(new WorkspaceInvitationRenew(Guid.NewGuid(), "https://issuer.test", "operator", first.Id, accepted.Offer!.Revision), token)).Status);
+        WorkspaceInvitationResult fresh = await store.ChangeInvitationAsync(new WorkspaceInvitationCreate(Guid.NewGuid(), "https://issuer.test", "operator", new(first.RecipientIssuer, first.RecipientSubject, first.RecipientLabel), WorkspaceRole.Curator), token);
         Assert.Equal("applied", fresh.Status);
         Assert.NotEqual(first.Id, fresh.Offer!.Id);
         Assert.Equal(TimeSpan.FromHours(24), fresh.Offer.ExpiresAt - fresh.Offer.CreatedAt);
         Assert.Equal("membershipRemoved", (await store.ChangeInvitationAsync(accept, token)).Status);
         Assert.False((await store.GetAsync("https://issuer.test", "new-decision", token))!.IsActive);
-        WorkspaceInvitationResult rejoined = await store.ChangeInvitationAsync(new(Guid.NewGuid(), "https://issuer.test", "new-decision", "accept", fresh.Offer.Id, fresh.Offer.Revision, EmailVerified: true), token);
+        WorkspaceInvitationResult rejoined = await store.ChangeInvitationAsync(new WorkspaceInvitationAccept(Guid.NewGuid(), "https://issuer.test", "new-decision", fresh.Offer.Id, fresh.Offer.Revision, EmailVerified: true), token);
         Assert.Equal("applied", rejoined.Status);
         Assert.Equal(WorkspaceRole.Curator, rejoined.Membership!.Role);
         Assert.Equal(member.Id, rejoined.Membership.Id);
-        Assert.Equal(1, await database.Set<WorkspaceInvitationEntity>().CountAsync(item => item.RecipientId == first.RecipientId, token));
+        Assert.Equal(1, await database.Set<WorkspaceInvitationEntity>().CountAsync(item => item.RecipientIssuer == first.RecipientIssuer && item.RecipientSubject == first.RecipientSubject, token));
     }
 
     [Fact]
@@ -283,10 +355,9 @@ public sealed partial class ConfigurationApiTests
         CancellationToken token = TestContext.Current.CancellationToken;
         await using var database = new ShutterSpoolDbContext(fixture.Database.Options);
         var store = new EfAccessGrantStore(database);
-        WorkspaceInvitationRecipient recipient = await store.RecordRecipientAsync(Guid.NewGuid(), new("https://issuer.test", "existing", "Synthetic existing member", "synthetic-host-operator"), token);
         database.AuthorizationGrants.Add(new() { Issuer = "https://issuer.test", Subject = "existing", Role = WorkspaceRole.Curator, IsActive = true });
         await database.SaveChangesAsync(token);
-        var create = new WorkspaceInvitationChange(Guid.NewGuid(), "https://issuer.test", "operator", "create", recipient.Id, Role: WorkspaceRole.Administrator);
+        var create = new WorkspaceInvitationCreate(Guid.NewGuid(), "https://issuer.test", "operator", new("https://issuer.test", "existing", "Synthetic existing member"), WorkspaceRole.Administrator);
         WorkspaceInvitationResult result = await store.ChangeInvitationAsync(create, token);
         Assert.Equal("existingMember", result.Status);
         Assert.Equal(WorkspaceRole.Curator, result.Membership!.Role);
@@ -303,15 +374,13 @@ public sealed partial class ConfigurationApiTests
         CancellationToken token = TestContext.Current.CancellationToken;
         await using var database = new ShutterSpoolDbContext(fixture.Database.Options);
         var store = new EfAccessGrantStore(database);
-        WorkspaceInvitationRecipient recipient = await store.RecordRecipientAsync(Guid.NewGuid(),
-            new("https://issuer.test", "invited", "Synthetic tester", "synthetic-operator"), token);
-        WorkspaceInvitationResult created = await store.ChangeInvitationAsync(new(Guid.NewGuid(), "https://issuer.test",
-            "operator", "create", recipient.Id), token);
+        WorkspaceInvitationResult created = await store.ChangeInvitationAsync(new WorkspaceInvitationCreate(Guid.NewGuid(), "https://issuer.test",
+            "operator", new("https://issuer.test", "invited", "Synthetic tester")), token);
         Assert.Equal("applied", created.Status);
         WorkspaceInvitation offer = created.Offer!;
         Assert.Equal(TimeSpan.FromHours(24), offer.ExpiresAt - offer.CreatedAt);
         Assert.Equal(WorkspaceRole.Viewer, offer.Role);
-        var accept = new WorkspaceInvitationChange(Guid.NewGuid(), "https://issuer.test", "invited", "accept", offer.Id,
+        var accept = new WorkspaceInvitationAccept(Guid.NewGuid(), "https://issuer.test", "invited", offer.Id,
             offer.Revision, EmailVerified: true);
         Assert.Equal("notFound", (await store.ChangeInvitationAsync(accept with { OperationId = Guid.NewGuid(), ActorSubject = "wrong" }, token)).Status);
         Assert.Equal("verificationRequired", (await store.ChangeInvitationAsync(accept with { OperationId = Guid.NewGuid(), EmailVerified = false }, token)).Status);

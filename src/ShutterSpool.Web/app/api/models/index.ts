@@ -2113,24 +2113,6 @@ export function createWorkspaceInvitationProblemDetailsFromDiscriminatorValue(pa
 /**
  * Creates a new instance of the appropriate class based on discriminator value
  * @param parseNode The parse node to use to read the discriminator value and create the object
- * @returns {WorkspaceInvitationRecipientResponse}
- */
-// @ts-ignore
-export function createWorkspaceInvitationRecipientResponseFromDiscriminatorValue(parseNode: ParseNode | undefined) : ((instance?: Parsable) => Record<string, (node: ParseNode) => void>) {
-    return deserializeIntoWorkspaceInvitationRecipientResponse;
-}
-/**
- * Creates a new instance of the appropriate class based on discriminator value
- * @param parseNode The parse node to use to read the discriminator value and create the object
- * @returns {WorkspaceInvitationRecipientsResponse}
- */
-// @ts-ignore
-export function createWorkspaceInvitationRecipientsResponseFromDiscriminatorValue(parseNode: ParseNode | undefined) : ((instance?: Parsable) => Record<string, (node: ParseNode) => void>) {
-    return deserializeIntoWorkspaceInvitationRecipientsResponse;
-}
-/**
- * Creates a new instance of the appropriate class based on discriminator value
- * @param parseNode The parse node to use to read the discriminator value and create the object
  * @returns {WorkspaceInvitationRenewRequest}
  */
 // @ts-ignore
@@ -4323,6 +4305,7 @@ export function deserializeIntoWorkspaceInvitationChangeResponse(workspaceInvita
         "membership": n => { workspaceInvitationChangeResponse.membership = n.getObjectValue<WorkspaceMemberResponse>(createWorkspaceMemberResponseFromDiscriminatorValue); },
         "offer": n => { workspaceInvitationChangeResponse.offer = n.getObjectValue<WorkspaceInvitationResponse>(createWorkspaceInvitationResponseFromDiscriminatorValue); },
         "operationId": n => { workspaceInvitationChangeResponse.operationId = n.getGuidValue(); },
+        "setupEmailStatus": n => { workspaceInvitationChangeResponse.setupEmailStatus = n.getStringValue(); },
         "status": n => { workspaceInvitationChangeResponse.status = n.getStringValue(); },
     }
 }
@@ -4334,8 +4317,8 @@ export function deserializeIntoWorkspaceInvitationChangeResponse(workspaceInvita
 // @ts-ignore
 export function deserializeIntoWorkspaceInvitationCreateRequest(workspaceInvitationCreateRequest: Partial<WorkspaceInvitationCreateRequest> | undefined = {}) : Record<string, (node: ParseNode) => void> {
     return {
+        "email": n => { workspaceInvitationCreateRequest.email = n.getStringValue(); },
         "operationId": n => { workspaceInvitationCreateRequest.operationId = n.getGuidValue(); },
-        "recipientId": n => { workspaceInvitationCreateRequest.recipientId = n.getGuidValue(); },
         "role": n => { workspaceInvitationCreateRequest.role = n.getStringValue() ?? "Viewer"; },
     }
 }
@@ -4355,29 +4338,6 @@ export function deserializeIntoWorkspaceInvitationProblemDetails(workspaceInvita
         "status": n => { workspaceInvitationProblemDetails.status = n.getNumberValue(); },
         "title": n => { workspaceInvitationProblemDetails.title = n.getStringValue(); },
         "type": n => { workspaceInvitationProblemDetails.type = n.getStringValue(); },
-    }
-}
-/**
- * The deserialization information for the current model
- * @param WorkspaceInvitationRecipientResponse The instance to deserialize into.
- * @returns {Record<string, (node: ParseNode) => void>}
- */
-// @ts-ignore
-export function deserializeIntoWorkspaceInvitationRecipientResponse(workspaceInvitationRecipientResponse: Partial<WorkspaceInvitationRecipientResponse> | undefined = {}) : Record<string, (node: ParseNode) => void> {
-    return {
-        "id": n => { workspaceInvitationRecipientResponse.id = n.getGuidValue(); },
-        "label": n => { workspaceInvitationRecipientResponse.label = n.getStringValue(); },
-    }
-}
-/**
- * The deserialization information for the current model
- * @param WorkspaceInvitationRecipientsResponse The instance to deserialize into.
- * @returns {Record<string, (node: ParseNode) => void>}
- */
-// @ts-ignore
-export function deserializeIntoWorkspaceInvitationRecipientsResponse(workspaceInvitationRecipientsResponse: Partial<WorkspaceInvitationRecipientsResponse> | undefined = {}) : Record<string, (node: ParseNode) => void> {
-    return {
-        "items": n => { workspaceInvitationRecipientsResponse.items = n.getCollectionOfObjectValues<WorkspaceInvitationRecipientResponse>(createWorkspaceInvitationRecipientResponseFromDiscriminatorValue); },
     }
 }
 /**
@@ -4404,7 +4364,6 @@ export function deserializeIntoWorkspaceInvitationResponse(workspaceInvitationRe
         "createdAt": n => { workspaceInvitationResponse.createdAt = n.getDateValue(); },
         "expiresAt": n => { workspaceInvitationResponse.expiresAt = n.getDateValue(); },
         "id": n => { workspaceInvitationResponse.id = n.getGuidValue(); },
-        "recipientId": n => { workspaceInvitationResponse.recipientId = n.getGuidValue(); },
         "recipientLabel": n => { workspaceInvitationResponse.recipientLabel = n.getStringValue(); },
         "revision": n => { workspaceInvitationResponse.revision = n.getNumberValue(); },
         "role": n => { workspaceInvitationResponse.role = n.getStringValue(); },
@@ -8095,6 +8054,7 @@ export function serializeWorkspaceInvitationChangeResponse(writer: Serialization
     writer.writeObjectValue<WorkspaceMemberResponse>("membership", workspaceInvitationChangeResponse.membership, serializeWorkspaceMemberResponse);
     writer.writeObjectValue<WorkspaceInvitationResponse>("offer", workspaceInvitationChangeResponse.offer, serializeWorkspaceInvitationResponse);
     writer.writeGuidValue("operationId", workspaceInvitationChangeResponse.operationId);
+    writer.writeStringValue("setupEmailStatus", workspaceInvitationChangeResponse.setupEmailStatus);
     writer.writeStringValue("status", workspaceInvitationChangeResponse.status);
 }
 /**
@@ -8106,8 +8066,8 @@ export function serializeWorkspaceInvitationChangeResponse(writer: Serialization
 // @ts-ignore
 export function serializeWorkspaceInvitationCreateRequest(writer: SerializationWriter, workspaceInvitationCreateRequest: Partial<WorkspaceInvitationCreateRequest> | undefined | null = {}, isSerializingDerivedType: boolean = false) : void {
     if (!workspaceInvitationCreateRequest || isSerializingDerivedType) { return; }
+    writer.writeStringValue("email", workspaceInvitationCreateRequest.email);
     writer.writeGuidValue("operationId", workspaceInvitationCreateRequest.operationId);
-    writer.writeGuidValue("recipientId", workspaceInvitationCreateRequest.recipientId);
     writer.writeStringValue("role", workspaceInvitationCreateRequest.role ?? "Viewer");
 }
 /**
@@ -8127,29 +8087,6 @@ export function serializeWorkspaceInvitationProblemDetails(writer: Serialization
     writer.writeNumberValue("status", workspaceInvitationProblemDetails.status);
     writer.writeStringValue("title", workspaceInvitationProblemDetails.title);
     writer.writeStringValue("type", workspaceInvitationProblemDetails.type);
-}
-/**
- * Serializes information the current object
- * @param isSerializingDerivedType A boolean indicating whether the serialization is for a derived type.
- * @param WorkspaceInvitationRecipientResponse The instance to serialize from.
- * @param writer Serialization writer to use to serialize this model
- */
-// @ts-ignore
-export function serializeWorkspaceInvitationRecipientResponse(writer: SerializationWriter, workspaceInvitationRecipientResponse: Partial<WorkspaceInvitationRecipientResponse> | undefined | null = {}, isSerializingDerivedType: boolean = false) : void {
-    if (!workspaceInvitationRecipientResponse || isSerializingDerivedType) { return; }
-    writer.writeGuidValue("id", workspaceInvitationRecipientResponse.id);
-    writer.writeStringValue("label", workspaceInvitationRecipientResponse.label);
-}
-/**
- * Serializes information the current object
- * @param isSerializingDerivedType A boolean indicating whether the serialization is for a derived type.
- * @param WorkspaceInvitationRecipientsResponse The instance to serialize from.
- * @param writer Serialization writer to use to serialize this model
- */
-// @ts-ignore
-export function serializeWorkspaceInvitationRecipientsResponse(writer: SerializationWriter, workspaceInvitationRecipientsResponse: Partial<WorkspaceInvitationRecipientsResponse> | undefined | null = {}, isSerializingDerivedType: boolean = false) : void {
-    if (!workspaceInvitationRecipientsResponse || isSerializingDerivedType) { return; }
-    writer.writeCollectionOfObjectValues<WorkspaceInvitationRecipientResponse>("items", workspaceInvitationRecipientsResponse.items, serializeWorkspaceInvitationRecipientResponse);
 }
 /**
  * Serializes information the current object
@@ -8176,7 +8113,6 @@ export function serializeWorkspaceInvitationResponse(writer: SerializationWriter
     writer.writeDateValue("createdAt", workspaceInvitationResponse.createdAt);
     writer.writeDateValue("expiresAt", workspaceInvitationResponse.expiresAt);
     writer.writeGuidValue("id", workspaceInvitationResponse.id);
-    writer.writeGuidValue("recipientId", workspaceInvitationResponse.recipientId);
     writer.writeStringValue("recipientLabel", workspaceInvitationResponse.recipientLabel);
     writer.writeNumberValue("revision", workspaceInvitationResponse.revision);
     writer.writeStringValue("role", workspaceInvitationResponse.role);
@@ -9109,19 +9045,23 @@ export interface WorkspaceInvitationChangeResponse extends Parsable {
      */
     operationId?: Guid | null;
     /**
+     * The setupEmailStatus property
+     */
+    setupEmailStatus?: string | null;
+    /**
      * The status property
      */
     status?: string | null;
 }
 export interface WorkspaceInvitationCreateRequest extends Parsable {
     /**
+     * The email property
+     */
+    email?: string | null;
+    /**
      * The operationId property
      */
     operationId?: Guid | null;
-    /**
-     * The recipientId property
-     */
-    recipientId?: Guid | null;
     /**
      * The role property
      */
@@ -9161,22 +9101,6 @@ export interface WorkspaceInvitationProblemDetails extends ApiError, Parsable {
      */
     type?: string | null;
 }
-export interface WorkspaceInvitationRecipientResponse extends Parsable {
-    /**
-     * The id property
-     */
-    id?: Guid | null;
-    /**
-     * The label property
-     */
-    label?: string | null;
-}
-export interface WorkspaceInvitationRecipientsResponse extends Parsable {
-    /**
-     * The items property
-     */
-    items?: WorkspaceInvitationRecipientResponse[] | null;
-}
 export interface WorkspaceInvitationRenewRequest extends Parsable {
     /**
      * The expectedRevision property
@@ -9204,10 +9128,6 @@ export interface WorkspaceInvitationResponse extends Parsable {
      * The id property
      */
     id?: Guid | null;
-    /**
-     * The recipientId property
-     */
-    recipientId?: Guid | null;
     /**
      * The recipientLabel property
      */

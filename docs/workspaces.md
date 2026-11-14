@@ -25,7 +25,7 @@ Your sign-in service must confirm email verification in a fresh sign-in; finishi
 Keep account-setup emails private: someone who controls a setup link may gain control of that same sign-in account.
 
 Workspace invitations expire 24 hours after creation. An expired or cancelled invitation needs a new invitation from a workspace Owner or Administrator.
-Account-setup links have their own expiry; renewing a workspace invitation does not reset a password or renew an identity-provider link.
+Account-setup links have their own expiry. Renewing a workspace invitation preserves existing credentials and may send another native setup email if account setup is still needed.
 If a Join result is uncertain, use **Check previous Join** to reconcile it. **Refresh invitations** retries an incomplete or unavailable check.
 An unavailable invitation check is not proof that no invitation exists.
 
@@ -55,16 +55,18 @@ Individual Viewer restrictions by tag, Collection or rating are unavailable.
 
 ## Invite a member
 
-An operator first prepares the recipient's sign-in account and supplies an approved recipient for this workspace.
-Owners and Administrators then open **Settings → Members → Invitations**, choose **Approved recipient** and **Offered role**, and select **Create invitation**.
+Owners and Administrators open **Settings → Members → Invitations**, enter the recipient's **Email address**, choose **Offered role**, and select **Create invitation**.
 Viewer is the default; choose Curator or Administrator only when that access is intended. Owner authority requires the separate promotion of an active member after joining.
-If the intended recipient is missing, ask the operator to supply it; workspace administrators do not search a global account directory or enter an arbitrary email address.
+The installation resolves an existing sign-in account or creates one through its configured Keycloak companion. There is no per-recipient operator approval or global account directory to browse.
 
-Share the ordinary application URL. Workspace invitation creation does not send an application email; account-setup messages come from the sign-in service.
+New recipients receive a native account-setup email from the sign-in service. Existing verified users find the invitation in ShutterSpool; share the ordinary application URL with them.
+An existing account that still needs email verification receives native verification steps without resetting its password. Account setup and sign-in alone grant no workspace access: the recipient must explicitly join.
+Check both the invitation and setup-email result. If the invitation was saved but its setup email failed, keep the pending invitation and use the offered retry action; contact the operator if native enrollment is unavailable or the account is rejected.
+An email submission result does not prove mailbox delivery. Check spam folders or ask the operator for help if the message does not arrive.
 **Renew invitation** starts a fresh 24-hour offer with the selected role and supersedes its previous version. It does not reset credentials or change an existing membership.
 **Cancel invitation** stops an unused offer. Once the recipient has joined, use membership removal to revoke access instead.
-If the inviter loses invitation authority or the recipient is removed, old offers cannot restore access; a fresh authorized invitation is required.
-To invite a removed member back, use **Create invitation** again for the approved recipient. An accepted offer cannot be renewed.
+An issued invitation remains valid if its inviter later changes role or leaves. Removing the recipient invalidates their pending offers; old offers and Join retries cannot restore removed access.
+To invite a removed member back, use **Create invitation** again for their email address. Accepted offers and offers invalidated by recipient removal cannot be renewed.
 
 ## Manage existing members
 

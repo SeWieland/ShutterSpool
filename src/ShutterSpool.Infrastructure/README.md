@@ -38,7 +38,8 @@ Media query adapters apply the current Viewer predicate before projection, filte
 New grants require an explicit role. Display names are optional cached authenticated claims, never an identity or permission source.
 Domain owns pure access/visibility predicates; query adapters apply those predicates to authoritative facts.
 The [authorization guide](../../docs/architecture/authentication-and-authorization.md) owns the request boundary and the [operator guide](../../deploy/operations/README.md#owner-login-recovery) explains native Owner login recovery and exceptional manual maintenance.
-The same store implements `IWorkspaceInvitationStore` for recipient handoffs and local offer transitions. It reads database time after taking the access-change lock and writes membership, offer state and audit/result together. Membership removal and loss of invitation authority invalidate affected pending offers within their own transaction; native identity setup and email remain outside this adapter.
+The same store implements `IWorkspaceInvitationStore` for offers bound directly to the recipient's trusted issuer/subject. It reads database time under tenant synchronization and writes membership, offer state and audit/result together. Recipient membership removal invalidates prior pending offers; inviter demotion/removal does not. Invitation administration uses endpoint admission without a transactional actor recheck.
+`KeycloakAccountEnrollment` implements the focused native account lookup/create and setup-email port. Account resolution, local offer persistence and native email submission are separate outcomes; setup-email failure leaves a saved pending offer available for explicit retry. The [operator guide](../../deploy/operations/README.md#configure-the-enrollment-service) owns service-client configuration and privileges; existing credentials and security controls remain native.
 
 ## Retention persistence and cleanup
 

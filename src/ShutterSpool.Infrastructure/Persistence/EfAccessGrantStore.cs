@@ -57,7 +57,7 @@ internal sealed partial class EfAccessGrantStore(ShutterSpoolDbContext database)
             Target = target is null ? null : Membership(target), Policy = new WorkspaceViewerPolicy(policy.IncludeUnreleased, policy.Revision) });
         AccessChangeResult result = await ApplyChangeAsync(change, actor, target, policy, token);
         Guid[] invalidatedOffers = result.Status == "applied" && change.Kind != AccessChangeKind.ViewerPolicy
-            ? await InvalidateInvitationsAsync(target!, token) : [];
+            ? await InvalidateRemovedMemberInvitationsAsync(target!, token) : [];
         RecordChange(change, request, result, target, policy, beforeState, invalidatedOffers);
         await database.SaveChangesAsync(token);
         await transaction.CommitAsync(token);

@@ -11,7 +11,7 @@ created=false
 kcadm() { /opt/keycloak/bin/kcadm.sh "$@" --config "$work/kcadm.config"; }
 cleanup() {
     if [ "$created" = true ]; then kcadm delete "realms/$realm" >/dev/null; fi
-    rm -f "$work/kcadm.config" "$work/reconcile.sh" "$work/select-login-theme.sh" "$work/failed-set-password" "$work/shutterspool-realm.json" "$work/shutterspool-user-profile.json" "$work/shutterspool-email-verified-mapper.json" "$work/shutterspool-server-client.json" "$work/shutterspool-web-client.json" "$work/shutterspool-server-audience-mapper.json"
+    rm -f "$work/kcadm.config" "$work/reconcile.sh" "$work/select-login-theme.sh" "$work/failed-set-password" "$work/shutterspool-realm.json" "$work/shutterspool-user-profile.json" "$work/shutterspool-email-verified-mapper.json" "$work/shutterspool-enrollment-client.json" "$work/shutterspool-server-client.json" "$work/shutterspool-web-client.json" "$work/shutterspool-server-audience-mapper.json"
     rmdir "$work"
 }
 trap cleanup EXIT
@@ -19,6 +19,7 @@ export KEYCLOAK_ADMIN="$KC_BOOTSTRAP_ADMIN_USERNAME"
 KEYCLOAK_ADMIN_PASSWORD=${KC_BOOTSTRAP_ADMIN_PASSWORD:-}
 [ -n "$KEYCLOAK_ADMIN_PASSWORD" ] || KEYCLOAK_ADMIN_PASSWORD=$(cat /run/secrets/keycloak-admin-password)
 export KEYCLOAK_ADMIN_PASSWORD
+export SHUTTERSPOOL_ENROLLMENT_CLIENT_SECRET='synthetic-enrollment-client-secret'
 export SHUTTERSPOOL_ADMIN_USERNAME=bootstrap-check
 export SHUTTERSPOOL_ADMIN_PASSWORD='synthetic-check-password-1!'
 export SHUTTERSPOOL_ADMIN_SUBJECT=6c178745-3db4-47a7-8bb7-17c8e5e89337
@@ -47,7 +48,7 @@ kcadm set-password -r "$realm" --username "$SHUTTERSPOOL_ADMIN_USERNAME" --new-p
 sh "$work/reconcile.sh" >/dev/null
 policy=$(kcadm get "realms/$realm")
 printf '%s' "$policy" | grep -Eq '"registrationAllowed"[[:space:]]*:[[:space:]]*false' || { printf 'Public registration was not disabled.\n' >&2; exit 1; }
-printf '%s' "$policy" | grep -Eq '"verifyEmail"[[:space:]]*:[[:space:]]*false' || { printf 'Automatic realm email verification blocked SMTP-free bootstrap.\n' >&2; exit 1; }
+printf '%s' "$policy" | grep -Eq '"verifyEmail"[[:space:]]*:[[:space:]]*true' || { printf 'Operator email-verification policy changed.\n' >&2; exit 1; }
 printf '%s' "$policy" | grep -Eq '"resetPasswordAllowed"[[:space:]]*:[[:space:]]*false' || { printf 'Disabled operator recovery policy changed.\n' >&2; exit 1; }
 printf '%s' "$policy" | grep -Eq '"actionTokenGeneratedByUserLifespan"[[:space:]]*:[[:space:]]*137' || { printf 'User recovery lifetime changed.\n' >&2; exit 1; }
 printf '%s' "$policy" | grep -Eq '"actionTokenGeneratedByAdminLifespan"[[:space:]]*:[[:space:]]*211' || { printf 'Native administration lifetime changed.\n' >&2; exit 1; }
@@ -56,6 +57,13 @@ for action in VERIFY_EMAIL UPDATE_PASSWORD; do
     kcadm get "authentication/required-actions/$action" -r "$realm" | grep -Eq '"enabled"[[:space:]]*:[[:space:]]*true' || { printf 'Native setup action was not enabled.\n' >&2; exit 1; }
 done
 web_client=$(kcadm get clients -r "$realm" -q clientId=shutterspool-web --fields id | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+enrollment_client=$(kcadm get clients -r "$realm" -q clientId=shutterspool-enrollment --fields id | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+[ -n "$enrollment_client" ] || { printf 'Native enrollment client was not created.\n' >&2; exit 1; }
+service_account=$(kcadm get "clients/$enrollment_client/service-account-user" -r "$realm" --fields id | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+management_client=$(kcadm get clients -r "$realm" -q clientId=realm-management --fields id | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+service_roles=$(kcadm get "users/$service_account/role-mappings/clients/$management_client" -r "$realm" --fields name)
+printf '%s' "$service_roles" | grep -q '"manage-users"' || { printf 'Native enrollment user-management grant is missing.\n' >&2; exit 1; }
+if printf '%s' "$service_roles" | grep -q '"realm-admin"'; then printf 'Native enrollment received realm administration.\n' >&2; exit 1; fi
 kcadm get "clients/$web_client/protocol-mappers/models" -r "$realm" | grep -q shutterspool-email-verified || { printf 'Explicit email verification mapper was not installed.\n' >&2; exit 1; }
 credentials=$(kcadm get "users/$actual/credentials" -r "$realm" --fields type)
 printf '%s' "$credentials" | grep -Eq '"type"[[:space:]]*:[[:space:]]*"password"' || { printf 'Operator credential recovery was not recognized.\n' >&2; exit 1; }
@@ -75,7 +83,7 @@ retained=$(kcadm get users -r "$realm" -q username="$SHUTTERSPOOL_ADMIN_USERNAME
 [ "$retained" = "$actual" ] || { printf 'Existing bootstrap identity changed.\n' >&2; exit 1; }
 kcadm get "users/$actual/role-mappings/realm" -r "$realm" | grep -q operator-maintained || { printf 'Repeated reconciliation removed an operator grant.\n' >&2; exit 1; }
 [ "$(kcadm get "users/$actual/credentials" -r "$realm" --fields id)" = "$credentials" ] || { printf 'Existing bootstrap credentials changed on mismatch.\n' >&2; exit 1; }
-printf 'Keycloak check passed: SMTP-free bootstrap/registration policy and native verification actions reconciled, explicit verification mapper installed, SMTP/recovery lifetimes preserved, interrupted bootstrap failed closed, operator credential recovery enabled reconciliation, partial username match preserved, repeated reconciliation succeeded, mismatched subject rejected, existing identity and credentials retained.\n'
+printf 'Keycloak check passed: operator verification policy preserved, registration disabled and native verification actions reconciled, explicit verification mapper installed, SMTP/recovery lifetimes preserved, interrupted bootstrap failed closed, operator credential recovery enabled reconciliation, partial username match preserved, repeated reconciliation succeeded, mismatched subject rejected, existing identity and credentials retained.\n'
 '@
 $probe = $probe.Replace('__NONCE__', [Guid]::NewGuid().ToString('N')).Replace("`r`n", "`n")
 $output = $probe | docker exec -i $KeycloakContainer /bin/sh -s 2>&1
@@ -106,7 +114,7 @@ cleanup() {
             kcadm delete "realms/$realm" >/dev/null || cleanup_failed=true
         fi
     fi
-    rm -f "$work/kcadm.config" "$work/reconcile.sh" "$work/select-login-theme.sh" "$work/shutterspool-realm.json" "$work/shutterspool-user-profile.json" "$work/shutterspool-server-client.json" "$work/shutterspool-web-client.json" "$work/shutterspool-server-audience-mapper.json" "$work/shutterspool-email-verified-mapper.json" || cleanup_failed=true
+    rm -f "$work/kcadm.config" "$work/reconcile.sh" "$work/select-login-theme.sh" "$work/shutterspool-realm.json" "$work/shutterspool-user-profile.json" "$work/shutterspool-enrollment-client.json" "$work/shutterspool-server-client.json" "$work/shutterspool-web-client.json" "$work/shutterspool-server-audience-mapper.json" "$work/shutterspool-email-verified-mapper.json" || cleanup_failed=true
     rmdir "$work" || cleanup_failed=true
     if [ "$cleanup_failed" = true ]; then
         printf 'Fresh bootstrap disposable cleanup failed.\n' >&2
@@ -121,6 +129,7 @@ KEYCLOAK_ADMIN_PASSWORD=${KC_BOOTSTRAP_ADMIN_PASSWORD:-}
 export KEYCLOAK_ADMIN_PASSWORD
 kcadm config credentials --server http://localhost:8080 --realm master --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD" >/dev/null
 cleanup_realm=true
+export SHUTTERSPOOL_ENROLLMENT_CLIENT_SECRET='synthetic-enrollment-client-secret'
 export SHUTTERSPOOL_ADMIN_USERNAME=bootstrap-check
 export SHUTTERSPOOL_ADMIN_PASSWORD='synthetic-check-password-1!'
 export SHUTTERSPOOL_ADMIN_SUBJECT=6c178745-3db4-47a7-8bb7-17c8e5e89337

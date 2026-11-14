@@ -32,6 +32,13 @@ class ThemeSelectionTests(unittest.TestCase):
         self.assertEqual(config['jsonType.label'], 'boolean')
         self.assertEqual(config['access.token.claim'], 'true')
 
+    def test_enrollment_client_has_only_backend_service_login(self):
+        client = json.loads((SCRIPT.parent / 'shutterspool-enrollment-client.json').read_text())
+        self.assertTrue(client['serviceAccountsEnabled'])
+        for field in ['publicClient', 'standardFlowEnabled', 'implicitFlowEnabled', 'directAccessGrantsEnabled']:
+            self.assertFalse(client[field])
+        self.assertNotIn('secret', client)
+
     def run_selection(self, theme='shutterspool', missing=None, check=False, pointer=False):
         with tempfile.TemporaryDirectory() as directory:
             fixture = pathlib.Path(directory)

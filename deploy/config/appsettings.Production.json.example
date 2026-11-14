@@ -1,5 +1,8 @@
 {
   "ShutterSpool": {
+    "KeycloakEnrollment": {
+      "ClientSecret": "REPLACE_WITH_THE_SAME_KEYCLOAK_ENROLLMENT_CLIENT_SECRET_AS_THE_RECONCILER_SECRET"
+    },
     "Security": {
       "EncryptionKey": "REPLACE_WITH_BASE64_32_BYTE_DEPLOYMENT_KEY"
     },

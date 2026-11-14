@@ -16,7 +16,7 @@ export interface RenewRequestBuilder extends BaseRequestBuilder<RenewRequestBuil
      * @returns {Promise<WorkspaceInvitationChangeResponse>}
      * @throws {HttpValidationProblemDetails} error when the service returns a 400 status code
      * @throws {ProblemDetails} error when the service returns a 401 status code
-     * @throws {WorkspaceInvitationProblemDetails} error when the service returns a 403 status code
+     * @throws {ProblemDetails} error when the service returns a 403 status code
      * @throws {WorkspaceInvitationProblemDetails} error when the service returns a 404 status code
      * @throws {WorkspaceInvitationProblemDetails} error when the service returns a 409 status code
      * @throws {ProblemDetails} error when the service returns a 503 status code
@@ -43,7 +43,7 @@ export const RenewRequestBuilderRequestsMetadata: RequestsMetadata = {
         errorMappings: {
             400: createHttpValidationProblemDetailsFromDiscriminatorValue as ParsableFactory<Parsable>,
             401: createProblemDetailsFromDiscriminatorValue as ParsableFactory<Parsable>,
-            403: createWorkspaceInvitationProblemDetailsFromDiscriminatorValue as ParsableFactory<Parsable>,
+            403: createProblemDetailsFromDiscriminatorValue as ParsableFactory<Parsable>,
             404: createWorkspaceInvitationProblemDetailsFromDiscriminatorValue as ParsableFactory<Parsable>,
             409: createWorkspaceInvitationProblemDetailsFromDiscriminatorValue as ParsableFactory<Parsable>,
             503: createProblemDetailsFromDiscriminatorValue as ParsableFactory<Parsable>,

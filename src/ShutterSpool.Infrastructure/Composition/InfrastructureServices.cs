@@ -78,6 +78,14 @@ public static class InfrastructureServices
         services.TryAddSingleton(new CameraCredentialPolicy());
         services.AddScoped<IAccessGrantStore, EfAccessGrantStore>();
         services.AddScoped<IWorkspaceInvitationStore, EfAccessGrantStore>();
+        services.AddScoped<WorkspaceInvitationService>();
+        var enrollment = configuration.GetSection("ShutterSpool:KeycloakEnrollment").Get<KeycloakEnrollmentOptions>() ?? new();
+        services.AddHttpClient("keycloak-enrollment", client => client.Timeout = TimeSpan.FromSeconds(30))
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false })
+            .RemoveAllLoggers();
+        services.AddScoped<IAccountEnrollment>(provider => new KeycloakAccountEnrollment(
+            provider.GetRequiredService<IHttpClientFactory>().CreateClient("keycloak-enrollment"), enrollment,
+            configuration["ShutterSpool:Security:Authority"] ?? ""));
         services.AddScoped<WorkspaceAccessContext>();
         services.AddScoped<IWorkspaceMediaScope, WorkspaceMediaScope>();
         services.AddScoped<AccessGrantService>();

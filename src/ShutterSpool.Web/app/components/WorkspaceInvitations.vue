@@ -22,9 +22,7 @@ async function read() {
     try {
         const page = await api.workspaceOffers.get({ options: [cancellable(signal)] });
         if (disposed || signal.aborted || request !== sequence || access !== accessGeneration()) return false;
-        if (!page?.items || typeof page.incomplete !== 'boolean' || page.items.some(offer => !offer.id || !offer.workspaceId || !offer.workspaceName?.trim()
-            || !['Administrator', 'Curator', 'Viewer'].includes(offer.role ?? '') || !Number.isSafeInteger(offer.revision)
-            || !['pending', 'expired', 'cancelled', 'invalidated', 'accepted'].includes(offer.status ?? ''))) throw new Error('Invitations unavailable');
+        if (!page?.items || typeof page.incomplete !== 'boolean') throw new Error('Invitations unavailable');
         offers.value = page.items; incomplete.value = page.incomplete; loaded.value = true;
         return true;
     } catch (failure) {
@@ -49,7 +47,7 @@ async function join(offer?: Offer) {
         if (disposed || access !== accessGeneration()) return;
         if (String(result?.operationId) !== operation.operationId || !['applied', 'existingMember'].includes(result?.status ?? '')) throw new Error('Join outcome unavailable');
         pending.value = undefined;
-        feedback.value = 'Join checked. Refreshing your workspace memberships…';
+        feedback.value = 'Workspace membership confirmed. Refreshing your workspaces…';
         emit('joined');
         await read();
     } catch (failure) {
@@ -57,9 +55,9 @@ async function join(offer?: Offer) {
         const status = handleFailure(failure);
         if ([400, 403, 404, 409].includes(status ?? 0)) {
             pending.value = undefined;
-            feedback.value = workspaceChangeError(failure) ?? 'This invitation cannot be joined. Review its refreshed status or contact the workspace administrator.';
+            feedback.value = workspaceChangeError(failure) ?? 'You could not join this workspace. Review the invitation below or contact the workspace owner.';
             await read();
-        } else feedback.value = 'The Join outcome is uncertain. Check the previous Join before choosing another action.';
+        } else feedback.value = 'We could not confirm whether you joined. Choose Check membership before trying another invitation.';
     } finally { if (!disposed && access === accessGeneration()) busy.value = false; }
 }
 async function checkPrevious() { if (!busy.value && !loading.value && pending.value && await read()) await join(); }
@@ -74,16 +72,16 @@ onUnmounted(() => { disposed = true; sequence++; controller?.abort(); pending.va
         <p>Join only a workspace you recognize. Signing in or completing account setup does not join a workspace.</p>
         <p v-if="error" class="notice error" role="alert">{{ error }}</p>
         <p v-if="feedback" class="notice" role="status">{{ feedback }}</p>
-        <button v-if="pending" type="button" :disabled="busy || loading" @click="checkPrevious">Check previous Join</button>
+        <button v-if="pending" type="button" :disabled="busy || loading" @click="checkPrevious">Check membership</button>
         <p v-if="loading && !loaded" role="status">Checking your invitations…</p>
         <p v-if="incomplete" class="notice" role="status">Some invitations could not be checked. Refresh to check again; listed invitations remain available.</p>
         <ul class="member-list">
             <li v-for="offer in offers" :key="`${offer.workspaceId}:${offer.id}`" class="member-row">
                 <div class="member-identity"><strong>{{ offer.workspaceName }}</strong><span>Offered role: {{ offer.role }}</span><span>Status: {{ offer.status }}</span></div>
-                <div class="member-actions"><button v-if="offer.status === 'pending'" type="button" :disabled="busy || loading || !!error || !!pending" @click="join(offer)">Join workspace</button><p v-else-if="offer.status !== 'accepted'" class="muted">Ask a workspace administrator for a new invitation.</p><p v-else class="muted">Membership is checked through the workspace list.</p></div>
+                <div class="member-actions"><button v-if="offer.status === 'pending'" type="button" :disabled="busy || loading || !!error || !!pending" @click="join(offer)">Join workspace</button><p v-else-if="offer.status !== 'accepted'" class="muted">Ask the workspace owner for a new invitation.</p><p v-else class="muted">Check your workspace list for access.</p></div>
             </li>
         </ul>
-        <p v-if="loaded && !offers.length && !error" class="muted">No invitations were returned for this sign-in. Contact the operator if you expected one.</p>
+        <p v-if="loaded && !offers.length && !error" class="muted">No invitations are available for this account. Check that you signed in with the invited email address, or contact the workspace owner.</p>
     </section>
 </template>
 

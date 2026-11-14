@@ -7,12 +7,10 @@ using ShutterSpool.Server.Security;
 
 namespace ShutterSpool.Server.Api.Workspaces;
 
-public sealed record WorkspaceInvitationRecipientResponse(Guid Id, string Label);
-public sealed record WorkspaceInvitationRecipientsResponse(WorkspaceInvitationRecipientResponse[] Items);
-public sealed record WorkspaceInvitationResponse(Guid Id, Guid RecipientId, string RecipientLabel, string Role,
+public sealed record WorkspaceInvitationResponse(Guid Id, string RecipientLabel, string Role,
     string Status, long Revision, DateTimeOffset CreatedAt, DateTimeOffset ExpiresAt)
 {
-    internal static WorkspaceInvitationResponse From(WorkspaceInvitation offer) => new(offer.Id, offer.RecipientId,
+    internal static WorkspaceInvitationResponse From(WorkspaceInvitation offer) => new(offer.Id,
         offer.RecipientLabel, offer.Role.ToString(), offer.Status, offer.Revision, offer.CreatedAt, offer.ExpiresAt);
 }
 public sealed record WorkspaceInvitationsResponse(WorkspaceInvitationResponse[] Items);
@@ -23,11 +21,11 @@ public sealed record WorkspaceOfferResponse(Guid Id, Guid WorkspaceId, string Wo
         workspace.Id, workspace.Name, offer.Role.ToString(), offer.Status, offer.Revision, offer.CreatedAt, offer.ExpiresAt);
 }
 public sealed record WorkspaceOffersResponse(WorkspaceOfferResponse[] Items, bool Incomplete);
-public sealed record WorkspaceInvitationCreateRequest(Guid OperationId, Guid RecipientId, string Role = "Viewer");
+public sealed record WorkspaceInvitationCreateRequest(Guid OperationId, string Email, string Role = "Viewer");
 public sealed record WorkspaceInvitationRenewRequest(Guid OperationId, long ExpectedRevision, string Role = "Viewer");
 public sealed record WorkspaceInvitationChangeRequest(Guid OperationId, long ExpectedRevision);
 public sealed record WorkspaceInvitationChangeResponse(Guid OperationId, string Status, WorkspaceInvitationResponse? Offer,
-    WorkspaceMemberResponse? Membership, string? ErrorCode);
+    WorkspaceMemberResponse? Membership, string? ErrorCode, string? SetupEmailStatus);
 public sealed record WorkspaceOfferAcceptanceResponse(Guid OperationId, string Status, WorkspaceOfferResponse? Offer,
     WorkspaceMemberResponse? Membership, string? ErrorCode);
 public sealed class WorkspaceInvitationProblemDetails : ProblemDetails
@@ -48,24 +46,19 @@ internal static class WorkspaceInvitationEndpoints
     public static void MapWorkspaceInvitationEndpoints(this WebApplication app, RouteGroupBuilder management)
     {
         RouteGroupBuilder invitations = management.MapGroup("").RequireAuthorization(WorkspacePolicies.Administer);
-        invitations.MapGet("/invitation-recipients", async (IWorkspaceInvitationStore store, CancellationToken token) =>
-            Results.Ok(new WorkspaceInvitationRecipientsResponse([.. (await store.ListRecipientsAsync(token)).Select(item => new WorkspaceInvitationRecipientResponse(item.Id, item.Label))])))
-            .Produces<WorkspaceInvitationRecipientsResponse>();
         invitations.MapGet("/invitations", async (IWorkspaceInvitationStore store, CancellationToken token) =>
             Results.Ok(new WorkspaceInvitationsResponse([.. (await store.ListInvitationsAsync(token)).Select(WorkspaceInvitationResponse.From)])))
             .Produces<WorkspaceInvitationsResponse>();
-        invitations.MapPost("/invitations", (WorkspaceInvitationCreateRequest request, HttpContext http, IWorkspaceInvitationStore store) =>
-            ChangeAsync(request.OperationId, request.RecipientId, 0, request.Role, "create", http, store))
-            .Produces<WorkspaceInvitationChangeResponse>().Produces<WorkspaceInvitationProblemDetails>(403, "application/problem+json")
-            .Produces<WorkspaceInvitationProblemDetails>(404, "application/problem+json").Produces<WorkspaceInvitationProblemDetails>(409, "application/problem+json").ProducesValidationProblem();
-        invitations.MapPost("/invitations/{id:guid}/renew", (Guid id, WorkspaceInvitationRenewRequest request, HttpContext http, IWorkspaceInvitationStore store) =>
-            ChangeAsync(request.OperationId, id, request.ExpectedRevision, request.Role, "renew", http, store))
-            .Produces<WorkspaceInvitationChangeResponse>().Produces<WorkspaceInvitationProblemDetails>(403, "application/problem+json")
-            .Produces<WorkspaceInvitationProblemDetails>(404, "application/problem+json").Produces<WorkspaceInvitationProblemDetails>(409, "application/problem+json").ProducesValidationProblem();
-        invitations.MapPost("/invitations/{id:guid}/cancel", (Guid id, WorkspaceInvitationChangeRequest request, HttpContext http, IWorkspaceInvitationStore store) =>
-            ChangeAsync(request.OperationId, id, request.ExpectedRevision, "Viewer", "cancel", http, store))
-            .Produces<WorkspaceInvitationChangeResponse>().Produces<WorkspaceInvitationProblemDetails>(403, "application/problem+json")
-            .Produces<WorkspaceInvitationProblemDetails>(404, "application/problem+json").Produces<WorkspaceInvitationProblemDetails>(409, "application/problem+json").ProducesValidationProblem();
+        invitations.MapPost("/invitations", CreateAsync)
+            .Produces<WorkspaceInvitationChangeResponse>().Produces<WorkspaceInvitationProblemDetails>(409, "application/problem+json")
+            .Produces<WorkspaceInvitationProblemDetails>(503, "application/problem+json")
+            .Produces<WorkspaceInvitationProblemDetails>(400, "application/problem+json");
+        invitations.MapPost("/invitations/{id:guid}/renew", RenewAsync)
+            .Produces<WorkspaceInvitationChangeResponse>().Produces<WorkspaceInvitationProblemDetails>(404, "application/problem+json")
+            .Produces<WorkspaceInvitationProblemDetails>(409, "application/problem+json").ProducesValidationProblem();
+        invitations.MapPost("/invitations/{id:guid}/cancel", CancelAsync)
+            .Produces<WorkspaceInvitationChangeResponse>().Produces<WorkspaceInvitationProblemDetails>(404, "application/problem+json")
+            .Produces<WorkspaceInvitationProblemDetails>(409, "application/problem+json").ProducesValidationProblem();
         app.MapGet("/workspace-offers", DiscoverAsync).RequireAuthorization().Produces<WorkspaceOffersResponse>().ProducesProblem(401).ProducesProblem(503);
         app.MapPost("/workspace-offers/{workspaceId:guid}/{id:guid}/accept", AcceptAsync).RequireAuthorization()
             .Produces<WorkspaceOfferAcceptanceResponse>().Produces<WorkspaceOfferProblemDetails>(403, "application/problem+json")
@@ -73,16 +66,30 @@ internal static class WorkspaceInvitationEndpoints
             .ProducesValidationProblem().ProducesProblem(401).ProducesProblem(503);
     }
 
-    private static async Task<IResult> ChangeAsync(Guid operation, Guid target, long revision, string roleText, string kind,
-        HttpContext http, IWorkspaceInvitationStore store)
+    private static async Task<IResult> CreateAsync(WorkspaceInvitationCreateRequest request, HttpContext http, WorkspaceInvitationService service)
     {
-        if (!ValidRequest(operation, target, revision) || !Enum.TryParse(roleText, out WorkspaceRole role)
-            || role is not (WorkspaceRole.Viewer or WorkspaceRole.Curator or WorkspaceRole.Administrator) || role.ToString() != roleText)
-            return InvalidRequest();
-        WorkspaceInvitationResult result = await store.ChangeInvitationAsync(new(operation, Issuer(http), Subject(http), kind, target, revision, role), http.RequestAborted);
+        if (request.OperationId == Guid.Empty || !TryRole(request.Role, out WorkspaceRole role))
+            return ChangeResponse(new(request.OperationId, "invalid-request"));
+        return ChangeResponse(await service.CreateAsync(request.OperationId, Issuer(http), Subject(http), request.Email, role, http.RequestAborted));
+    }
+
+    private static async Task<IResult> RenewAsync(Guid id, WorkspaceInvitationRenewRequest request, HttpContext http, WorkspaceInvitationService service)
+    {
+        if (!ValidRequest(request.OperationId, id, request.ExpectedRevision) || !TryRole(request.Role, out WorkspaceRole role)) return InvalidRequest();
+        return ChangeResponse(await service.RenewAsync(new(request.OperationId, Issuer(http), Subject(http), id, request.ExpectedRevision, role), http.RequestAborted));
+    }
+
+    private static async Task<IResult> CancelAsync(Guid id, WorkspaceInvitationChangeRequest request, HttpContext http, IWorkspaceInvitationStore store)
+    {
+        if (!ValidRequest(request.OperationId, id, request.ExpectedRevision)) return InvalidRequest();
+        return ChangeResponse(await store.ChangeInvitationAsync(new WorkspaceInvitationCancel(request.OperationId, Issuer(http), Subject(http), id, request.ExpectedRevision), http.RequestAborted));
+    }
+
+    private static IResult ChangeResponse(WorkspaceInvitationResult result)
+    {
         WorkspaceInvitationResponse? offer = result.Offer is null ? null : WorkspaceInvitationResponse.From(result.Offer);
         WorkspaceMemberResponse? member = result.Membership is null ? null : WorkspaceMemberResponse.From(result.Membership);
-        if (result.Status is "applied" or "existingMember") return Results.Ok(new WorkspaceInvitationChangeResponse(operation, result.Status, offer, member, null));
+        if (result.Status is "applied" or "existingMember") return Results.Ok(new WorkspaceInvitationChangeResponse(result.OperationId, result.Status, offer, member, null, result.SetupEmailStatus));
         return Results.Json(new WorkspaceInvitationProblemDetails { Status = StatusCode(result.Status), Title = "Workspace invitation could not be changed",
             ErrorCode = ErrorCode(result.Status), Offer = offer, Membership = member }, statusCode: StatusCode(result.Status), contentType: "application/problem+json");
     }
@@ -128,7 +135,7 @@ internal static class WorkspaceInvitationEndpoints
         try
         {
             result = await scope.ServiceProvider.GetRequiredService<IWorkspaceInvitationStore>().ChangeInvitationAsync(
-                new(request.OperationId, Issuer(http), Subject(http), "accept", id, request.ExpectedRevision, EmailVerified: emailVerified), http.RequestAborted);
+                new WorkspaceInvitationAccept(request.OperationId, Issuer(http), Subject(http), id, request.ExpectedRevision, emailVerified), http.RequestAborted);
         }
         catch (Exception error) when (error is InvalidOperationException or IOException or UnauthorizedAccessException)
         {
@@ -141,13 +148,16 @@ internal static class WorkspaceInvitationEndpoints
             ErrorCode = ErrorCode(result.Status), Offer = offer, Membership = member }, statusCode: StatusCode(result.Status), contentType: "application/problem+json");
     }
 
+    private static bool TryRole(string text, out WorkspaceRole role) => Enum.TryParse(text, out role)
+        && WorkspaceAccessPolicy.IsInvitationRole(role) && role.ToString() == text;
     private static bool ValidRequest(Guid operation, Guid target, long revision) => operation != Guid.Empty && target != Guid.Empty && revision >= 0;
-    private static IResult InvalidRequest() => Results.ValidationProblem(new Dictionary<string, string[]> { ["request"] = ["Provide an operation ID, current revision, recipient or invitation ID and non-Owner role."] });
+    private static IResult InvalidRequest() => Results.ValidationProblem(new Dictionary<string, string[]> { ["request"] = ["Provide an operation ID, current revision, email or invitation ID and non-Owner role."] });
     private static string Issuer(HttpContext http) => http.User.FindFirstValue("iss") ?? "";
     private static string Subject(HttpContext http) => http.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? http.User.FindFirstValue("sub") ?? "";
-    private static int StatusCode(string status) => status switch { "notFound" => 404, "denied" or "verificationRequired" => 403, _ => 409 };
+    private static int StatusCode(string status) => status switch { "enrollment-unavailable" => 503, "invalid-email" or "invalid-request" => 400, "notFound" => 404, "denied" or "verificationRequired" => 403, _ => 409 };
     private static string ErrorCode(string status) => status switch
     {
+        "enrollment-unavailable" or "invalid-email" or "invalid-request" or "account-unavailable" or "enrollment-rejected" => status,
         "denied" => "permission-denied", "verificationRequired" => "email-verification-required", "notFound" => "invitation-not-found",
         "expired" => "invitation-expired", "cancelled" => "invitation-cancelled", "invalidated" => "invitation-invalidated",
         "accepted" => "invitation-accepted", "membershipRemoved" => "membership-revoked", _ => "invitation-conflict",

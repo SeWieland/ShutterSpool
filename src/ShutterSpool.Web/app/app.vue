@@ -229,7 +229,7 @@ onUnmounted(() => { clearInterval(accessTimer); discoveryController?.abort(); st
             </section>
             <section v-else-if="activeWorkspaceSelection.state === 'empty'" class="empty">
                 <h1>No workspace access</h1>
-                <p>No workspace is assigned to this sign-in yet. Check your invitations below or contact the operator if you expected access.</p>
+                <p>You have not joined a workspace with this account yet. Check your invitations below or contact the workspace owner if you expected access.</p>
                 <UButton :disabled="discoveryBusy" @click="loadMemberships">{{ discoveryBusy ? 'Checking…' : 'Retry' }}</UButton>
             </section>
             <section v-else-if="activeWorkspaceSelection.state === 'incomplete'" class="empty" role="alert">

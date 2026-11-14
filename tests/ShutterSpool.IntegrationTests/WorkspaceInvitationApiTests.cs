@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using ShutterSpool.Domain.Security;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
 using ShutterSpool.Application.Security;
@@ -24,9 +25,9 @@ public sealed partial class WorkspaceTenancyHttpTests
         {
             var database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
             var store = new EfAccessGrantStore(database);
-            WorkspaceInvitationRecipient recipient = await store.RecordRecipientAsync(Guid.NewGuid(), new(Issuer, "invited-http", "private-contact-label", "synthetic-host-operator"), Token);
             WorkspaceMembership owner = Assert.Single(await store.ListAsync(Token));
-            offer = (await store.ChangeInvitationAsync(new(Guid.NewGuid(), owner.Issuer, owner.Subject, "create", recipient.Id), Token)).Offer!;
+            offer = (await store.ChangeInvitationAsync(new WorkspaceInvitationCreate(Guid.NewGuid(), owner.Issuer, owner.Subject,
+                new(Issuer, "invited-http", "private-contact-label")), Token)).Offer!;
         }
         using HttpClient anonymous = fixture.Server.CreateClient();
         Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync("/workspace-offers", Token)).StatusCode);
@@ -92,9 +93,9 @@ public sealed partial class WorkspaceTenancyHttpTests
         {
             var database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
             var store = new EfAccessGrantStore(database);
-            WorkspaceInvitationRecipient recipient = await store.RecordRecipientAsync(Guid.NewGuid(), new(Issuer, "unverified", "Synthetic unverified", "synthetic-host-operator"), Token);
             WorkspaceMembership owner = Assert.Single(await store.ListAsync(Token));
-            offer = (await store.ChangeInvitationAsync(new(Guid.NewGuid(), owner.Issuer, owner.Subject, "create", recipient.Id), Token)).Offer!;
+            offer = (await store.ChangeInvitationAsync(new WorkspaceInvitationCreate(Guid.NewGuid(), owner.Issuer, owner.Subject,
+                new(Issuer, "unverified", "Synthetic unverified")), Token)).Offer!;
         }
         using HttpClient client = fixture.Client("unverified");
         client.DefaultRequestHeaders.Authorization = new("Bearer", InvitationBearer("unverified", value, valueType));
@@ -107,33 +108,38 @@ public sealed partial class WorkspaceTenancyHttpTests
     }
 
     [Fact]
-    public async Task Workspace_invitation_HTTP_admin_selects_only_local_operator_references_and_unavailable_workspace_never_grants()
+    public async Task Workspace_invitation_HTTP_authorizes_email_enrollment_and_retries_setup_without_duplicate_offer()
     {
-        await using var fixture = await TenantHttpFixture.CreateAsync();
+        var enrollment = new InvitationEnrollment();
+        await using var fixture = await TenantHttpFixture.CreateAsync(services => services.AddSingleton<IAccountEnrollment>(enrollment));
         var workspace = fixture.Workspaces[0];
-        var other = fixture.Workspaces[1];
-        Guid local;
-        Guid foreign;
-        await using (var scope = fixture.Storage.Scope(fixture.Server.Services, workspace))
-            local = (await new EfAccessGrantStore(scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>()).RecordRecipientAsync(Guid.NewGuid(), new(Issuer, "selected-reference", "Selected local tester", "synthetic-host-operator"), Token)).Id;
-        await using (var scope = fixture.Storage.Scope(fixture.Server.Services, other))
-            foreign = (await new EfAccessGrantStore(scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>()).RecordRecipientAsync(Guid.NewGuid(), new(Issuer, "other-reference", "Other private label", "synthetic-host-operator"), Token)).Id;
+        var request = new WorkspaceInvitationCreateRequest(Guid.NewGuid(), "selected@example.test");
+        using HttpClient outsider = fixture.Client("outsider");
+        Assert.Equal(HttpStatusCode.Forbidden, (await SendAsync(outsider, HttpMethod.Post, "/management/invitations", workspace.Id, request)).StatusCode);
+        Assert.Equal(0, enrollment.ResolveCalls);
         using HttpClient owner = fixture.Client(workspace.Name);
-        using HttpResponseMessage recipients = await SendAsync(owner, HttpMethod.Get, "/management/invitation-recipients", workspace.Id);
-        string text = await recipients.Content.ReadAsStringAsync(Token);
-        Assert.Contains("Selected local tester", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("Other private label", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("selected-reference", text, StringComparison.Ordinal);
-        Assert.DoesNotContain(Issuer, text, StringComparison.Ordinal);
-        Assert.Equal(HttpStatusCode.NotFound, (await SendAsync(owner, HttpMethod.Post, "/management/invitations", workspace.Id,
-            new WorkspaceInvitationCreateRequest(Guid.NewGuid(), foreign))).StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, (await SendAsync(owner, HttpMethod.Post, "/management/invitations", workspace.Id,
-            new WorkspaceInvitationCreateRequest(Guid.NewGuid(), local, "Owner"))).StatusCode);
-        using HttpResponseMessage create = await SendAsync(owner, HttpMethod.Post, "/management/invitations", workspace.Id,
-            new WorkspaceInvitationCreateRequest(Guid.NewGuid(), local));
+            request with { Role = "Owner" })).StatusCode);
+        Assert.Equal(0, enrollment.ResolveCalls);
+        enrollment.SetupStatus = "setup-email-failed";
+        using HttpResponseMessage create = await SendAsync(owner, HttpMethod.Post, "/management/invitations", workspace.Id, request);
         Assert.Equal(HttpStatusCode.OK, create.StatusCode);
         WorkspaceInvitationChangeResponse created = (await create.Content.ReadFromJsonAsync<WorkspaceInvitationChangeResponse>(Token))!;
+        Assert.Equal("applied", created.Status);
+        Assert.Equal("setup-email-failed", created.SetupEmailStatus);
         Assert.Equal("Viewer", created.Offer!.Role);
+        await using (var saved = fixture.Storage.Scope(fixture.Server.Services, workspace))
+        {
+            var store = saved.ServiceProvider.GetRequiredService<IWorkspaceInvitationStore>();
+            Assert.Equal(created.Offer.Id, Assert.Single(await store.ListInvitationsAsync(Token)).Id);
+            Assert.False(await saved.ServiceProvider.GetRequiredService<IAccessGrantStore>().IsActiveAsync(Issuer, "selected-reference", Token));
+        }
+        enrollment.SetupStatus = "setup-email-sent";
+        using HttpResponseMessage resend = await SendAsync(owner, HttpMethod.Post, "/management/invitations", workspace.Id, request);
+        WorkspaceInvitationChangeResponse resent = (await resend.Content.ReadFromJsonAsync<WorkspaceInvitationChangeResponse>(Token))!;
+        Assert.Equal(created.Offer, resent.Offer);
+        Assert.Equal("setup-email-sent", resent.SetupEmailStatus);
+        Assert.Equal(2, enrollment.SetupCalls);
         using HttpClient client = fixture.Client("selected-reference");
         client.DefaultRequestHeaders.Authorization = new("Bearer", InvitationBearer("selected-reference", "true", ClaimValueTypes.Boolean));
         string acceptPath = $"/workspace-offers/{workspace.Id:D}/{created.Offer.Id:D}/accept";
@@ -151,6 +157,49 @@ public sealed partial class WorkspaceTenancyHttpTests
         using HttpResponseMessage retry = await client.PostAsJsonAsync(acceptPath, accept, Token);
         Assert.Equal(HttpStatusCode.OK, retry.StatusCode);
         Assert.True(await verify.ServiceProvider.GetRequiredService<IAccessGrantStore>().IsActiveAsync(Issuer, "selected-reference", Token));
+    }
+
+    [Theory]
+    [InlineData("enrollment-unavailable", HttpStatusCode.ServiceUnavailable)]
+    [InlineData("invalid-email", HttpStatusCode.BadRequest)]
+    [InlineData("account-unavailable", HttpStatusCode.Conflict)]
+    [InlineData("enrollment-rejected", HttpStatusCode.Conflict)]
+    public async Task Workspace_invitation_HTTP_reports_enrollment_failure_without_saving_offer(string status, HttpStatusCode expected)
+    {
+        var enrollment = new InvitationEnrollment { ResolveStatus = status };
+        await using var fixture = await TenantHttpFixture.CreateAsync(services => services.AddSingleton<IAccountEnrollment>(enrollment));
+        var workspace = fixture.Workspaces[0];
+        using HttpClient owner = fixture.Client(workspace.Name);
+        using HttpResponseMessage result = await SendAsync(owner, HttpMethod.Post, "/management/invitations", workspace.Id,
+            new WorkspaceInvitationCreateRequest(Guid.NewGuid(), "selected@example.test"));
+        Assert.Equal(expected, result.StatusCode);
+        Assert.Equal(status, (await result.Content.ReadFromJsonAsync<WorkspaceInvitationProblemDetails>(Token))!.ErrorCode);
+        await using var scope = fixture.Storage.Scope(fixture.Server.Services, workspace);
+        Assert.Empty(await scope.ServiceProvider.GetRequiredService<IWorkspaceInvitationStore>().ListInvitationsAsync(Token));
+        Assert.Equal(0, enrollment.SetupCalls);
+    }
+
+    private sealed class InvitationEnrollment : IAccountEnrollment
+    {
+        public int ResolveCalls { get; private set; }
+        public int SetupCalls { get; private set; }
+        public string ResolveStatus { get; set; } = "resolved";
+        public string SetupStatus { get; set; } = "not-required";
+
+        public Task<AccountEnrollmentResult> ResolveAsync(string email, CancellationToken cancellationToken)
+        {
+            ResolveCalls++;
+            Assert.Equal("selected@example.test", email);
+            return Task.FromResult(new AccountEnrollmentResult(ResolveStatus,
+                ResolveStatus == "resolved" ? new(Issuer, "selected-reference", email) : null));
+        }
+
+        public Task<string> SendSetupEmailAsync(AccountEnrollmentIdentity account, CancellationToken cancellationToken)
+        {
+            SetupCalls++;
+            Assert.Equal(new(Issuer, "selected-reference", "selected@example.test"), account);
+            return Task.FromResult(SetupStatus);
+        }
     }
 
     private static string InvitationBearer(string subject, string value, string valueType) => new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(Issuer,

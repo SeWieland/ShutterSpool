@@ -77,6 +77,11 @@ public sealed class ArchitectureDatabaseTests
         Assert.Equal(3, database.Database.GetMigrations().Count());
         Assert.Equal(database.Database.GetMigrations(), await database.Database.GetAppliedMigrationsAsync(TestContext.Current.CancellationToken));
         Assert.False(database.Database.HasPendingModelChanges());
+        Assert.Null(database.Model.FindEntityType("ShutterSpool.Infrastructure.Persistence.WorkspaceInvitationRecipientEntity"));
+        var invitations = database.Model.FindEntityType(typeof(WorkspaceInvitationEntity))!;
+        Assert.Empty(invitations.GetForeignKeys());
+        Assert.Contains(invitations.GetIndexes(), index => index.IsUnique
+            && index.Properties.Select(property => property.Name).SequenceEqual(["RecipientIssuer", "RecipientSubject"]));
         Directory.CreateDirectory(fixture.SpoolRoot);
         string original = Path.Combine(fixture.SpoolRoot, "synthetic-original");
         await File.WriteAllBytesAsync(original, [1, 2, 3], TestContext.Current.CancellationToken);

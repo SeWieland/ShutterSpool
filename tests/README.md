@@ -37,13 +37,14 @@ Unix permission checks, Windows symbolic-link privileges, the distinct Linux `/d
 
 After starting the local Keycloak companion through Aspire, run `pwsh -File tests/verify-keycloak-bootstrap.ps1 -KeycloakContainer <running-keycloak-container-name>` from the repository root.
 This runtime check executes the mounted reconciliation script in uniquely named disposable realms. It verifies fresh subject retention, exact username matching, repeated reconciliation and preservation of identity/credentials on a rejected subject mismatch.
-It also checks fresh-realm provisioning with optional email/name fields and no SMTP, then verifies that reconciliation preserves operator-managed profile policy and account enabled, verification and MFA-action controls.
+It also checks fresh-realm provisioning with optional email/name fields and no SMTP, then verifies that reconciliation preserves operator-managed profile/realm verification policy and account enabled, verification and MFA-action controls. The dedicated enrollment service client and its native user-management grant are checked separately from application workspace permissions.
 It deletes only its own realms and temporary files; existing realms and deployment secrets are retained.
 Successful password and PKCE login need separate runtime qualification. PostgreSQL CI acceptance remains mandatory independently of this companion check.
 
 The database suite checks tenant/control migration models, fresh provisioning/restart, writer exclusion, database/storage identity, key custody and Collection constraints, and non-destructive refusal of incompatible histories and unversioned objects.
 It does not qualify conversion of older installation layouts or native filesystem allocation enforcement.
 Role checks cover permission/visibility boundaries and atomic membership, Owner, policy and setup audit changes.
+Invitation checks cover exact verified-recipient acceptance, tenant isolation, local offer/membership/audit consistency, revisions, retries and recipient removal. Native enrollment adapter checks use controlled HTTP responses; they cannot establish real Keycloak policy enforcement, setup-link behavior or SMTP/mailbox delivery.
 
 Preserve meaningful regression expectations when changing implementation boundaries. Tests supply evidence for the request and documented safety constraints, rather than replacing them.
 

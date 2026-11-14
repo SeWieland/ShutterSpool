@@ -26,8 +26,8 @@ if ! /opt/keycloak/bin/kcadm.sh get realms/shutterspool >/dev/null 2>&1; then
   /opt/keycloak/bin/kcadm.sh update users/profile -r shutterspool -f /opt/shutterspool/shutterspool-user-profile.json
 fi
 
-# SMTP-free Owners have no email; explicit native enrollment actions still verify invited accounts.
-/opt/keycloak/bin/kcadm.sh update realms/shutterspool --no-merge -s registrationAllowed=false -s verifyEmail=false
+# Email verification is a fresh-realm default; preserve the operator's later policy.
+/opt/keycloak/bin/kcadm.sh update realms/shutterspool --no-merge -s registrationAllowed=false
 for action in VERIFY_EMAIL UPDATE_PASSWORD; do
   /opt/keycloak/bin/kcadm.sh update "authentication/required-actions/$action" -r shutterspool -s enabled=true
 done
@@ -60,6 +60,11 @@ reconcile_mapper() {
 }
 
 reconcile_client shutterspool-server shutterspool-server-client.json >/dev/null
+if [ -n "${SHUTTERSPOOL_ENROLLMENT_CLIENT_SECRET:-}" ]; then
+  enrollment_client=$(reconcile_client shutterspool-enrollment shutterspool-enrollment-client.json)
+  /opt/keycloak/bin/kcadm.sh update "clients/$enrollment_client" -r shutterspool -s "secret=$SHUTTERSPOOL_ENROLLMENT_CLIENT_SECRET"
+  /opt/keycloak/bin/kcadm.sh add-roles -r shutterspool --uusername service-account-shutterspool-enrollment --cclientid realm-management --rolename manage-users
+fi
 web_client=$(reconcile_client shutterspool-web shutterspool-web-client.json)
 reconcile_mapper "$web_client" shutterspool-server-audience shutterspool-server-audience-mapper.json
 reconcile_mapper "$web_client" shutterspool-email-verified shutterspool-email-verified-mapper.json

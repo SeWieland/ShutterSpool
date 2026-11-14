@@ -37,11 +37,15 @@ export function workspaceChangeError(error: unknown) {
         case 'permission-denied': return 'Your current role does not permit this change. Review current workspace access.';
         case 'membership-not-found': return 'This membership is no longer available. Review the refreshed member list.';
         case 'invitation-conflict': return 'This invitation changed elsewhere. Review its refreshed status before choosing another action.';
-        case 'invitation-expired': return 'This invitation has expired. Ask a workspace administrator for a new invitation.';
-        case 'invitation-cancelled': return 'This invitation was cancelled. Ask a workspace administrator for a new invitation.';
-        case 'invitation-invalidated': return 'This invitation is no longer valid. Ask a workspace administrator for a new invitation.';
+        case 'invitation-expired': return 'This invitation has expired. Ask the workspace owner for a new invitation.';
+        case 'invitation-cancelled': return 'This invitation was cancelled. Ask the workspace owner for a new invitation.';
+        case 'invitation-invalidated': return 'This invitation is no longer valid. Ask the workspace owner for a new invitation.';
         case 'invitation-accepted': return 'This invitation was already accepted. Check the current workspace membership; invitations do not change an existing role.';
-        case 'invitation-not-found': return 'This invitation is no longer available. Refresh invitations or contact the workspace administrator.';
+        case 'invitation-not-found': return 'This invitation is no longer available. Refresh invitations or contact the workspace owner.';
         case 'email-verification-required': return 'Complete email verification with your sign-in service, then sign out and sign in again before joining.';
+        case 'invalid-email': return 'Enter a valid email address for the person you want to invite.';
+        case 'account-unavailable': return 'This account is unavailable for invitations. Contact the workspace owner for help.';
+        case 'enrollment-rejected': return 'Account setup was refused by the sign-in service. Contact the workspace owner for help.';
+        case 'enrollment-unavailable': return 'Account setup is temporarily unavailable. Choose Check invitation to try again.';
     }
 }

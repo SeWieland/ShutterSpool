@@ -129,6 +129,7 @@ Do not start overlapping Server instances with different file selections against
 | `secrets/camera-callback-key` | Enabled edges; must match `ShutterSpool:CameraIngress:CallbackKey` in `config/appsettings.Production.json` |
 | `secrets/postgres-password` | Bundled PostgreSQL and bundled Keycloak's configured database connection |
 | `secrets/keycloak-admin-password` | Bundled identity bootstrap/reconciliation only |
+| `secrets/keycloak-enrollment-client-secret` | Bundled enrollment service-client reconciliation; must match `ShutterSpool:KeycloakEnrollment:ClientSecret` in Server Production JSON |
 | `secrets/administrator-password` | Initial application identity creation only |
 
 Server runs as UID/GID 1654; Keycloak/SFTPGo use UID/GID 1000.
@@ -162,6 +163,7 @@ If administration access is needed, provide an explicitly restricted route separ
 Identity reconciliation creates the initial username/password account without an email address. Fresh bundled realms make email and name fields optional, so the initial Owner can sign in without SMTP or email verification. This does not assert that a mailbox is verified.
 The separate workspace provisioning command creates its local grant from the operator-verified issuer/subject; there is no first-login enrollment.
 Repeated identity reconciliation preserves existing passwords and subjects; it does not manage workspace grants. The package owns its application client redirect and audience settings.
+For [email invitations](operations/README.md#configure-the-enrollment-service), configure the dedicated backend service client and matching secret, then native SMTP. Initial Owner setup remains independent of SMTP. Automated enrollment is Keycloak-specific; choosing external OIDC does not add automatic provisioning for that provider.
 The optional-contact profile is installed only when creating the realm; existing realm profile rules and account security settings are preserved. If setup stops between realm creation and profile installation, inspect the current native user profile, then deliberately import `package/realms/shutterspool-user-profile.json` through private Keycloak administration before retrying. An existing account that requires email verification needs operator resolution; restart does not clear its required actions or mark its email verified.
 If initial account creation is interrupted before its password is set, reconciliation keeps Server closed on retry.
 A trusted Keycloak operator must verify the configured subject and complete that account's password through private administration, then rerun `docker compose run --rm --no-deps keycloak-reconciler` before starting the graph.

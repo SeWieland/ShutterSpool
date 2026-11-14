@@ -29,6 +29,7 @@ See the [destination boundary reference](../ShutterSpool.Infrastructure/README.m
 | Responsibility | Starting point |
 | --- | --- |
 | Workspace membership, Viewer policy and access changes | Access contracts and stores; Domain owns pure permission rules |
+| Email invitation orchestration | `WorkspaceInvitationService`, `IAccountEnrollment` and `IWorkspaceInvitationStore` |
 | Acceptance and source correlation | `IngestService`, `CameraIngressService` |
 | Bounded Capture reads and revisioned curation | `CaptureReadService`, Capture read/curation ports |
 | Collection management and versioned single/bulk Capture moves | `CollectionManagementService`, `CaptureCollectionAssignmentService` and their stores |
@@ -40,6 +41,7 @@ See the [destination boundary reference](../ShutterSpool.Infrastructure/README.m
 Application results are not HTTP contracts; endpoint-local DTOs belong in Server.
 No EF Core, HTTP framework or provider client belongs here.
 `TimeProvider` supplies workflow time so decisions can be exercised at exact boundaries.
+Invitation orchestration resolves the native account, persists the local offer, then requests any needed setup email; its separate setup result preserves a saved offer when email fails. The [authorization guide](../../docs/architecture/authentication-and-authorization.md#invited-membership) explains the trust and transaction boundaries.
 
 ### Implementation constraints
 

@@ -2911,55 +2911,6 @@
         }
       }
     },
-    "/management/invitation-recipients": {
-      "get": {
-        "tags": [
-          "ShutterSpool.Server"
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspaceInvitationRecipientsResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Service Unavailable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/management/invitations": {
       "get": {
         "tags": [
@@ -3010,7 +2961,7 @@
       },
       "post": {
         "tags": [
-          "ShutterSpool.Server"
+          "WorkspaceInvitationEndpoints"
         ],
         "requestBody": {
           "content": {
@@ -3033,28 +2984,18 @@
               }
             }
           },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspaceInvitationProblemDetails"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not Found",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspaceInvitationProblemDetails"
-                }
-              }
-            }
-          },
           "409": {
             "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceInvitationProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3068,7 +3009,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HttpValidationProblemDetails"
+                  "$ref": "#/components/schemas/WorkspaceInvitationProblemDetails"
                 }
               }
             }
@@ -3083,8 +3024,8 @@
               }
             }
           },
-          "503": {
-            "description": "Service Unavailable",
+          "403": {
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -3099,7 +3040,7 @@
     "/management/invitations/{id}/renew": {
       "post": {
         "tags": [
-          "ShutterSpool.Server"
+          "WorkspaceInvitationEndpoints"
         ],
         "parameters": [
           {
@@ -3133,16 +3074,6 @@
               }
             }
           },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspaceInvitationProblemDetails"
-                }
-              }
-            }
-          },
           "404": {
             "description": "Not Found",
             "content": {
@@ -3183,6 +3114,16 @@
               }
             }
           },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
           "503": {
             "description": "Service Unavailable",
             "content": {
@@ -3199,7 +3140,7 @@
     "/management/invitations/{id}/cancel": {
       "post": {
         "tags": [
-          "ShutterSpool.Server"
+          "WorkspaceInvitationEndpoints"
         ],
         "parameters": [
           {
@@ -3233,16 +3174,6 @@
               }
             }
           },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspaceInvitationProblemDetails"
-                }
-              }
-            }
-          },
           "404": {
             "description": "Not Found",
             "content": {
@@ -3275,6 +3206,16 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -14259,7 +14200,8 @@
           "status",
           "offer",
           "membership",
-          "errorCode"
+          "errorCode",
+          "setupEmailStatus"
         ],
         "type": "object",
         "properties": {
@@ -14295,6 +14237,12 @@
               "null",
               "string"
             ]
+          },
+          "setupEmailStatus": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         },
         "additionalProperties": false
@@ -14302,7 +14250,7 @@
       "WorkspaceInvitationCreateRequest": {
         "required": [
           "operationId",
-          "recipientId"
+          "email"
         ],
         "type": "object",
         "properties": {
@@ -14310,9 +14258,8 @@
             "type": "string",
             "format": "uuid"
           },
-          "recipientId": {
-            "type": "string",
-            "format": "uuid"
+          "email": {
+            "type": "string"
           },
           "role": {
             "type": "string",
@@ -14386,38 +14333,6 @@
         },
         "additionalProperties": false
       },
-      "WorkspaceInvitationRecipientResponse": {
-        "required": [
-          "id",
-          "label"
-        ],
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "label": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": false
-      },
-      "WorkspaceInvitationRecipientsResponse": {
-        "required": [
-          "items"
-        ],
-        "type": "object",
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/WorkspaceInvitationRecipientResponse"
-            }
-          }
-        },
-        "additionalProperties": false
-      },
       "WorkspaceInvitationRenewRequest": {
         "required": [
           "operationId",
@@ -14447,7 +14362,6 @@
       "WorkspaceInvitationResponse": {
         "required": [
           "id",
-          "recipientId",
           "recipientLabel",
           "role",
           "status",
@@ -14458,10 +14372,6 @@
         "type": "object",
         "properties": {
           "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "recipientId": {
             "type": "string",
             "format": "uuid"
           },
