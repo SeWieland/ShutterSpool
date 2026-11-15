@@ -9,6 +9,10 @@ builder.Configuration.AddEnvironmentVariables();
 var postgresPassword = builder.AddParameter("postgres-password", secret: true);
 var keycloakAdministrator = builder.AddParameter("keycloak-administrator");
 var keycloakAdministratorPassword = builder.AddParameter("keycloak-administrator-password", secret: true);
+var enrollmentClientSecret = builder.AddParameter("keycloak-enrollment-client-secret", new GenerateParameterDefault
+{
+    MinLength = 32, Lower = true, Upper = true, Numeric = true, Special = false,
+}, secret: true, persist: true);
 var shutterspoolAdministrator = builder.AddParameter("shutterspool-administrator");
 var shutterspoolAdministratorPassword = builder.AddParameter("shutterspool-administrator-password", secret: true);
 var shutterspoolAdministratorSubject = builder.AddParameter("shutterspool-administrator-subject");
@@ -50,6 +54,7 @@ var keycloakReconciler = builder.AddContainer("keycloak-reconciler", "quay.io/ke
     .WithEnvironment("SHUTTERSPOOL_ADMIN_USERNAME", shutterspoolAdministrator)
     .WithEnvironment("SHUTTERSPOOL_ADMIN_PASSWORD", shutterspoolAdministratorPassword)
     .WithEnvironment("SHUTTERSPOOL_ADMIN_SUBJECT", shutterspoolAdministratorSubject)
+    .WithEnvironment("SHUTTERSPOOL_ENROLLMENT_CLIENT_SECRET", enrollmentClientSecret)
     .WithEnvironment("SHUTTERSPOOL_LOGIN_THEME", builder.Configuration["ShutterSpool:Keycloak:LoginTheme"] ?? "shutterspool")
     .WithBindMount("./Realms", "/opt/shutterspool", isReadOnly: true)
     .WithBindMount("./Themes/shutterspool", "/opt/keycloak/themes/shutterspool", isReadOnly: true)
@@ -82,6 +87,9 @@ var server = builder.AddProject<Projects.ShutterSpool_Server>("server")
     .WaitFor(valkey)
     .WaitForCompletion(keycloakReconciler)
     .WithEnvironment("ShutterSpool__Security__Authority", keycloakAuthority)
+    .WithEnvironment("ShutterSpool__KeycloakEnrollment__ServerUrl", keycloak.GetEndpoint("http"))
+    .WithEnvironment("ShutterSpool__KeycloakEnrollment__Issuer", keycloakAuthority)
+    .WithEnvironment("ShutterSpool__KeycloakEnrollment__ClientSecret", enrollmentClientSecret)
     .WithEnvironment("ShutterSpool__Security__Audience", "shutterspool-server")
     .WithEnvironment("ShutterSpool__Security__EncryptionKey", securityEncryptionKey)
     .WithEnvironment("ShutterSpool__CameraCredentials__MinimumPasswordLength",

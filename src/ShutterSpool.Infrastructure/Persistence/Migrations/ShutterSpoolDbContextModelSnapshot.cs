@@ -2019,6 +2019,54 @@ namespace ShutterSpool.Infrastructure.Persistence.Migrations
                     b.ToTable("workspace_identity", (string)null);
                 });
 
+            modelBuilder.Entity("ShutterSpool.Infrastructure.Persistence.WorkspaceInvitationEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("RecipientIssuer")
+                        .IsRequired()
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)");
+
+                    b.Property<string>("RecipientLabel")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("RecipientSubject")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<long>("Revision")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RecipientIssuer", "RecipientSubject")
+                        .IsUnique();
+
+                    b.ToTable("workspace_invitations", (string)null);
+                });
+
             modelBuilder.Entity("ShutterSpool.Infrastructure.Persistence.WorkspaceViewerPolicyEntity", b =>
                 {
                     b.Property<int>("Id")

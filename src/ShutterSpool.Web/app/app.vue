@@ -8,9 +8,10 @@ import {
     restoring,
 } from "./lib/session";
 import { onAccessLost } from './lib/session';
-import { pageWorkspaceId, workspaceSelection, withWorkspace, type WorkspaceMembership } from './lib/workspace-context';
+import { pageWorkspaceId, bindInitialWorkspace, workspaceSelection, withWorkspace, type WorkspaceMembership } from './lib/workspace-context';
 import { workspaceAccess, workspaceAccessVersion, workspaceAccessError, workspaceRevoked, refreshWorkspaceAccess, discardWorkspacePrivateState } from './lib/workspace-access';
 const route = useRoute();
+const router = useRouter();
 const { sftpgo } = useAppConfig();
 const workspace = ref<{ requestDeparture: () => boolean } | null>(null);
 const memberships = shallowRef<WorkspaceMembership[]>([]);
@@ -19,6 +20,14 @@ const workspaceIncomplete = shallowRef(false);
 const hasDiscovery = shallowRef(false);
 const discoveryBusy = shallowRef(false);
 const discoveryError = shallowRef(false);
+const invitationsVisible = shallowRef(false);
+const invitationCount = shallowRef<number>();
+const profileOpen = ref(false);
+const profilePanel = ref<HTMLDivElement>();
+const profileTrigger = ref<HTMLButtonElement>();
+const startup = ref(!route.path.startsWith('/auth/'));
+const identity = computed(() => session.value?.profile.name?.trim() || session.value?.profile.preferred_username?.trim() || session.value?.profile.sub || 'Signed in');
+const email = computed(() => typeof session.value?.profile.email === 'string' ? session.value.profile.email : '');
 let discoverySequence = 0;
 let discoveryController: AbortController | undefined;
 const activeWorkspaceSelection = computed(() => hasDiscovery.value ? workspaceSelection(
@@ -26,22 +35,34 @@ const activeWorkspaceSelection = computed(() => hasDiscovery.value ? workspaceSe
     workspaceIncomplete.value,
     pageWorkspaceId,
 ) : { state: 'loading' } as const);
-const hasSelectedWorkspace = computed(() => !!pageWorkspaceId &&
-    activeWorkspaceSelection.value.state === 'selected');
+const hasSelectedWorkspace = computed(() => activeWorkspaceSelection.value.state === 'selected' &&
+    activeWorkspaceSelection.value.workspace.id === pageWorkspaceId);
 const canMountOperationalWorkspace = computed(() => hasSelectedWorkspace.value && !!workspaceAccess.value);
 const activeWorkspace = computed(() => activeWorkspaceSelection.value.state === 'selected'
     ? activeWorkspaceSelection.value.workspace
     : undefined);
 const signInVisible = ref(true);
 const aboutDialog = ref<HTMLDialogElement>();
-const aboutTrigger = ref<HTMLButtonElement>();
 function openAbout() {
+    profilePanel.value?.hidePopover();
     aboutDialog.value?.showModal();
 }
-function restoreAboutFocus() { aboutTrigger.value?.focus({ preventScroll: true }); }
+function restoreAboutFocus() { profileTrigger.value?.focus({ preventScroll: true }); }
 function leaveSession() {
     if (workspace.value?.requestDeparture() === false) return;
+    profilePanel.value?.hidePopover();
     void signOut();
+}
+function openInvitations() {
+    profilePanel.value?.hidePopover();
+    invitationsVisible.value = true;
+}
+function joinedWorkspace(id: string) {
+    if (pageWorkspaceId === id && canMountOperationalWorkspace.value) invitationsVisible.value = false;
+    else {
+        if (workspace.value?.requestDeparture() === false) return;
+        window.location.assign(withWorkspace('/', id));
+    }
 }
 function validMemberships(value: unknown): WorkspaceMembership[] {
     if (!Array.isArray(value)) throw new Error('Workspace membership response is invalid.');
@@ -67,10 +88,12 @@ async function loadMemberships() {
         const items = validMemberships(result?.items);
         if (typeof result?.incomplete !== 'boolean')
             throw new Error('Workspace membership response is invalid.');
-        const selection = workspaceSelection(items, result.incomplete, pageWorkspaceId);
-        if (pageWorkspaceId === null && selection.state === 'selected') {
-            window.location.replace(withWorkspace(route.fullPath, selection.workspace.id));
-            return;
+        if (bindInitialWorkspace(items, result.incomplete) ||
+            pageWorkspaceId && !hasDiscovery.value && route.query.workspace !== pageWorkspaceId) {
+            const failure = await router.replace(withWorkspace(route.fullPath, pageWorkspaceId));
+            controller.signal.throwIfAborted();
+            if (current !== discoverySequence) return;
+            if (failure) throw new Error('Workspace selection could not be opened.');
         }
         memberships.value = items;
         workspaceIncomplete.value = result.incomplete;
@@ -90,19 +113,9 @@ function chooseWorkspace() {
     if (!memberships.value.some(item => item.id === selectedWorkspaceId.value)) return;
     window.location.assign(withWorkspace('/', selectedWorkspaceId.value));
 }
-function switchWorkspace(event: Event) {
-    const select = event.target as HTMLSelectElement;
-    const next = select.value;
-    if (!next || next === pageWorkspaceId || !memberships.value.some(item => item.id === next)) {
-        selectedWorkspaceId.value = activeWorkspace.value?.id ?? '';
-        select.value = activeWorkspace.value?.id ?? '';
-        return;
-    }
-    if (workspace.value?.requestDeparture() === false) {
-        selectedWorkspaceId.value = activeWorkspace.value?.id ?? '';
-        select.value = activeWorkspace.value?.id ?? '';
-        return;
-    }
+function switchWorkspace(next: string) {
+    if (!next || next === pageWorkspaceId || !memberships.value.some(item => item.id === next)) return;
+    if (workspace.value?.requestDeparture() === false) return;
     window.location.assign(withWorkspace('/', next));
 }
 const stopWatchingSession = watch([session, () => route.path], ([value]) => {
@@ -116,6 +129,9 @@ const stopWatchingSession = watch([session, () => route.path], ([value]) => {
         discoveryBusy.value = false;
         discoveryError.value = false;
         selectedWorkspaceId.value = pageWorkspaceId ?? '';
+        invitationsVisible.value = false;
+        invitationCount.value = undefined;
+        profileOpen.value = false;
     }
 });
 const unsubscribeAccessLost = onAccessLost(() => {
@@ -142,7 +158,7 @@ onMounted(() => {
     updateSignInVisibility();
     document.addEventListener('visibilitychange', updateSignInVisibility);
     if (!route.path.startsWith("/auth/"))
-        void restoreSession(route.fullPath);
+        void restoreSession(route.fullPath).finally(() => { startup.value = false; });
 });
 onUnmounted(() => document.removeEventListener('visibilitychange', updateSignInVisibility));
 onUnmounted(() => { clearInterval(accessTimer); discoveryController?.abort(); stopWatchingSession(); unsubscribeAccessLost(); });
@@ -159,44 +175,53 @@ onUnmounted(() => { clearInterval(accessTimer); discoveryController?.abort(); st
                         width="56"
                         height="56"
                     /><span class="brand-name">ShutterSpool</span><span id="brand-live-status" /></NuxtLink
-                ><div id="workspace-header-actions"><label v-if="session && activeWorkspace" class="workspace-switcher"><span class="sr-only">Workspace</span><select aria-label="Workspace" :value="activeWorkspace.id" @change="switchWorkspace"><option v-for="item in memberships" :key="item.id" :value="item.id">{{ item.name }}</option></select></label><button ref="aboutTrigger" class="about-access" type="button" aria-label="About & licenses" title="About & licenses" @click="openAbout"><UIcon name="i-lucide-info" /><span class="about-label">About &amp; licenses</span></button><UButton
-                    v-if="session"
-                    class="signout-button"
-                    aria-label="Sign out"
-                    title="Sign out"
-                    color="neutral"
-                    variant="ghost"
-                    @click="leaveSession"
-                    ><UIcon class="signout-icon" name="i-lucide-log-out" /><span class="signout-label">Sign out</span></UButton
-                ></div>
+                ><div id="workspace-header-actions">
+                        <button ref="profileTrigger" class="profile-access" type="button" popovertarget="profile-panel" :aria-expanded="profileOpen" aria-controls="profile-panel" aria-label="Profile" title="Profile"><UIcon name="i-lucide-user-round" /><span v-if="invitationCount" class="profile-badge"><span class="sr-only">{{ invitationCount }} pending invitations</span></span></button>
+                            <div id="profile-panel" ref="profilePanel" popover class="profile-panel" @toggle="profileOpen = ($event as ToggleEvent).newState === 'open'">
+                                <div v-if="session" class="profile-identity"><strong>{{ identity }}</strong><span v-if="email && email !== identity">{{ email }}</span></div>
+                                <div v-if="session && memberships.length" class="profile-workspaces">
+                                    <p class="muted">{{ memberships.length === 1 ? 'Workspace' : 'Workspaces' }}</p>
+                                    <p v-if="memberships.length === 1"><strong>{{ memberships[0]?.name }}</strong><span v-if="workspaceAccess && activeWorkspace">{{ workspaceAccess.role }}</span></p>
+                                    <template v-else><button v-for="item in memberships" :key="item.id" type="button" :aria-current="activeWorkspace?.id === item.id ? 'true' : undefined" @click="switchWorkspace(item.id)"><span>{{ item.name }}</span><span v-if="activeWorkspace?.id === item.id" class="muted">Current · {{ workspaceAccess?.role }}</span></button></template>
+                                </div>
+                                <button v-if="session" type="button" @click="openInvitations"><UIcon name="i-lucide-mail" />Invitations<span v-if="invitationCount" class="invitation-count">{{ invitationCount }}</span></button>
+                                <button type="button" @click="openAbout"><UIcon name="i-lucide-info" />About &amp; licenses</button>
+                                <button v-if="session" class="profile-signout" type="button" @click="leaveSession"><UIcon name="i-lucide-log-out" />Sign out</button>
+                            </div>
+                </div>
             </header>
-            <div v-if="session && activeWorkspace" class="workspace-identity">
-                <span>Current workspace</span>
-                <strong>{{ activeWorkspace.name }}</strong>
-            </div>
             <dialog ref="aboutDialog" class="discard-dialog about-dialog" aria-labelledby="about-title" @close="restoreAboutFocus">
                 <div class="about-heading"><h2 id="about-title">About &amp; licenses</h2><button type="button" @click="aboutDialog?.close()">Close</button></div>
                 <p>ShutterSpool is licensed under the MIT License. <a href="https://github.com/SeWieland/ShutterSpool/blob/778eb89e41cb148081a0a50fd49203cd2a9a2602/LICENSE" target="_blank" rel="noopener noreferrer">Read the license</a>.</p>
                 <p>SFTPGo® is a registered trademark of Nicola Murino. Copyright Nicola Murino and contributors. ShutterSpool is not affiliated with or endorsed by Nicola Murino or the SFTPGo project.</p>
                 <p>The packaged camera FTP/FTPS edge uses SFTPGo v{{ sftpgo.version.replace(/^v/, '') }}, licensed under GNU AGPL-3.0-only with additional terms. Read the <a :href="sftpgo.license" target="_blank" rel="noopener noreferrer">license</a> and <a :href="sftpgo.notice" target="_blank" rel="noopener noreferrer">notice</a>.</p>
                 <p><a :href="sftpgo.source" target="_blank" rel="noopener noreferrer">Source code for SFTPGo v{{ sftpgo.version.replace(/^v/, '') }}</a></p>
+                <p>Lucide icons include ISC and MIT-licensed artwork. <a href="/lucide-LICENSE.txt" target="_blank" rel="noopener noreferrer">Read the icon licenses and notices</a>.</p>
             </dialog>
             <NuxtPage v-if="route.path.startsWith('/auth/')" />
             <template v-else>
             <p v-if="session && canMountOperationalWorkspace && (workspaceIncomplete || discoveryError)" class="workspace-incomplete" :role="discoveryError ? 'alert' : 'status'"><template v-if="discoveryError">Workspace memberships could not be refreshed. Access to {{ activeWorkspace?.name ?? 'this workspace' }} remains confirmed.</template><template v-else>Some workspace memberships could not be checked. Access to {{ activeWorkspace?.name ?? 'this workspace' }} is confirmed.</template><button type="button" :disabled="discoveryBusy" @click="loadMemberships">{{ discoveryBusy ? 'Checking…' : 'Retry' }}</button></p>
+            <main v-if="session" v-show="invitationsVisible || activeWorkspaceSelection.state === 'empty'" class="invitation-page" :class="{ 'invitation-welcome': activeWorkspaceSelection.state === 'empty' }">
+                <button v-if="invitationsVisible && activeWorkspaceSelection.state !== 'empty'" type="button" class="back" @click="invitationsVisible = false">{{ canMountOperationalWorkspace ? 'Back to workspace' : 'Back to workspace access' }}</button>
+                <div v-if="activeWorkspaceSelection.state === 'empty'" class="welcome-heading"><h1>Join a workspace to get started.</h1></div>
+                <LazyWorkspaceInvitations :welcome="activeWorkspaceSelection.state === 'empty'" :email="email" @joined="joinedWorkspace" @count="invitationCount = $event" />
+            </main>
             <Suspense v-if="session && canMountOperationalWorkspace">
                 <LazyOperationalWorkspace
                     :key="workspaceAccessVersion"
                     ref="workspace"
                     :capture-id="route.params.id ? String(route.params.id) : undefined"
+                    :inactive="invitationsVisible"
+                    @navigate="invitationsVisible = false"
                 />
                 <template #fallback>
                     <main class="empty" aria-busy="true" role="status">
-                        <h1>Opening your workspace…</h1>
+                        <h1>Opening ShutterSpool…</h1>
                     </main>
                 </template>
             </Suspense>
-            <main v-else-if="session && hasSelectedWorkspace && workspaceAccessError" class="empty" role="alert">
+            <main v-else-if="session && !invitationsVisible && activeWorkspaceSelection.state !== 'empty'">
+            <section v-if="hasSelectedWorkspace && workspaceAccessError" class="empty" role="alert">
                 <h1>Workspace access needs checking</h1>
                 <p>{{ workspaceAccessError }}</p>
                 <UButton :disabled="discoveryBusy" @click="loadMemberships">Retry access check</UButton>
@@ -205,22 +230,16 @@ onUnmounted(() => { clearInterval(accessTimer); discoveryController?.abort(); st
                     <select id="workspace-access-choice" v-model="selectedWorkspaceId"><option value="">Choose a workspace</option><option v-for="item in memberships" :key="item.id" :value="item.id">{{ item.name }}</option></select>
                     <UButton type="submit" :disabled="!memberships.some(item => item.id === selectedWorkspaceId)">Open workspace</UButton>
                 </form>
-            </main>
-            <main v-else-if="session && discoveryBusy && !hasDiscovery" class="empty" aria-busy="true" role="status">
-                <h1>Checking workspace access…</h1>
-                <p>Only workspaces assigned to your sign-in can be opened.</p>
-            </main>
-            <main v-else-if="session && discoveryError && !hasDiscovery" class="empty" role="alert">
+            </section>
+            <section v-else-if="discoveryBusy && !hasDiscovery" class="empty" aria-busy="true" role="status">
+                <h1>Opening ShutterSpool…</h1>
+            </section>
+            <section v-else-if="discoveryError && !hasDiscovery" class="empty" role="alert">
                 <h1>Workspaces could not be checked</h1>
                 <p>Workspace access could not be confirmed. Retry to continue.</p>
                 <UButton :disabled="discoveryBusy" @click="loadMemberships">{{ discoveryBusy ? 'Checking…' : 'Retry' }}</UButton>
-            </main>
-            <main v-else-if="session && activeWorkspaceSelection.state === 'empty'" class="empty">
-                <h1>No workspace access</h1>
-                <p>No workspace is assigned to this sign-in yet. Contact the operator if you expected access.</p>
-                <UButton :disabled="discoveryBusy" @click="loadMemberships">{{ discoveryBusy ? 'Checking…' : 'Retry' }}</UButton>
-            </main>
-            <main v-else-if="session && activeWorkspaceSelection.state === 'incomplete'" class="empty" role="alert">
+            </section>
+            <section v-else-if="activeWorkspaceSelection.state === 'incomplete'" class="empty" role="alert">
                 <h1>{{ pageWorkspaceId !== null ? 'Workspace access could not be confirmed' : 'Workspace memberships could not be checked' }}</h1>
                 <p>{{ pageWorkspaceId !== null ? 'Retry to check this workspace again. No other workspace has been opened.' : 'No workspace was confirmed in this incomplete check. Retry to continue.' }}</p>
                 <UButton :disabled="discoveryBusy" @click="loadMemberships">{{ discoveryBusy ? 'Checking…' : 'Retry' }}</UButton>
@@ -229,8 +248,8 @@ onUnmounted(() => { clearInterval(accessTimer); discoveryController?.abort(); st
                     <select id="workspace-choice-incomplete" v-model="selectedWorkspaceId"><option value="">Choose a workspace</option><option v-for="item in memberships" :key="item.id" :value="item.id">{{ item.name }}</option></select>
                     <UButton type="submit" :disabled="!memberships.some(item => item.id === selectedWorkspaceId)">Open workspace</UButton>
                 </form>
-            </main>
-            <main v-else-if="session && activeWorkspaceSelection.state === 'unavailable'" class="empty" role="alert">
+            </section>
+            <section v-else-if="activeWorkspaceSelection.state === 'unavailable'" class="empty" role="alert">
                 <h1>This workspace is unavailable</h1>
                 <p>Access to the selected workspace could not be confirmed. Choose one you can access or retry.</p>
                 <UButton :disabled="discoveryBusy" @click="loadMemberships">{{ discoveryBusy ? 'Checking…' : 'Retry' }}</UButton>
@@ -239,8 +258,8 @@ onUnmounted(() => { clearInterval(accessTimer); discoveryController?.abort(); st
                     <select id="workspace-choice-unavailable" v-model="selectedWorkspaceId"><option value="">Choose a workspace</option><option v-for="item in memberships" :key="item.id" :value="item.id">{{ item.name }}</option></select>
                     <UButton type="submit" :disabled="!memberships.some(item => item.id === selectedWorkspaceId)">Open workspace</UButton>
                 </form>
-            </main>
-            <main v-else-if="session && activeWorkspaceSelection.state === 'choose'" class="signin workspace-choice-page">
+            </section>
+            <section v-else-if="activeWorkspaceSelection.state === 'choose'" class="signin workspace-choice-page">
                 <img class="signin-mark" src="/shutter-color.png" alt="" width="112" height="112" />
                 <h1>Choose a workspace</h1>
                 <p>Open a workspace assigned to your sign-in.</p>
@@ -252,15 +271,15 @@ onUnmounted(() => { clearInterval(accessTimer); discoveryController?.abort(); st
                     <UButton type="submit" :disabled="!memberships.some(item => item.id === selectedWorkspaceId)">Open workspace</UButton>
                 </form>
                 <UButton v-if="workspaceIncomplete" variant="ghost" :disabled="discoveryBusy" @click="loadMemberships">{{ discoveryBusy ? 'Checking…' : 'Retry membership check' }}</UButton>
+            </section>
+            <section v-else class="empty" aria-busy="true" role="status">
+                <h1>Opening ShutterSpool…</h1>
+            </section>
             </main>
-            <main v-else-if="session" class="empty" aria-busy="true" role="status">
-                <h1>Checking workspace access…</h1>
+            <main v-else-if="!session && (startup || restoring)" class="empty" aria-busy="true" role="status">
+                <h1>Opening ShutterSpool…</h1>
             </main>
-            <main v-else-if="restoring" class="empty" aria-busy="true" role="status">
-                <h1>Restoring your session…</h1>
-                <p>Checking your sign-in. Your photographs will open when you are ready.</p>
-            </main>
-            <main v-else class="signin">
+            <main v-else-if="!session" class="signin">
                 <img class="signin-mark" src="/shutter-color.png" alt="" width="112" height="112" />
                 <h1>Your photographs.<br />Your next decision.</h1>
                 <p>

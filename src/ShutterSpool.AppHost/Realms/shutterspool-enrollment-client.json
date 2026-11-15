@@ -1,0 +1,13 @@
+{
+  "clientId": "shutterspool-enrollment",
+  "enabled": true,
+  "protocol": "openid-connect",
+  "publicClient": false,
+  "bearerOnly": false,
+  "standardFlowEnabled": false,
+  "implicitFlowEnabled": false,
+  "directAccessGrantsEnabled": false,
+  "serviceAccountsEnabled": true,
+  "fullScopeAllowed": true,
+  "defaultClientScopes": ["roles"]
+}

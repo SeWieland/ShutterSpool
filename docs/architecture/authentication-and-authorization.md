@@ -8,14 +8,14 @@ The [Server reference](../../src/ShutterSpool.Server/README.md#local-security-co
 
 - An external OpenID Connect (OIDC) issuer authenticates a person. ShutterSpool does not store or check management passwords.
 - The Server validates the issuer, audience, signature and expiry. Provider roles do not grant workspace access.
-- The Server then checks an active local membership in PostgreSQL, keyed by the token's stable issuer and subject, and the permission required by the operation. Media reads also apply the member's current visibility scope.
+- The Server checks current local permission for the token's stable issuer and subject: workspace operations require active membership and the allowed role; viewing or accepting an invitation requires its exact recipient binding. Media reads also apply the member's current visibility scope.
 - PostgreSQL is the authority for grants and credential state. Valkey is not in the authorization path and cannot make stale or revoked access valid.
 
 ```mermaid
 flowchart TD
     Client[Client with bearer token] --> Token{Token valid?}
     Token -->|No| Deny[Deny private access]
-    Token -->|Yes| Grant{Active membership and permission?}
+    Token -->|Yes| Grant{Current local permission?}
     DB[(PostgreSQL)] --> Grant
     Grant -->|No or unavailable| Deny
     Grant -->|Yes| Scope{Resource visible?}
@@ -27,12 +27,12 @@ The web client is outside the trusted authorization boundary. It may hide or sho
 
 ## Why there are two decisions
 
-OIDC answers **who presented this token**, while a local grant answers **whether this person may currently access the selected workspace**. Keeping those separate makes revocation and recovery local, without making ShutterSpool a password store or coupling media/workflow ownership to an identity-provider database.
+OIDC answers **who presented this token**, while local authorization determines **which workspace or invitation operations this person may currently perform**. Keeping those separate makes revocation and recovery local, without making ShutterSpool a password store or coupling media/workflow ownership to an identity-provider database.
 
 | Decision | Authority | What it proves | Failure result |
 | --- | --- | --- | --- |
 | Authentication | Configured OIDC issuer, verified by Server | A token is from the allowed issuer, for this audience and unexpired. | No principal; protected endpoint returns no private data. |
-| Authorization | PostgreSQL, checked by Server | The `(issuer, subject)` has an active membership with the required workspace permission and resource visibility. | Access is denied, including if the database cannot make a safe decision. |
+| Authorization | PostgreSQL, checked by Server | The `(issuer, subject)` has the operation's required membership/role or recipient binding, with its resource visibility. | Access is denied, including if the database cannot make a safe decision. |
 
 Keycloak is an identity provider here, not the owner of photographic permissions. It does not contain individual Assets, Captures, Routes, Destinations, or Delivery permissions. Those records and workspace grants remain ShutterSpool workflow truth in PostgreSQL.
 
@@ -61,6 +61,22 @@ After acquiring that boundary, the operation rechecks the current actor, target 
 The change, operation result and audit commit together. An earlier request check cannot authorize a later access change after the actor loses that authority.
 Owner promotion is a separate confirmed action; an Administrator cannot alter an Owner, and the last active Owner cannot leave or be removed/demoted.
 These ordinary access changes retain operation UUIDs for retry reconciliation. Clients use the capability flags returned by the Server to gate controls; the Server remains authoritative.
+
+## Invited membership
+
+The identity provider owns account setup, email verification, passwords and recovery. The supported Keycloak companion disables public registration and supplies the API's boolean `email_verified` claim. Fresh realms default automatic email verification to off, so an initial Owner without email can sign in and restore the issuer session. Reconciliation preserves the operator's later verification and recovery policy; enabling mandatory verification may intentionally require that Owner to provide and verify email.
+Owners/Administrators enter an email address and non-Owner role. A focused backend Keycloak adapter resolves or creates the native account, then binds a tenant-local offer directly to its trusted issuer/subject. Email is an onboarding address, never the durable membership identity. The dedicated service credential remains in the backend and native reconciler; workspace users receive no administrative credential or global user directory.
+The exact signed-in issuer/subject must explicitly accept using a fresh verified API access token. A browser profile, matching email or provider role cannot substitute for that check.
+See the [operator procedure](../../deploy/operations/README.md#prepare-invited-accounts-and-recipients) and [recipient guide](../workspaces.md#join-an-invited-workspace). External OIDC sign-in remains supported; automated account enrollment is Keycloak-specific.
+
+Creation, renewal and cancellation check current Administrator permission once at endpoint admission; admitted work may finish after that authority changes. No transactional actor recheck or original-inviter membership dependency is required.
+Local offer changes, minimal audit and operation result commit together. Acceptance checks the exact recipient, current revision/state and PostgreSQL time under the tenant consistency boundary, then commits membership and accepted offer together.
+An issued offer survives its inviter's later demotion, removal or departure. Removing the recipient still invalidates their pending offers atomically.
+Acceptance/replay cannot change an existing role or undo later removal. A cancelled offer does not revoke a membership that already joined.
+
+Native account resolution/creation, local offer persistence and setup-email submission are separate outcomes. A native account can remain after local persistence fails; a saved invitation can remain pending after email submission fails. An explicit retry may resend needed native setup mail without duplicating membership; there is no compensating account deletion, mail queue or exactly-once email guarantee.
+New accounts use native verification/password setup with a 24-hour link. Existing credentials and other security controls are preserved; already verified accounts need no setup email. Native links and local offers have independent lifetimes. Completing one does not complete the other, and local cancellation never deletes the identity-provider account.
+Ordinary enrollment uses native email/account control; a stolen setup link may enable control of the intended account. Initial Owner setup remains explicit and locally audited; Owner login recovery uses native IdP facilities, with rare manual grant repair as a trusted maintenance responsibility.
 
 ## Bootstrap and recovery
 
@@ -140,7 +156,7 @@ APIs return a generated Source password only at creation or explicit credential 
 
 ## Constraints for changes
 
-- Authorize request admission in `ShutterSpool.Server`; access-changing operations also recheck current authority inside their atomic tenant update.
+- Authorize request admission in `ShutterSpool.Server`. Membership, Owner and Viewer-policy changes also recheck current authority inside their atomic tenant update; invitation administration uses admission alone.
 - Treat the client, preview service, cache, and identity-provider roles as supporting layers, never as an independent authorization authority.
 - Keep local grants and credential state durable in PostgreSQL; tolerate cache loss safely.
 - Preserve issuer and subject as the stable person reference. Do not make provider-specific identities durable owners of media or workflow records.

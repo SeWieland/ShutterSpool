@@ -21,7 +21,9 @@ import { mayCurate, mayAdminister, workspaceAccess, refreshWorkspaceAccess, clos
 import type { CaptureInboxItemResponse as Capture, CaptureDetailResponse, CaptureCurationResponse, SourceConfigurationResponse } from '../api/models';
 const props = defineProps<{
     captureId?: string;
+    inactive?: boolean;
 }>();
+const emit = defineEmits<{ navigate: [] }>();
 const router = useRouter();
 const workspaceRoute = (path: string) => withWorkspace(path, pageWorkspaceId);
 type View = 'Sources' | 'Curation' | 'Gallery' | 'Delivery' | 'Settings';
@@ -789,6 +791,7 @@ async function returnFromSettings() {
     target?.focus({ preventScroll: true });
 }
 async function switchView(next: View) {
+    emit('navigate');
     if ((next === 'Sources' || next === 'Delivery') && !mayAdminister.value || next === 'Curation' && !mayCurate.value) return;
     if (next === view.value)
         return;
@@ -1228,13 +1231,13 @@ async function submitSingleTrash(id: string, expectedRevision: number) {
 </script>
 
 <template>
-    <ApertureBackground :view="view === 'Settings' ? 'Delivery' : view" :motion-enabled="motionEnabled" :hidden="full" />
+    <ApertureBackground :view="view === 'Settings' ? 'Delivery' : view" :motion-enabled="motionEnabled" :hidden="full || props.inactive" />
     <Teleport to=".app-header">
         <nav class="main-nav" aria-label="Workspace">
             <button
                 v-for="item in availableViews"
                 :key="item"
-                :aria-current="view === item ? 'page' : undefined"
+                :aria-current="!props.inactive && view === item ? 'page' : undefined"
                 @click="switchView(item)"
             >
                 {{ item }}
@@ -1246,6 +1249,7 @@ async function submitSingleTrash(id: string, expectedRevision: number) {
         <span class="live-indicator" :class="{ connected: live.connected.value, offline: !live.online.value, pulsing: motionEnabled }" role="status" :aria-label="!live.online.value ? 'Offline' : live.connected.value ? 'Live updates connected' : 'Live updates reconnecting'" :title="!live.online.value ? 'Offline' : live.connected.value ? 'Live updates connected' : 'Live updates reconnecting'" />
     </Teleport>
     <main
+        v-show="!props.inactive"
         id="workspace"
         class="operational-workspace"
         @change="flushPreferencesOnInteractionEnd"
@@ -1737,7 +1741,7 @@ async function submitSingleTrash(id: string, expectedRevision: number) {
         <button
             v-for="item in availableViews"
             :key="item"
-            :aria-current="view === item ? 'page' : undefined"
+            :aria-current="!props.inactive && view === item ? 'page' : undefined"
             @click="switchView(item)"
         >
             <UIcon

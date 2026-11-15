@@ -25,7 +25,7 @@ services:
       - ./package/realms:/opt/shutterspool:ro
       - ./package/theme:/opt/keycloak/themes/shutterspool:ro
       - ./package/identity-entrypoint.sh:/opt/identity-entrypoint.sh:ro
-    secrets: [postgres-password, keycloak-admin-password, administrator-password]
+    secrets: [postgres-password, keycloak-admin-password, administrator-password, keycloak-enrollment-client-secret]
   server:
     depends_on:
       keycloak-reconciler:
@@ -37,3 +37,5 @@ secrets:
     file: ./secrets/keycloak-admin-password
   administrator-password:
     file: ./secrets/administrator-password
+  keycloak-enrollment-client-secret:
+    file: ./secrets/keycloak-enrollment-client-secret

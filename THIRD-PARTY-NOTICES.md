@@ -14,6 +14,14 @@ and the [sign-in theme font](https://github.com/SeWieland/ShutterSpool/blob/main
 In release artifacts these are `/app/wwwroot/Manrope-OFL.txt` in the Server image and `package/theme/login/resources/fonts/Manrope-OFL.txt` in the Compose ZIP.
 See the [asset guide](https://github.com/SeWieland/ShutterSpool/blob/main/assets/workspace/README.md) for provenance.
 
+## Lucide icons
+
+The web application bundles Lucide icons from its pinned `@iconify-json/lucide` dependency.
+Lucide artwork is distributed under the ISC License, copyright 2026 Lucide Icons and Contributors.
+Icons derived from Feather retain the MIT License, copyright 2013-present Cole Bemis.
+The complete copyright notices, licenses and derived-icon list accompany the [web icons](https://github.com/SeWieland/ShutterSpool/blob/main/src/ShutterSpool.Web/public/lucide-LICENSE.txt), based on the [upstream Lucide license](https://github.com/lucide-icons/lucide/blob/main/LICENSE).
+The Server image includes these terms at `/app/wwwroot/lucide-LICENSE.txt`; **Profile → About & licenses** also links to them.
+
 ## SFTPGo camera ingress
 
 ShutterSpool uses the separate, unmodified SFTPGo Community container for camera FTP/FTPS ingress.

@@ -1,5 +1,11 @@
 {
   "ShutterSpool": {
+    "KeycloakEnrollment": {
+      "ServerUrl": "http://keycloak:8080",
+      "Issuer": "https://identity.example.invalid/realms/shutterspool",
+      "Realm": "shutterspool",
+      "ClientId": "shutterspool-enrollment"
+    },
     "Preview": {
       "PrewarmMode": "Off"
     },

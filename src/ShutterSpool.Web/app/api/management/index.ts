@@ -16,6 +16,8 @@ import { DeliveriesRequestBuilderNavigationMetadata, type DeliveriesRequestBuild
 // @ts-ignore
 import { DestinationsRequestBuilderNavigationMetadata, DestinationsRequestBuilderRequestsMetadata, type DestinationsRequestBuilder } from './destinations/index.js';
 // @ts-ignore
+import { InvitationsRequestBuilderNavigationMetadata, InvitationsRequestBuilderRequestsMetadata, type InvitationsRequestBuilder } from './invitations/index.js';
+// @ts-ignore
 import { MembersRequestBuilderNavigationMetadata, MembersRequestBuilderRequestsMetadata, type MembersRequestBuilder } from './members/index.js';
 // @ts-ignore
 import { MembershipRequestBuilderNavigationMetadata, type MembershipRequestBuilder } from './membership/index.js';
@@ -68,6 +70,10 @@ export interface ManagementRequestBuilder extends BaseRequestBuilder<ManagementR
      * The destinations property
      */
     get destinations(): DestinationsRequestBuilder;
+    /**
+     * The invitations property
+     */
+    get invitations(): InvitationsRequestBuilder;
     /**
      * The members property
      */
@@ -136,6 +142,10 @@ export const ManagementRequestBuilderNavigationMetadata: Record<Exclude<keyof Ma
     destinations: {
         requestsMetadata: DestinationsRequestBuilderRequestsMetadata,
         navigationMetadata: DestinationsRequestBuilderNavigationMetadata,
+    },
+    invitations: {
+        requestsMetadata: InvitationsRequestBuilderRequestsMetadata,
+        navigationMetadata: InvitationsRequestBuilderNavigationMetadata,
     },
     members: {
         requestsMetadata: MembersRequestBuilderRequestsMetadata,

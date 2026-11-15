@@ -30,6 +30,9 @@ export KEYCLOAK_ADMIN="$KC_BOOTSTRAP_ADMIN_USERNAME" KEYCLOAK_ADMIN_PASSWORD="$K
 SHUTTERSPOOL_ADMIN_PASSWORD=$(cat /run/secrets/administrator-password)
 : "${SHUTTERSPOOL_ADMIN_PASSWORD:?The initial administrator password file is empty}"
 export SHUTTERSPOOL_ADMIN_PASSWORD
+SHUTTERSPOOL_ENROLLMENT_CLIENT_SECRET=$(cat /run/secrets/keycloak-enrollment-client-secret)
+: "${SHUTTERSPOOL_ENROLLMENT_CLIENT_SECRET:?The enrollment client secret file is empty}"
+export SHUTTERSPOOL_ENROLLMENT_CLIENT_SECRET
 : "${SHUTTERSPOOL_APP_ORIGIN:?Set the public HTTPS application origin}"
 case "$SHUTTERSPOOL_APP_ORIGIN" in https://*) ;; *) echo 'The application origin must use HTTPS.' >&2; exit 1;; esac
 case "${SHUTTERSPOOL_APP_ORIGIN#https://}" in ''|*[!a-zA-Z0-9.:-]*) echo 'The application origin must be a bare HTTPS origin.' >&2; exit 1;; esac

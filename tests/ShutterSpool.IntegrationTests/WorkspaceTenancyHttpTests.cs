@@ -369,7 +369,7 @@ public sealed partial class WorkspaceTenancyHttpTests
         public WebApplicationFactory<Program> Server { get; } = server;
         public WorkspaceDefinition[] Workspaces { get; } = workspaces;
 
-        public static async Task<TenantHttpFixture> CreateAsync()
+        public static async Task<TenantHttpFixture> CreateAsync(Action<IServiceCollection>? configureServices = null)
         {
             var storage = await WorkspaceTenancyPostgresTests.WorkspaceFixture.CreateAsync();
             await storage.ProvisionAsync();
@@ -381,6 +381,7 @@ public sealed partial class WorkspaceTenancyHttpTests
                 builder.ConfigureAppConfiguration((_, configuration) => configuration.AddConfiguration(storage.Configuration));
                 builder.ConfigureTestServices(services =>
                 {
+                    configureServices?.Invoke(services);
                     // HTTP assertions own request behavior; worker mutation/recovery has its own real-database suite.
                     services.RemoveAll<IHostedService>();
                     services.AddHostedService(provider => provider.GetRequiredService<LiveChangeBuffer>());

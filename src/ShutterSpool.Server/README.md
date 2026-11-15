@@ -59,12 +59,42 @@ Access mutations carry `operationId` and `expectedRevision`. Promotion also requ
 The store commits the change, operation result and audit together. Reuse the same operation identity and inputs to reconcile an uncertain result; use current revisions for a new decision.
 Problem Details distinguish `last-owner` and `membership-conflict` (409), `permission-denied` (403) and `membership-not-found` (404).
 A forbidden action differs from revoked membership: it does not by itself require discarding a still-valid sign-in or workspace membership.
-There is no ordinary create-member or invitation endpoint.
+Ordinary membership activation uses the recipient-bound invitation flow below; there is no unrestricted create-member endpoint.
 Owner login recovery uses [native identity-provider facilities](../../deploy/operations/README.md#owner-login-recovery). A provider role never grants local ownership; irrecoverable identity loss requires exceptional manual operator maintenance, with no custom recovery command.
 
 `GET /management/captures/{id}/delivery-summary` returns authorized safe outcomes: delivery `id`, `assetId`, `state` and `canRetry`, with at most 1,000 items and an explicit `truncated` flag.
 It exposes no provider paths or diagnostics. Raw decisions, delivery/attempt history and operational configuration require Owner or Administrator authority.
 Viewer scope applies before private media lists, detail, counts, tags, Collection projections and previews; filters cannot broaden it.
+
+## Workspace invitations
+
+The [workspace guide](../../docs/workspaces.md#join-an-invited-workspace) explains the user flow; the [operator procedure](../../deploy/operations/README.md#configure-the-enrollment-service) owns native service-client configuration, setup email and failure handling.
+Owners/Administrators invite by email and non-Owner role. A focused Keycloak adapter resolves or creates the account, and the local offer binds its trusted issuer/subject directly. Signing in or completing account setup alone does not create a membership.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /management/invitations` | Owner/Administrator reads local offer state and revisions. |
+| `POST /management/invitations` | Resolve the entered `email` and create an offer with `operationId` and optional `role` (default `Viewer`). |
+| `POST /management/invitations/{id}/renew` | Renew a pending, expired or cancelled offer using `operationId`, `expectedRevision` and optional non-Owner `role`. |
+| `POST /management/invitations/{id}/cancel` | Cancel an unused offer using `operationId` and `expectedRevision`. |
+| `GET /workspace-offers` | Authenticated discovery of only the caller's offers, without requiring membership. Returns `items` and `incomplete`. |
+| `POST /workspace-offers/{workspaceId}/{id}/accept` | Explicit recipient Join with `operationId` and `expectedRevision`; requires the exact principal and a signed boolean `email_verified=true` access-token claim. |
+
+Recipient discovery exposes only its own offer ID, workspace ID/name, role, status, revision and creation/expiry times. It does not expose media, configuration or other members.
+An incomplete discovery is retryable and cannot prove an omitted offer does not exist.
+Allowed offered roles are Viewer, Curator and Administrator. Native account resolution/creation, local offer persistence and setup-email submission are separate outcomes, without a distributed transaction.
+Create/renew responses report `setupEmailStatus` separately: `not-required`, `setup-email-sent` or `setup-email-failed`. A saved pending offer remains valid after setup-email failure; explicitly repeating its operation may resend still-needed native mail. Submission does not prove mailbox delivery, and retries provide no exactly-once email guarantee.
+New accounts receive native verification/password setup; existing credentials and security controls are preserved. Automated enrollment is Keycloak-specific; external OIDC sign-in remains supported.
+
+Creation, renewal and cancellation use the endpoint's current workspace Administrator policy once at admission; admitted work may finish after authority changes. The tenant transaction retains offer revision/state, retry, recipient and membership consistency without another actor-authority check.
+Acceptance checks the exact verified recipient, current offer revision/state and database time under the consistency boundary. An offer is valid only before its expiry, 24 hours after creation.
+Renewal keeps the pending, expired or cancelled offer ID but advances its revision and starts a fresh lifetime; stale versions cannot be accepted. Accepted or recipient-invalidated offers cannot be renewed. After removal, a fresh Create operation creates a new offer identity.
+Acceptance and its audit/result commit with membership activation. Replays report current membership without overwriting a later role change or restoring a removed membership.
+Recipient membership removal invalidates prior pending offers in the same transaction. An inviter's later demotion, removal or departure does not invalidate issued offers or prevent their acceptance.
+
+Problem Details distinguish `email-verification-required` and `permission-denied` (403), `invitation-not-found` (404), and expired/cancelled/invalidated/accepted/conflicting offer states (409).
+Enrollment errors distinguish invalid email (400), unavailable enrollment configuration/provider (503), and unavailable accounts or native policy rejection (409).
+Use the same operation identity and inputs to reconcile an uncertain change; reread current offer/membership state before making a new decision.
 
 ## Workspace configuration
 

@@ -47,7 +47,8 @@ export function workspaceRequestHeaders(
     workspaceId: string | null,
 ): Headers {
     const result = new Headers(headers);
-    if (workspaceId && new URL(url, 'http://workspace.local').pathname !== '/workspaces')
+    const path = new URL(url, 'http://workspace.local').pathname;
+    if (workspaceId && path !== '/workspaces' && !path.startsWith('/workspace-offers'))
         result.set('X-ShutterSpool-Workspace', workspaceId);
     return result;
 }
@@ -57,6 +58,14 @@ export let pageWorkspaceId = typeof window === 'undefined' || window.location.pa
     ? null
     : readWorkspaceId(window.location.search);
 let pageWorkspaceScopeInitialized = typeof window !== 'undefined' && !window.location.pathname.startsWith('/auth/');
+
+export function bindInitialWorkspace(memberships: WorkspaceMembership[], incomplete: boolean): boolean {
+    if (pageWorkspaceId !== null || incomplete) return false;
+    const selection = workspaceSelection(memberships, incomplete, null);
+    if (selection.state !== 'selected') return false;
+    pageWorkspaceId = selection.workspace.id;
+    return true;
+}
 
 export function initializePageWorkspaceFromReturnTarget(target: string): boolean {
     if (pageWorkspaceScopeInitialized || !authCallbackPage || typeof window === 'undefined') return false;

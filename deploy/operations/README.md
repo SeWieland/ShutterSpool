@@ -137,6 +137,9 @@ Moving a validated database/root during recovery requires stopped writers and re
 
 ### Upgrade databases
 
+An earlier pre-alpha invitation schema is incompatible with the current schema, despite sharing its migration identifier. The ordinary upgrade command cannot transform that already-applied schema.
+Use a fresh disposable fixture or deliberate manual schema reconciliation before proceeding. Preserve existing databases, media and keys; do not reset retained data or rewrite migration history to force an upgrade.
+
 After [stopping writers](#stop-writers-before-capture) and capturing an eligible complete backup:
 
 ```sh
@@ -167,6 +170,66 @@ The command records a budget; it does not resize storage or delete media.
 Workspace quotas cannot exceed their allocation or disable its cap. Receive, original, quarantine, temporary-copy and preview writes stay within that boundary.
 Unused allocation cannot be borrowed; physical free-space checks still apply.
 Application tests do not establish filesystem enforcement, power-loss recovery or hosted readiness; qualify those on the selected platform.
+
+## Prepare invited accounts and recipients
+
+Owners and Administrators [invite by email in ShutterSpool](../../docs/workspaces.md#invite-a-member); routine enrollment needs no per-recipient operator approval or handoff command.
+The backend resolves an existing Keycloak account or creates a new one, saves a tenant-local offer bound to its exact issuer/subject, then requests any needed native setup email.
+The recipient signs in, reviews the workspace and offered role, and explicitly joins. Account setup, an ordinary shared application URL or a matching email address alone grants no membership.
+
+The companion keeps public registration off and supplies the API's boolean `email_verified` claim. Fresh realms default automatic email verification to off, allowing initial Owner sign-in and session restoration without email or SMTP.
+Reconciliation preserves the operator's later native verification setting. Enabling mandatory verification may intentionally require the initial Owner to provide and verify email; ordinary invitations always require verified email at Join.
+Email-based password recovery remains an operator setting, disabled on fresh realms and preserved on existing ones. Initial Owner provisioning remains explicit and locally audited; [Owner login recovery](#owner-login-recovery) uses native facilities.
+
+### Configure the enrollment service
+
+The bundled reconciler creates the confidential `shutterspool-enrollment` service client and grants its service account `realm-management/manage-users`.
+This native API privilege permits broad user management in the realm; it is not `realm-admin`. Keep the dedicated credential private to the backend and native reconciler, never in a browser or workspace configuration.
+For an independently operated Keycloak, arrange the equivalent protected service client and native grant with its operator. Other external OIDC providers remain supported for sign-in; this account-resolution/setup automation is Keycloak-specific.
+
+Set the following standard .NET configuration under `ShutterSpool:KeycloakEnrollment`:
+
+| Setting | Value |
+| --- | --- |
+| `ServerUrl` | Keycloak base URL reachable by the Server, such as bundled `http://keycloak:8080`; use validated HTTPS across untrusted networks. |
+| `Issuer` | Exact public realm issuer, identical to `ShutterSpool:Security:Authority`. |
+| `Realm` | Native realm name; default `shutterspool`. |
+| `ClientId` | Dedicated service client ID; default `shutterspool-enrollment`. |
+| `ClientSecret` | The private service-client secret, supplied in `config/appsettings.Production.json`. |
+
+The packaged shared `config/appsettings.json` supplies the non-secret settings. Put the same secret in `secrets/keycloak-enrollment-client-secret` for the bundled reconciler and in Production JSON's `ClientSecret` for the Server.
+Apply the [documented consumer permissions](../README.md#configure-and-start), preserve the credential across restarts and coordinate changes in both consumers. No custom `File` configuration reference is needed.
+AppHost generates and persists its development `keycloak-enrollment-client-secret` parameter and supplies it to both consumers automatically.
+
+Native account/profile restrictions belong to Keycloak configuration. They can reject creation; they do not define per-workspace policy or retroactively reject an existing account. ShutterSpool adds no domain list, approved-recipient catalogue or Organizations membership layer.
+
+### Configure native email
+
+In Keycloak **Realm settings → Email**, configure a verified sender and Resend SMTP: host `smtp.resend.com`, port `465` with SSL/TLS, authentication enabled, username `resend`, and the protected Resend API key as the password.
+Keep TLS certificate validation enabled and provider credentials in the protected native configuration. The Server does not need a Resend key or an email queue.
+After qualifying native email, enable Keycloak's `resetPasswordAllowed` if users should recover their passwords by email. Without SMTP, use trusted native administration for account recovery.
+This setting does not control administrator-issued account-setup emails.
+See the supported [Keycloak administration guide](https://www.keycloak.org/docs/26.6.4/server_admin/) and [Resend SMTP settings](https://resend.com/docs/send-with-smtp).
+Sender/domain approval, provider credentials, mailbox delivery and operating procedures must be qualified on the actual deployment before onboarding people.
+
+### Understand setup and retry outcomes
+
+New accounts receive native `VERIFY_EMAIL` and `UPDATE_PASSWORD` setup actions with an explicit 24-hour link. Existing accounts retain their passwords, MFA and other controls.
+An existing unverified account receives verification; password setup is included only when that action is already pending. An already verified account without pending setup needs no email and discovers its invitation in-app.
+If an existing initial Owner has no email, confirm or add the intended address through trusted native administration before inviting that same account by email. Do not create a replacement identity or reset its credentials for another workspace.
+
+Account resolution/creation, local offer persistence and email submission are separate commits. A native account can remain after a later failure; ShutterSpool never deletes it as compensation.
+Read the saved-offer result separately from `setupEmailStatus`: `not-required`, `setup-email-sent` or `setup-email-failed`.
+If the offer was saved but setup email failed, preserve it and explicitly retry the same operation through **Retry account setup email** while it remains pending. There is no background mail queue or automatic resend.
+If enrollment is unavailable, check the configured issuer, backend reachability, service-client credential and native grant. An unavailable, disabled or ambiguous account requires trusted identity administration; a rejected new account requires reviewing native profile/policy requirements.
+
+A successful native send reports SMTP submission, not mailbox delivery. A timeout may be uncertain: a message can have been accepted even when its acknowledgement was lost. An explicit retry may send another usable message; there is no exactly-once guarantee and resending does not promise to revoke every earlier link.
+Setup finishes at Keycloak, then the recipient uses the ordinary application URL and a fresh OIDC sign-in. Never copy setup tokens into application URLs, logs or analytics, or manufacture an OIDC callback. Preserve normal callback allowlists and state/nonce/PKCE protections.
+The setup lifespan does not change native password-recovery or other action lifetimes. A stolen usable setup link may give control of the intended account; keep setup emails private.
+
+Local offers expire 24 hours after creation independently of native links. Renewal updates a pending, expired or cancelled offer's role, revision and lifetime and may resend still-needed native setup mail; it does not reset existing credentials or change membership.
+An issued offer survives the inviter's later role change or departure. Cancellation, expiry and recipient removal prevent activation; old offers/retries cannot restore a removed recipient. A fresh invitation is required after removal, and accepted offers cannot be renewed.
+Cancelling an unused offer and removing a joined membership are separate operations. Neither deletes or disables the global Keycloak account.
 
 ## Owner login recovery
 

@@ -65,6 +65,7 @@ class ReleasePackageTests(unittest.TestCase):
                 self.assertTrue({".env", ".env.example", "compose.yaml", "profiles/all-camera-edges.yaml",
                                  "README.md", "package/edge-entrypoint.sh", "package/identity-entrypoint.sh",
                                  "package/postgres-init.sh", "package/workspace-databases.sql", "components/workspaces.yaml",
+                                 "package/realms/shutterspool-enrollment-client.json", "components/keycloak.yaml",
                                  "config/appsettings.json", "config/appsettings.Production.json",
                                  "config/appsettings.Maintenance.json",
                                  "certificates/README.md", "operations/README.md"} <= files)
@@ -74,6 +75,15 @@ class ReleasePackageTests(unittest.TestCase):
                 self.assertEqual(NOTICES, bundle.read("THIRD-PARTY-NOTICES.md").decode())
                 self.assertEqual(ATTRIBUTION, json.loads(bundle.read("sftpgo.json")))
                 self.assertEqual(ATTRIBUTION, manifest["sftpgo"])
+                enrollment = json.loads(bundle.read("package/realms/shutterspool-enrollment-client.json"))
+                self.assertTrue(enrollment["serviceAccountsEnabled"])
+                self.assertNotIn("secret", enrollment)
+                identity = bundle.read("components/keycloak.yaml").decode()
+                self.assertIn("file: ./secrets/keycloak-enrollment-client-secret", identity)
+                self.assertIn("administrator-password, keycloak-enrollment-client-secret]", identity)
+                self.assertIn("/run/secrets/keycloak-enrollment-client-secret", bundle.read("package/identity-entrypoint.sh").decode())
+                settings = json.loads(bundle.read("config/appsettings.Production.json"))
+                self.assertIn("REPLACE_WITH", settings["ShutterSpool"]["KeycloakEnrollment"]["ClientSecret"])
                 self.assertEqual(
                     (build_release.ROOT / "src/ShutterSpool.AppHost/Themes/shutterspool/login/resources/fonts/Manrope-OFL.txt").read_bytes(),
                     bundle.read("package/theme/login/resources/fonts/Manrope-OFL.txt"))
