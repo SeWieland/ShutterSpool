@@ -39,7 +39,6 @@ Start with [contributing](../CONTRIBUTING.md), then choose a reference:
 | [Source map](../src/README.md) | Component responsibilities and runnable guides. |
 | [AppHost](../src/ShutterSpool.AppHost/README.md) | Development resources, persistent secrets and startup. |
 | [Tests](../tests/README.md) | .NET, frontend and public script checks, dependencies and evidence limits. |
-| [SonarQube Cloud](sonarqube.md) | Static-analysis setup, quality gates and contributor limits. |
 | [Server](../src/ShutterSpool.Server/README.md) | HTTP behavior, configuration and limits. |
 | [Infrastructure](../src/ShutterSpool.Infrastructure/README.md) | Spool, providers, persistence and restore details. |
 | [Style](style.md), [logging](logging.md), [UI guidance](ui.md) | Contribution conventions. |
