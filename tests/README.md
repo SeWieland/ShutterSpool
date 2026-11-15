@@ -9,6 +9,7 @@ All pull requests, including stacked changes targeting another feature branch, r
 Dependabot checks GitHub Actions, npm, NuGet and Docker images weekly; updates still require the normal checks and maintainer review.
 Docker scans the literal build-stage references in `deploy/Server.Dockerfile`, the shared `deploy/images/compose.yaml` pins, and the packaged component/proxy YAML files. Tags identify the update stream; digests remain the executable identity. SDK updates must still satisfy `global.json`, and database major-version changes need a supported migration path.
 GitHub-managed CodeQL scans Actions, C#, JavaScript/TypeScript and Python on supported pushes and pull requests and on its scheduled runs. Static analysis complements the checks below; it does not qualify camera or recovery behavior.
+The separate [SonarQube workflow](../docs/sonarqube.md) scans .NET and frontend source after maintainer setup, on `main` pushes and same-repository pull requests targeting `main`. Fork and Dependabot pull requests skip this token-dependent analysis; it does not collect test coverage or replace these checks.
 
 Pushes to `main` and all pull requests run the .NET suites with PostgreSQL, frontend type/test/build checks, migration and generated-client consistency checks, camera-client security, edge certificate validation and release-builder checks.
 The release-builder tests use temporary fixtures and perform no application builds or registry writes.

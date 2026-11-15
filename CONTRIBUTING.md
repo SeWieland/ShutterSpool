@@ -29,6 +29,7 @@ Explain the observable problem and intended result. Preserve durable acceptance,
 Follow [code style](docs/style.md) and, for visible changes, the [UI guidance](docs/ui.md).
 Add meaningful regression checks for changed behavior and choose the relevant real PostgreSQL/filesystem checks when persistence or concurrency changes.
 The [test guide](tests/README.md) explains required dependencies, explicit skips and the limits of synthetic evidence.
+The [SonarQube Cloud guide](docs/sonarqube.md) explains static-analysis setup, quality gates and contributor limits.
 
 If an HTTP contract changes, build Server's OpenAPI output and regenerate the client using the Web guide; verify repeated generation is deterministic.
 Update instructions where behavior or commands change, and check Markdown links and anchors.
