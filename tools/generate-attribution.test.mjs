@@ -42,7 +42,7 @@ async function fixture({ platform = { os: 'linux', architecture: 'amd64' }, vers
       if (redirectHost) return new Response(null, { status: 307, headers: { location: `https://${redirectHost}/signed/blob?X-Amz-Signature=synthetic-signature` } });
       return response(configBytes);
     }
-    if (parsed.hostname === 'production.cloudfront.docker.com') {
+    if (parsed.pathname === '/signed/blob') {
       redirectedAuth = init.headers.authorization;
       return response(configBytes);
     }
@@ -115,11 +115,30 @@ test('rejects an OCI config blob that does not match its declared digest', async
   await assert.rejects(generateAttribution({ sourceRoot: f.root, outputDir: f.outputDir, fetchImpl: f.fetchImpl }), /OCI config digest mismatch/);
 });
 
-test('follows only the Docker Hub blob CDN over HTTPS without forwarding registry credentials', async t => {
-  const f = await fixture({ redirectHost: 'production.cloudfront.docker.com' });
-  t.after(() => rm(f.root, { recursive: true, force: true }));
-  await generateAttribution({ sourceRoot: f.root, outputDir: f.outputDir, fetchImpl: f.fetchImpl });
-  assert.equal(f.redirectedAuth, undefined);
+test('follows Docker Hub blob redirects without forwarding registry credentials', async t => {
+  for (const [name, redirectHost] of [
+    ['CloudFront', 'production.cloudfront.docker.com'],
+    ['S3', 'docker-images-prod.s3.dualstack.us-east-1.amazonaws.com'],
+  ]) {
+    await t.test(name, async t => {
+      const f = await fixture({ redirectHost });
+      t.after(() => rm(f.root, { recursive: true, force: true }));
+      const result = await generateAttribution({ sourceRoot: f.root, outputDir: f.outputDir, fetchImpl: f.fetchImpl });
+      assert.equal(result.metadata.revision, revision);
+      assert.equal(f.redirectedAuth, undefined);
+    });
+  }
+});
+
+test('rejects other S3 buckets and lookalike Docker blob hosts', async t => {
+  for (const redirectHost of [
+    'other-bucket.s3.dualstack.us-east-1.amazonaws.com',
+    'docker-images-prod.s3.dualstack.us-east-1.amazonaws.com.evil.example',
+  ]) {
+    const f = await fixture({ redirectHost });
+    t.after(() => rm(f.root, { recursive: true, force: true }));
+    await assert.rejects(generateAttribution({ sourceRoot: f.root, outputDir: f.outputDir, fetchImpl: f.fetchImpl }), /Untrusted redirect/);
+  }
 });
 
 test('reports an untrusted blob redirect hostname without URL credentials or signed query', async t => {

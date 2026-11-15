@@ -5,6 +5,10 @@ import { dirname, join, resolve } from 'node:path';
 
 const sourceDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const MAX_METADATA_BYTES = 2 * 1024 * 1024;
+const DOCKER_BLOB_HOSTS = [
+  'production.cloudfront.docker.com',
+  'docker-images-prod.s3.dualstack.us-east-1.amazonaws.com',
+];
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
 const REVISION = /^[a-f0-9]{40}$/;
 const LABELS = {
@@ -64,7 +68,7 @@ async function get(fetchImpl, url, token, maxBytes) {
       const location = response.headers.get('location');
       const next = location && new URL(location, current);
       if (redirects !== 0 || original.hostname !== 'registry-1.docker.io' || !original.pathname.includes('/blobs/') ||
-          !next || next.protocol !== 'https:' || next.hostname !== 'production.cloudfront.docker.com' || next.username || next.password)
+          !next || next.protocol !== 'https:' || !DOCKER_BLOB_HOSTS.includes(next.hostname) || next.username || next.password)
         throw new Error(`Untrusted redirect from ${original.hostname} to ${next?.hostname || '(missing hostname)'}`);
       current = next;
       continue;
