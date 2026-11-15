@@ -21,17 +21,17 @@ internal sealed class EfCaptureCurationStore(ShutterSpoolDbContext database, Tim
 
     public Task<CaptureMutationResult> UpdateAsync(Guid captureId, int expectedRevision, CaptureCuration curation, CancellationToken cancellationToken) =>
         MutateAsync(captureId, capture => CaptureCurationPolicy.Update(capture, expectedRevision,
-            curation.Rating, curation.Label, curation.Tags), cancellationToken);
+            curation.Rating, curation.Label, curation.Tags), cancellationToken: cancellationToken);
 
     public Task<CaptureMutationResult> HoldAsync(Guid captureId, int expectedRevision, CancellationToken cancellationToken) =>
-        MutateAsync(captureId, capture => CaptureCurationPolicy.Hold(capture, expectedRevision), cancellationToken);
+        MutateAsync(captureId, capture => CaptureCurationPolicy.Hold(capture, expectedRevision), cancellationToken: cancellationToken);
 
     public Task<CaptureMutationResult> RestoreAsync(Guid captureId, int expectedRevision, CancellationToken cancellationToken) =>
-        MutateAsync(captureId, capture => CaptureCurationPolicy.Restore(capture, expectedRevision), cancellationToken);
+        MutateAsync(captureId, capture => CaptureCurationPolicy.Restore(capture, expectedRevision), cancellationToken: cancellationToken);
 
     public Task<CaptureMutationResult> ReleaseNowAsync(Guid captureId, int expectedRevision, CancellationToken cancellationToken) =>
-        MutateAsync(captureId, capture => CaptureCurationPolicy.ReleaseNow(capture, expectedRevision, clock.GetUtcNow()),
-            cancellationToken, lockRoutingForRelease: true);
+        MutateAsync(captureId, capture => CaptureCurationPolicy.ReleaseNow(capture, expectedRevision, clock.GetUtcNow()), lockRoutingForRelease: true,
+            cancellationToken);
 
     public async Task<bool> ReleaseDueOneAsync(DateTimeOffset now, CancellationToken cancellationToken)
     {
@@ -72,8 +72,8 @@ internal sealed class EfCaptureCurationStore(ShutterSpoolDbContext database, Tim
     }
 
     private async Task<CaptureMutationResult> MutateAsync(Guid captureId,
-        Func<CaptureCurationSnapshot, CaptureCurationDecision> mutation,
-        CancellationToken cancellationToken, bool lockRoutingForRelease = false)
+        Func<CaptureCurationSnapshot, CaptureCurationDecision> mutation, bool lockRoutingForRelease = false,
+        CancellationToken cancellationToken = default)
     {
         if (lockRoutingForRelease) LastReleasedCaptureId = null;
         await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);

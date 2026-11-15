@@ -29,7 +29,7 @@ public sealed partial class ConfigurationApiTests
             });
             await database.SaveChangesAsync(token);
         }
-        await using AsyncServiceScope scope = fixture.Server.Services.CreateAsyncScope();
+        await using AsyncServiceScope scope = fixture.Scope();
         var service = scope.ServiceProvider.GetRequiredService<PrivacyErasureSuppressionService>();
         var erasure = scope.ServiceProvider.GetRequiredService<PrivacyErasureService>();
         PrivacyErasureProtectedManifest manifest = await service.CreateExportAsync(token);

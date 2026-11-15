@@ -87,8 +87,8 @@ public sealed class PreviewService(IPreviewSourceResolver sources, IPreviewCache
     PreviewSettings settings, IPreviewActivityPublisher? activity = null, PreviewAssetUseGate? useGate = null,
     IOriginalAssetLock? assetLock = null)
 {
-    public async Task<PreviewResult> GetAsync(Guid captureId, PreviewProfile profile, CancellationToken cancellationToken,
-        int? maximumDimension = null)
+    public async Task<PreviewResult> GetAsync(Guid captureId, PreviewProfile profile,
+        int? maximumDimension = null, CancellationToken cancellationToken = default)
     {
         if (maximumDimension is < 64 or > 4096) throw new ArgumentOutOfRangeException(nameof(maximumDimension));
         PreviewSize size = maximumDimension is int dimension ? new(dimension, dimension) : SizeFor(profile);

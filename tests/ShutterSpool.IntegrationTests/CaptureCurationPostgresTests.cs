@@ -33,7 +33,7 @@ public sealed class CaptureCurationPostgresTests
             await using (var database = new ShutterSpoolDbContext(options))
             {
                 await database.Database.MigrateAsync(token);
-                Guid assetId = await AddAssetAsync(database, sourceId, token);
+                Guid assetId = await AddAssetAsync(database, sourceId, cancellationToken: token);
                 await Assert.ThrowsAsync<InvalidOperationException>(() => new CaptureGroupingService(new EfCaptureGroupingStore(database)).ProcessOneAsync(token));
                 Assert.Equal(0, await ScalarAsync(database, "SELECT count(*) FROM capture_assets WHERE \"AssetId\" = @id", assetId, token));
                 Assert.Equal(1, await ScalarAsync(database, "SELECT count(*) FROM assets WHERE \"Id\" = @id AND \"State\" = 'Spooled'", assetId, token));
@@ -96,7 +96,7 @@ public sealed class CaptureCurationPostgresTests
             await using (var database = new ShutterSpoolDbContext(options))
             {
                 await database.Database.MigrateAsync(token);
-                rawId = await AddAssetAsync(database, sourceId, token, "shoot/SHOT.CR3", "raw", "RAW", firstIngest);
+                rawId = await AddAssetAsync(database, sourceId, "shoot/SHOT.CR3", "raw", "RAW", firstIngest, token);
                 Assert.True(await new CaptureGroupingService(new EfCaptureGroupingStore(database)).ProcessOneAsync(token));
                 captureId = await CaptureIdAsync(database, rawId, token);
             }
@@ -110,13 +110,13 @@ public sealed class CaptureCurationPostgresTests
 
             await using (var database = new ShutterSpoolDbContext(options))
             {
-                jpegId = await AddAssetAsync(database, sourceId, token, "shoot/shot.jpg", "jpeg", "JPEG", complementIngest);
+                jpegId = await AddAssetAsync(database, sourceId, "shoot/shot.jpg", "jpeg", "JPEG", complementIngest, token);
                 Assert.True(await new CaptureGroupingService(new EfCaptureGroupingStore(database)).ProcessOneAsync(token));
-                replayId = await AddAssetAsync(database, sourceId, token, "shoot/SHOT.CR3", "raw", "RAW", complementIngest.AddMinutes(5));
+                replayId = await AddAssetAsync(database, sourceId, "shoot/SHOT.CR3", "raw", "RAW", complementIngest.AddMinutes(5), token);
                 Assert.True(await new CaptureGroupingService(new EfCaptureGroupingStore(database)).ProcessOneAsync(token));
-                immediateCaptureId = await AddAssetAsync(database, sourceId, token, "other/IMMEDIATE.CR3", "immediate", "RAW", complementIngest);
+                immediateCaptureId = await AddAssetAsync(database, sourceId, "other/IMMEDIATE.CR3", "immediate", "RAW", complementIngest, token);
                 Assert.True(await new CaptureGroupingService(new EfCaptureGroupingStore(database)).ProcessOneAsync(token));
-                manualCaptureId = await AddAssetAsync(database, manualSourceId, token, "other/MANUAL.CR3", "manual", "RAW", complementIngest);
+                manualCaptureId = await AddAssetAsync(database, manualSourceId, "other/MANUAL.CR3", "manual", "RAW", complementIngest, token);
                 Assert.True(await new CaptureGroupingService(new EfCaptureGroupingStore(database)).ProcessOneAsync(token));
             }
 
@@ -182,7 +182,7 @@ public sealed class CaptureCurationPostgresTests
             await using (var database = new ShutterSpoolDbContext(options))
             {
                 await database.Database.MigrateAsync(token);
-                assetId = await AddAssetAsync(database, sourceId, token);
+                assetId = await AddAssetAsync(database, sourceId, cancellationToken: token);
                 await database.Database.ExecuteSqlInterpolatedAsync($"UPDATE assets SET \"IngestedAt\" = {DateTimeOffset.UtcNow.AddHours(-2)} WHERE \"Id\" = {assetId}", token);
                 Assert.True(await new CaptureGroupingService(new EfCaptureGroupingStore(database)).ProcessOneAsync(token));
                 captureId = await CaptureIdAsync(database, assetId, token);
@@ -265,7 +265,7 @@ public sealed class CaptureCurationPostgresTests
                     await security.SaveChangesAsync(token);
                 }
                 await database.Database.MigrateAsync(token);
-                assetId = await AddAssetAsync(database, sourceId, token);
+                assetId = await AddAssetAsync(database, sourceId, cancellationToken: token);
                 Assert.True(await new CaptureGroupingService(new EfCaptureGroupingStore(database)).ProcessOneAsync(token));
                 captureId = await CaptureIdAsync(database, assetId, token);
             }
@@ -293,7 +293,7 @@ public sealed class CaptureCurationPostgresTests
             Guid raceCaptureId;
             await using (var database = new ShutterSpoolDbContext(options))
             {
-                raceAssetId = await AddAssetAsync(database, sourceId, token, "race/OTHER.CR3", "race-bytes");
+                raceAssetId = await AddAssetAsync(database, sourceId, "race/OTHER.CR3", "race-bytes", cancellationToken: token);
                 Assert.True(await new CaptureGroupingService(new EfCaptureGroupingStore(database)).ProcessOneAsync(token));
                 raceCaptureId = await CaptureIdAsync(database, raceAssetId, token);
             }
@@ -327,8 +327,8 @@ public sealed class CaptureCurationPostgresTests
         }
     }
 
-    private static async Task<Guid> AddAssetAsync(ShutterSpoolDbContext database, Guid sourceId, CancellationToken cancellationToken,
-        string name = "shot.CR3", string sha = "synthetic", string role = "RAW", DateTimeOffset? ingestedAt = null)
+    private static async Task<Guid> AddAssetAsync(ShutterSpoolDbContext database, Guid sourceId,
+        string name = "shot.CR3", string sha = "synthetic", string role = "RAW", DateTimeOffset? ingestedAt = null, CancellationToken cancellationToken = default)
     {
         Guid assetId = Guid.NewGuid();
         var journal = new EfIngestJournal(database);

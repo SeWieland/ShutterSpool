@@ -22,13 +22,11 @@ done
 
 if ! /opt/keycloak/bin/kcadm.sh get realms/shutterspool >/dev/null 2>&1; then
   /opt/keycloak/bin/kcadm.sh create realms -f /opt/shutterspool/shutterspool-realm.json
+  # Initial Owner login needs no email; preserve operator profile policy on subsequent runs.
+  /opt/keycloak/bin/kcadm.sh update users/profile -r shutterspool -f /opt/shutterspool/shutterspool-user-profile.json
 fi
 
 /bin/sh /opt/shutterspool/select-login-theme.sh
-
-if ! /opt/keycloak/bin/kcadm.sh get roles/shutterspool-admin -r shutterspool >/dev/null 2>&1; then
-  /opt/keycloak/bin/kcadm.sh create roles -r shutterspool -s name=shutterspool-admin
-fi
 
 client_id() {
   /opt/keycloak/bin/kcadm.sh get clients -r shutterspool -q clientId="$1" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1
@@ -58,7 +56,6 @@ reconcile_mapper() {
 reconcile_client shutterspool-server shutterspool-server-client.json >/dev/null
 web_client=$(reconcile_client shutterspool-web shutterspool-web-client.json)
 reconcile_mapper "$web_client" shutterspool-server-audience shutterspool-server-audience-mapper.json
-reconcile_mapper "$web_client" shutterspool-roles shutterspool-roles-mapper.json
 
 administrator_id() {
   /opt/keycloak/bin/kcadm.sh get users -r shutterspool -q username="$SHUTTERSPOOL_ADMIN_USERNAME" -q exact=true --fields id | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
@@ -91,4 +88,3 @@ else
     exit 1
   fi
 fi
-/opt/keycloak/bin/kcadm.sh add-roles -r shutterspool --uusername "$SHUTTERSPOOL_ADMIN_USERNAME" --rolename shutterspool-admin

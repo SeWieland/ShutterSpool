@@ -47,7 +47,8 @@ public sealed class BoundaryTests
     {
         var exported = typeof(InfrastructureServices).Assembly.GetExportedTypes();
         Assert.All(exported, type => Assert.True(type.Namespace == "ShutterSpool.Infrastructure.Composition"
-            || type.Namespace == "ShutterSpool.Infrastructure.Persistence.Migrations", $"Public infrastructure type: {type.FullName}"));
+            || type.Namespace == "ShutterSpool.Infrastructure.Persistence.Migrations"
+            || type.Namespace == "ShutterSpool.Infrastructure.Workspaces.Migrations", $"Public infrastructure type: {type.FullName}"));
         Assert.All(typeof(InfrastructureServices).Assembly.GetTypes().Where(type => type.Name.EndsWith("Entity", StringComparison.Ordinal)
             || type.Name.EndsWith("DbContext", StringComparison.Ordinal)), type => Assert.False(type.IsVisible));
     }

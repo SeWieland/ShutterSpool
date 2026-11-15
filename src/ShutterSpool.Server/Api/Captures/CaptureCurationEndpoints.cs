@@ -113,21 +113,25 @@ public static class CaptureCurationEndpoints
             : Mutation(id, await service.ReleaseNowAsync(id, request.ExpectedRevision, cancellationToken), changes, "release");
 
     private static Task<IResult> UpdateManyAsync(CaptureBulkRequest request, CaptureCurationService service,
-        LiveChangeNotifier changes, IAuthorizationService authorization, HttpContext context, CancellationToken token) => BulkAsync(request, service, changes, authorization, context, "curation", token,
-            items => service.UpdateManyAsync(items, token));
+        LiveChangeNotifier changes, IAuthorizationService authorization, HttpContext context,
+            CancellationToken token) => BulkAsync(request, service, changes, authorization, context, "curation",
+            items => service.UpdateManyAsync(items, token), token);
     private static Task<IResult> HoldManyAsync(CaptureBulkRequest request, CaptureCurationService service,
-        LiveChangeNotifier changes, IAuthorizationService authorization, HttpContext context, CancellationToken token) => BulkAsync(request, service, changes, authorization, context, "release", token,
-            items => service.HoldManyAsync(items, token));
+        LiveChangeNotifier changes, IAuthorizationService authorization, HttpContext context,
+            CancellationToken token) => BulkAsync(request, service, changes, authorization, context, "release",
+            items => service.HoldManyAsync(items, token), token);
     private static Task<IResult> RestoreManyAsync(CaptureBulkRequest request, CaptureCurationService service,
-        LiveChangeNotifier changes, IAuthorizationService authorization, HttpContext context, CancellationToken token) => BulkAsync(request, service, changes, authorization, context, "release", token,
-            items => service.RestoreManyAsync(items, token));
+        LiveChangeNotifier changes, IAuthorizationService authorization, HttpContext context,
+            CancellationToken token) => BulkAsync(request, service, changes, authorization, context, "release",
+            items => service.RestoreManyAsync(items, token), token);
     private static Task<IResult> ReleaseManyAsync(CaptureBulkRequest request, CaptureCurationService service,
-        LiveChangeNotifier changes, IAuthorizationService authorization, HttpContext context, CancellationToken token) => BulkAsync(request, service, changes, authorization, context, "release", token,
-            items => service.ReleaseManyAsync(items, token));
+        LiveChangeNotifier changes, IAuthorizationService authorization, HttpContext context,
+            CancellationToken token) => BulkAsync(request, service, changes, authorization, context, "release",
+            items => service.ReleaseManyAsync(items, token), token);
 
     private static async Task<IResult> BulkAsync(CaptureBulkRequest request, CaptureCurationService service,
-        LiveChangeNotifier changes, IAuthorizationService authorization, HttpContext context, string kind, CancellationToken token,
-        Func<CaptureBulkCurationItem[], Task<CaptureBulkResult[]>> apply)
+        LiveChangeNotifier changes, IAuthorizationService authorization, HttpContext context, string kind,
+        Func<CaptureBulkCurationItem[], Task<CaptureBulkResult[]>> apply, CancellationToken token)
     {
         if (request.Items is null || request.Items.Length is < 1 or > 100 || request.Items.Any(item => item is null)
             || request.Items.Select(item => item.Id).Distinct().Count() != request.Items.Length)

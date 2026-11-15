@@ -25,7 +25,8 @@ using ShutterSpool.Infrastructure.Persistence;
 using ShutterSpool.Infrastructure.Preview;
 using ShutterSpool.Infrastructure.Security;
 using ShutterSpool.Infrastructure.Spool;
-using System.Text.Json;
+using ShutterSpool.Application.Workspaces;
+using ShutterSpool.Infrastructure.Workspaces;
 
 namespace ShutterSpool.Infrastructure.Composition;
 
@@ -33,9 +34,45 @@ public static class InfrastructureServices
 {
     public static IServiceCollection AddShutterSpoolInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
-        services.AddDbContextFactory<ShutterSpoolDbContext>(options => options.UseNpgsql(configuration.GetConnectionString("shutterspool")));
+        AddWorkspacePersistence(services, configuration);
+        AddSecurityAndConfiguration(services, configuration);
+        AddIngestAndSpool(services, configuration);
+        AddCaptureWorkflows(services);
+        AddRetention(services);
+        AddDelivery(services, configuration);
+        AddPreviews(services, configuration);
+        return services;
+    }
+
+    public static Task InitializeShutterSpoolAsync(this IServiceProvider services, IConfiguration configuration, CancellationToken cancellationToken) =>
+        WorkspaceStartup.InitializeAsync(services, configuration, cancellationToken);
+
+    private static IConfiguration Deployment(IServiceProvider provider) =>
+        provider.GetRequiredService<WorkspaceDeploymentConfiguration>().Value;
+
+    private static IConfiguration TenantConfiguration(IServiceProvider provider) =>
+        provider.GetRequiredService<WorkspaceConfiguration>().Value;
+
+    private static void AddWorkspacePersistence(IServiceCollection services, IConfiguration configuration)
+    {
+        // Freeze resolved secrets and manifest values for this process; retargeting requires a restart.
+        services.AddSingleton(_ => new WorkspaceDeploymentConfiguration(new ConfigurationBuilder().AddInMemoryCollection(configuration.AsEnumerable()).Build()));
+        services.AddScoped(_ => new WorkspaceContext());
+        services.AddScoped(provider => new WorkspaceConfiguration(WorkspaceRuntime.Configure(Deployment(provider), provider.GetRequiredService<WorkspaceContext>())));
+        services.AddSingleton<WorkspaceSpoolResources>();
+        services.AddSingleton<WorkspaceWriterLease>();
+        services.AddSingleton<WorkspaceInventory>();
+        services.AddDbContextFactory<WorkspaceControlDbContext>((provider, options) =>
+            options.UseNpgsql(WorkspaceControlDbContext.RuntimeConnection(Deployment(provider))));
+        services.AddScoped<IWorkspaceRegistry, EfWorkspaceRegistry>();
+        services.AddDbContextFactory<ShutterSpoolDbContext>((provider, options) =>
+            options.UseNpgsql(TenantConfiguration(provider).GetConnectionString("shutterspool")), ServiceLifetime.Scoped);
         services.TryAddSingleton(TimeProvider.System);
         services.AddScoped<DatabaseInitializer>();
+    }
+
+    private static void AddSecurityAndConfiguration(IServiceCollection services, IConfiguration configuration)
+    {
         services.Configure<CredentialProtectionOptions>(configuration.GetSection("ShutterSpool:Security"));
         services.AddSingleton<ICredentialProtector, SecretProtector>();
         services.TryAddSingleton(new CameraCredentialPolicy());
@@ -53,40 +90,46 @@ public static class InfrastructureServices
         services.AddScoped<SourceManagementService>();
         services.AddScoped<SourceCredentialVerifier>();
         services.AddScoped<DestinationManagementService>();
+    }
 
+    private static void AddIngestAndSpool(IServiceCollection services, IConfiguration configuration)
+    {
         services.AddScoped<IIngestJournal, EfIngestJournal>();
-        services.AddSingleton<ISpoolAccounting>(provider =>
-            new FileSystemSpoolAccounting(configuration, provider.GetRequiredService<TimeProvider>()));
+        services.AddScoped<ISpoolAccounting>(provider =>
+            new FileSystemSpoolAccounting(TenantConfiguration(provider), provider.GetRequiredService<TimeProvider>()));
         services.AddScoped<EfSpoolQuotaStore>();
         services.AddScoped<ISpoolQuotaStore>(provider => provider.GetRequiredService<EfSpoolQuotaStore>());
         services.AddScoped<IQuotaReservationCommitter>(provider => provider.GetRequiredService<EfSpoolQuotaStore>());
+        services.AddScoped<ISpool>(provider => provider.GetRequiredService<WorkspaceSpoolResources>().Get(
+            provider.GetRequiredService<WorkspaceContext>().Required.Id, new FileSystemSpoolOptions
+        {
+            RootPath = TenantConfiguration(provider)["ShutterSpool:Spool:RootPath"] ?? throw new InvalidOperationException("The spool root path is not configured."),
+            ReservedBytes = long.TryParse(TenantConfiguration(provider)["ShutterSpool:Spool:ReservedBytes"], out long bytes) ? bytes : null,
+            ReservedPercent = double.TryParse(TenantConfiguration(provider)["ShutterSpool:Spool:ReservedPercent"], out double percent) ? percent : null,
+        }));
+        services.AddScoped(provider => new PostgresOriginalAssetLock(TenantConfiguration(provider).GetConnectionString("shutterspool") ?? ""));
+        services.AddScoped<IOriginalAssetLock>(provider => provider.GetRequiredService<PostgresOriginalAssetLock>());
+        services.AddScoped<IExactOriginalRemoval>(provider => new FileSystemExactOriginalRemoval(TenantConfiguration(provider)));
+        services.AddScoped<ICommittedOriginalReader>(provider => new PostgresCommittedOriginalReader(
+            provider.GetRequiredService<ISpool>(), provider.GetRequiredService<IDbContextFactory<ShutterSpoolDbContext>>(),
+            provider.GetRequiredService<PostgresOriginalAssetLock>()));
+        services.AddScoped<IngestService>();
+
+        if (configuration.GetValue<bool>("ShutterSpool:CameraIngress:Enabled"))
+        {
+            services.AddScoped<ICameraIngressStore, EfCameraIngressStore>();
+            services.AddScoped<ICameraIngressDirectories>(provider => new FileSystemCameraIngressDirectories(Path.Combine(TenantConfiguration(provider)["ShutterSpool:Spool:RootPath"]!, ".camera-directories")));
+            services.AddScoped<CameraIngressService>();
+        }
+    }
+
+    private static void AddCaptureWorkflows(IServiceCollection services)
+    {
         services.AddScoped<IAssetMetadataStore, EfAssetMetadataStore>();
         services.AddScoped<ICaptureGroupingStore, EfCaptureGroupingStore>();
         services.AddScoped<ICaptureCurationStore, EfCaptureCurationStore>();
         services.AddScoped<ICaptureFavoriteStore, EfCaptureFavoriteStore>();
         services.AddScoped<CaptureFavoriteService>();
-        services.AddScoped<EfCaptureRetentionStore>();
-        services.AddScoped<ICaptureRetentionReadStore>(provider => provider.GetRequiredService<EfCaptureRetentionStore>());
-        services.AddScoped<ICaptureRetentionMutationStore>(provider => provider.GetRequiredService<EfCaptureRetentionStore>());
-        services.AddScoped<CaptureRetentionMutationService>();
-        services.AddScoped<IRetentionSettingsStore, EfRetentionSettingsStore>();
-        services.AddScoped<RetentionSettingsService>();
-        services.AddScoped<IRetentionCapacityReadStore, EfRetentionCapacityReadStore>();
-        services.AddScoped<RetentionCapacityReadService>();
-        services.AddScoped<IAssetProtectionStore, EfAssetProtectionStore>();
-        services.AddSingleton<IProtectionAdmissionLock>(provider =>
-            new PostgresProtectionAdmissionLock(configuration.GetConnectionString("shutterspool") ?? "",
-                provider.GetRequiredService<ISpool>()));
-        services.AddScoped<AssetProtectionService>();
-        services.AddScoped<IRetentionRemovalStore, EfRetentionRemovalStore>();
-        services.AddSingleton<IRetentionControllerLock>(provider =>
-            new PostgresRetentionControllerLock(configuration.GetConnectionString("shutterspool") ?? ""));
-        services.AddScoped<RetentionRemovalService>();
-        services.AddScoped<PrivacyErasureSuppressionPersistence>();
-        services.AddScoped<IPrivacyErasureStore, EfPrivacyErasureStore>();
-        services.AddScoped<PrivacyErasureService>();
-        services.AddScoped<PrivacyErasureSuppressionService>();
-        services.AddScoped<IPrivacyErasureEvidenceCodec, PrivacyErasureEvidenceCodec>();
         services.AddScoped<ICaptureReadStore, CaptureReadStore>();
         services.AddScoped<CaptureGroupingService>();
         services.AddScoped<CaptureCurationService>();
@@ -101,58 +144,78 @@ public static class InfrastructureServices
         services.AddScoped<IDestinationRoutingStore, DestinationRoutingAdminService>();
         services.AddScoped<DestinationRoutingService>();
         services.AddScoped<MetadataProcessingService>();
-        services.AddSingleton<IMediaMetadataParser, MetadataExtractorMediaMetadataParser>();
-        services.AddSingleton<ISpool>(_ => new FileSystemSpool(new FileSystemSpoolOptions
-        {
-            RootPath = configuration["ShutterSpool:Spool:RootPath"] ?? throw new InvalidOperationException("The spool root path is not configured."),
-            ReservedBytes = long.TryParse(configuration["ShutterSpool:Spool:ReservedBytes"], out long bytes) ? bytes : null,
-            ReservedPercent = double.TryParse(configuration["ShutterSpool:Spool:ReservedPercent"], out double percent) ? percent : null,
-        }));
-        services.AddSingleton(_ => new PostgresOriginalAssetLock(configuration.GetConnectionString("shutterspool") ?? ""));
-        services.AddSingleton<IOriginalAssetLock>(provider => provider.GetRequiredService<PostgresOriginalAssetLock>());
-        services.AddSingleton<IExactOriginalRemoval, FileSystemExactOriginalRemoval>();
-        services.AddSingleton<ICommittedOriginalReader>(provider => new PostgresCommittedOriginalReader(
-            provider.GetRequiredService<ISpool>(), provider.GetRequiredService<IDbContextFactory<ShutterSpoolDbContext>>(),
-            provider.GetRequiredService<PostgresOriginalAssetLock>()));
-        services.AddScoped<IngestService>();
+        services.AddScoped<IMediaMetadataParser, MetadataExtractorMediaMetadataParser>();
+    }
 
-        if (configuration.GetValue<bool>("ShutterSpool:CameraIngress:Enabled"))
-        {
-            string spoolRoot = configuration["ShutterSpool:Spool:RootPath"] ?? throw new InvalidOperationException("The spool root path is not configured.");
-            services.AddScoped<ICameraIngressStore, EfCameraIngressStore>();
-            services.AddSingleton<ICameraIngressDirectories>(_ => new FileSystemCameraIngressDirectories(Path.Combine(spoolRoot, ".camera-directories")));
-            services.AddScoped<CameraIngressService>();
-        }
+    private static void AddRetention(IServiceCollection services)
+    {
+        services.AddScoped<EfCaptureRetentionStore>();
+        services.AddScoped<ICaptureRetentionReadStore>(provider => provider.GetRequiredService<EfCaptureRetentionStore>());
+        services.AddScoped<ICaptureRetentionMutationStore>(provider => provider.GetRequiredService<EfCaptureRetentionStore>());
+        services.AddScoped<CaptureRetentionMutationService>();
+        services.AddScoped<IRetentionSettingsStore, EfRetentionSettingsStore>();
+        services.AddScoped<RetentionSettingsService>();
+        services.AddScoped<IRetentionCapacityReadStore, EfRetentionCapacityReadStore>();
+        services.AddScoped<RetentionCapacityReadService>();
+        services.AddScoped<IAssetProtectionStore, EfAssetProtectionStore>();
+        services.AddScoped<IProtectionAdmissionLock>(provider =>
+            new PostgresProtectionAdmissionLock(TenantConfiguration(provider).GetConnectionString("shutterspool") ?? "",
+                provider.GetRequiredService<ISpool>()));
+        services.AddScoped<AssetProtectionService>();
+        services.AddScoped<IRetentionRemovalStore, EfRetentionRemovalStore>();
+        services.AddScoped<IRetentionControllerLock>(provider =>
+            new PostgresRetentionControllerLock(TenantConfiguration(provider).GetConnectionString("shutterspool") ?? ""));
+        services.AddScoped<RetentionRemovalService>();
+        services.AddScoped<PrivacyErasureSuppressionPersistence>();
+        services.AddScoped<IPrivacyErasureStore, EfPrivacyErasureStore>();
+        services.AddScoped<PrivacyErasureService>();
+        services.AddScoped<PrivacyErasureSuppressionService>();
+        services.AddScoped<IPrivacyErasureEvidenceCodec, PrivacyErasureEvidenceCodec>();
+    }
 
+    private static void AddDelivery(IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddSingleton(_ => new DestinationCapabilities(configuration.GetSection("ShutterSpool:Destinations:EnabledKinds").Get<string[]>()
+            ?? []));
+        var egress = configuration.GetSection("ShutterSpool:Destinations:WebDavEgress").Get<WebDavEgressOptions>() ?? new();
         var delivery = configuration.GetSection("ShutterSpool:DeliveryWorker").Get<DeliveryWorkerSettings>() ?? new();
         delivery.Validate();
         services.AddSingleton(delivery);
         services.AddScoped<IDeliveryWorkStore, EfDeliveryWorkProcessor>();
-        services.AddSingleton<IDestinationDeliveryAdapter, LocalDestinationDeliveryAdapter>();
+        services.AddScoped<IDestinationDeliveryAdapter, LocalDestinationDeliveryAdapter>();
         services.AddScoped<ILocalDestinationConfiguration, LocalDestinationConfigurationService>();
         services.AddScoped<IWebDavDestinationConfiguration, EfWebDavDestinationConfiguration>();
         services.AddHttpClient("webdav", client => client.Timeout = Timeout.InfiniteTimeSpan)
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false })
+            .ConfigurePrimaryHttpMessageHandler(() => new WebDavEgressPolicy(egress).CreateHandler())
             .RemoveAllLoggers();
-        services.AddSingleton<WebDavDestinationDeliveryAdapter>();
-        services.AddSingleton<IDestinationDeliveryAdapter>(provider => provider.GetRequiredService<WebDavDestinationDeliveryAdapter>());
-        services.AddSingleton<DeliveryAdapterRegistry>();
+        services.AddScoped<WebDavDestinationDeliveryAdapter>();
+        services.AddScoped<IDestinationDeliveryAdapter>(provider => provider.GetRequiredService<WebDavDestinationDeliveryAdapter>());
+        services.AddScoped<DeliveryAdapterRegistry>();
         services.AddScoped<DeliveryProcessingService>();
         services.AddSingleton<IDeliveryWorkSignal>(_ => new ValkeyDeliveryWorkSignal(configuration.GetConnectionString("valkey")));
+    }
 
+    private static void AddPreviews(IServiceCollection services, IConfiguration configuration)
+    {
         var preview = configuration.GetSection("ShutterSpool:Preview").Get<PreviewSettings>() ?? new();
         preview.Validate();
-        services.AddSingleton(preview);
-        services.AddSingleton<PreviewGenerationGate>();
-        services.AddSingleton<PreviewAssetUseGate>();
+        services.AddSingleton<WorkspacePreviewResources>();
+        services.AddScoped(provider =>
+            provider.GetRequiredService<WorkspacePreviewResources>().Settings(provider.GetRequiredService<WorkspaceContext>().Required.Id,
+                () => TenantConfiguration(provider).GetSection("ShutterSpool:Preview").Get<PreviewSettings>() ?? new()));
+        services.AddSingleton(_ => new PreviewGenerationGate(preview));
+        services.AddScoped(provider => provider.GetRequiredService<WorkspacePreviewResources>()
+            .Uses(provider.GetRequiredService<WorkspaceContext>().Required.Id));
         services.AddScoped<IPreviewSourceResolver, EfPreviewSourceResolver>();
-        services.AddSingleton(provider => new FileSystemPreviewCache(configuration,
-            provider.GetRequiredService<IServiceScopeFactory>()));
-        services.AddSingleton<IPreviewCacheReclaimer>(provider => provider.GetRequiredService<FileSystemPreviewCache>());
-        services.AddSingleton<IPreviewCache>(provider => preview.CacheMode == PreviewCacheMode.Memory
-            ? new MemoryPreviewCache(preview)
+        services.AddScoped(provider => new FileSystemPreviewCache(TenantConfiguration(provider),
+            new WorkspaceBoundScopeFactory(provider.GetRequiredService<IServiceScopeFactory>(),
+                provider.GetRequiredService<WorkspaceContext>().Required)));
+        services.AddScoped<IPreviewCacheReclaimer>(provider => provider.GetRequiredService<FileSystemPreviewCache>());
+        services.AddScoped<IPreviewCache>(provider => provider.GetRequiredService<PreviewSettings>().CacheMode == PreviewCacheMode.Memory
+            ? provider.GetRequiredService<WorkspacePreviewResources>().Cache(provider.GetRequiredService<WorkspaceContext>().Required.Id,
+                provider.GetRequiredService<PreviewSettings>())
             : provider.GetRequiredService<FileSystemPreviewCache>());
-        services.AddSingleton<IPreviewAssetCacheInvalidator>(provider =>
+        services.AddScoped<IPreviewAssetCacheInvalidator>(provider =>
             new PreviewAssetCacheInvalidator((IPreviewAssetCacheInvalidator)provider.GetRequiredService<IPreviewCache>(),
                 provider.GetRequiredService<FileSystemPreviewCache>()));
         services.AddScoped<IPreviewPrewarmStore, EfPreviewPrewarmStore>();
@@ -164,52 +227,5 @@ public static class InfrastructureServices
             client.Timeout = Timeout.InfiniteTimeSpan;
         });
         services.AddScoped<IPreviewGenerator>(provider => provider.GetRequiredService<ImaginaryPreviewGenerator>());
-        return services;
-    }
-
-    public static async Task InitializeShutterSpoolAsync(this IServiceProvider services, IConfiguration configuration, CancellationToken cancellationToken)
-    {
-        await using var scope = services.CreateAsyncScope();
-        _ = scope.ServiceProvider.GetRequiredService<DeliveryAdapterRegistry>();
-        if (string.IsNullOrWhiteSpace(configuration.GetConnectionString("shutterspool")))
-        {
-            if (configuration.GetValue<bool>("ShutterSpool:CameraIngress:Enabled"))
-                throw new InvalidOperationException("Camera ingress requires the authoritative PostgreSQL connection.");
-            return;
-        }
-        string spoolRoot = configuration["ShutterSpool:Spool:RootPath"] ?? throw new InvalidOperationException("The spool root path is not configured.");
-        DatabaseInitializer initializer = scope.ServiceProvider.GetRequiredService<DatabaseInitializer>();
-        await initializer.InitializeAsync(spoolRoot, cancellationToken, async token =>
-        {
-            bool suppressionReconciled = false;
-            async Task ReconcileSuppressionAsync(CancellationToken proofToken)
-            {
-                await SuppressionRestoreGate.ReconcileAsync(configuration,
-                    scope.ServiceProvider.GetRequiredService<PrivacyErasureSuppressionService>(),
-                    scope.ServiceProvider.GetRequiredService<PrivacyErasureService>(), proofToken);
-                suppressionReconciled = true;
-            }
-
-            if (configuration.GetValue<bool>("ShutterSpool:Deployment:Packaged"))
-                await initializer.ValidateSecretKeyAsync(scope.ServiceProvider.GetRequiredService<ICredentialProtector>(), token,
-                    configuration.GetValue<bool>("ShutterSpool:Restore:Enabled") ? ReconcileSuppressionAsync : null);
-            if (configuration.GetValue<bool>("ShutterSpool:Restore:Enabled") && !suppressionReconciled)
-                await ReconcileSuppressionAsync(token);
-            string? previewCacheJson = await scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>()
-                .RetentionPolicies.AsNoTracking().Where(policy => policy.Id == 1)
-                .Select(policy => policy.PreviewCacheJson).SingleOrDefaultAsync(token);
-            if (previewCacheJson is not null)
-                (JsonSerializer.Deserialize<PreviewCacheSettings>(previewCacheJson, new JsonSerializerOptions(JsonSerializerDefaults.Web))
-                    ?? throw new InvalidOperationException("The saved preview cache settings are invalid."))
-                    .ApplyTo(services.GetRequiredService<PreviewSettings>());
-            string? issuer = configuration["ShutterSpool:Security:BootstrapIssuer"];
-            string? subject = configuration["ShutterSpool:Security:BootstrapSubject"];
-            if (!string.IsNullOrWhiteSpace(issuer) && !string.IsNullOrWhiteSpace(subject))
-                await scope.ServiceProvider.GetRequiredService<IAccessGrantStore>().BootstrapAsync(issuer, subject, token);
-            await scope.ServiceProvider.GetRequiredService<IngestService>().RecoverAsync(token);
-            if (configuration.GetValue<bool>("ShutterSpool:CameraIngress:Enabled"))
-                await scope.ServiceProvider.GetRequiredService<CameraIngressService>().RecoverAsync(
-                    configuration.GetValue("ShutterSpool:CameraIngress:TransferTimeoutSeconds", 600), token);
-        });
     }
 }

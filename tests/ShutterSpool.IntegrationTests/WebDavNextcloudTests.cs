@@ -47,7 +47,7 @@ public sealed partial class DeliveryWorkerPostgresTests
             || !container.All(character => char.IsAsciiLetterOrDigit(character) || character == '-'))
             throw SkipException.ForSkip("Set SHUTTERSPOOL_NEXTCLOUD_CONTAINER to an explicitly disposable m201-* container.");
         CancellationToken token = TestContext.Current.CancellationToken;
-        await using TestDatabase fixture = await TestDatabase.CreateAsync(token, originalName);
+        await using TestDatabase fixture = await TestDatabase.CreateAsync(originalName, token);
         using var clients = new NextcloudClients();
         string root = await CreateProviderCollectionAsync(profile, clients, token);
         var protector = new SecretProtector(Options.Create(new CredentialProtectionOptions
@@ -57,13 +57,13 @@ public sealed partial class DeliveryWorkerPostgresTests
         string localRoot = Path.Combine(fixture.SpoolRoot, "local");
         Directory.CreateDirectory(localRoot);
         Assert.Null(await new ShutterSpool.Infrastructure.Destinations.Local.LocalDestinationConfigurationService(database)
-            .ConfigureAsync(fixture.DestinationId, localRoot, token));
+            .ConfigureAsync(fixture.DestinationId, 1, localRoot, token));
         Guid remote = Guid.NewGuid();
         database.Destinations.Add(new DestinationEntity { Id = remote, Name = "synthetic-webdav", Kind = "webdav" });
         await database.SaveChangesAsync(token);
         var configuration = new EfWebDavDestinationConfiguration(database, protector, new WebDavDestinationDeliveryAdapter(clients));
-        Assert.Null(await configuration.ConfigureAsync(remote, root, profile.Username, profile.Password, token));
-        Assert.True((await configuration.TestAsync(remote, token)).Writable);
+        Assert.Null(await configuration.ConfigureAsync(remote, 0, root, profile.Username, profile.Password, token));
+        Assert.True((await configuration.TestWithRevisionAsync(remote, token)).Writable);
         await new DestinationRoutingAdminService(database).SetAsync(new(remote, true,
             [new("all", "All", 0, true, [], "nested", "{suppliedName}")]), token);
         var actions = CreateActions(database, fixture.Originals);
@@ -77,12 +77,12 @@ public sealed partial class DeliveryWorkerPostgresTests
         try
         {
             await ProviderContainerAsync("stop", container, token);
-            Assert.True(await Worker().ProcessOneAsync(token));
+            Assert.True(await Worker().ProcessOneAsync(cancellationToken: token));
             Assert.Equal("Delivered", await database.Database.SqlQuery<string>($"SELECT \"State\" AS \"Value\" FROM deliveries WHERE \"DestinationId\" = {fixture.DestinationId}").SingleAsync(token));
-            Assert.True(await Worker().ProcessOneAsync(token));
+            Assert.True(await Worker().ProcessOneAsync(cancellationToken: token));
             Assert.Equal("RetryWait", await database.Database.SqlQuery<string>($"SELECT \"State\" AS \"Value\" FROM deliveries WHERE \"DestinationId\" = {remote}").SingleAsync(token));
             var due = await database.Database.SqlQuery<DateTimeOffset>($"SELECT \"NextAttemptAt\" AS \"Value\" FROM deliveries WHERE \"DestinationId\" = {remote}").SingleAsync(token);
-            Assert.False(await Worker().ProcessOneAsync(token));
+            Assert.False(await Worker().ProcessOneAsync(cancellationToken: token));
             Assert.Equal(due, await database.Database.SqlQuery<DateTimeOffset>($"SELECT \"NextAttemptAt\" AS \"Value\" FROM deliveries WHERE \"DestinationId\" = {remote}").SingleAsync(token));
             Assert.Equal("Delivered", await database.Database.SqlQuery<string>($"SELECT \"State\" AS \"Value\" FROM deliveries WHERE \"DestinationId\" = {fixture.DestinationId}").SingleAsync(token));
         }
@@ -90,12 +90,12 @@ public sealed partial class DeliveryWorkerPostgresTests
         // Container start returns before Apache's listener. This bounded wait is provider readiness, not delivery retry acceleration.
         await Task.Delay(TimeSpan.FromSeconds(3), token);
         clock.Advance(TimeSpan.FromMinutes(1));
-        Assert.True(await Worker().ProcessOneAsync(token));
+        Assert.True(await Worker().ProcessOneAsync(cancellationToken: token));
         Assert.Equal("Delivered", await database.Database.SqlQuery<string>($"SELECT \"State\" AS \"Value\" FROM deliveries WHERE \"DestinationId\" = {remote}").SingleAsync(token));
         Assert.Equal("AcknowledgedCompleteWrite", await database.Database.SqlQuery<string>($"SELECT \"ConfirmationEvidence\" AS \"Value\" FROM deliveries WHERE \"DestinationId\" = {remote}").SingleAsync(token));
         Assert.Equal(1, await database.Database.SqlQuery<int>($"SELECT count(*)::int AS \"Value\" FROM delivery_attempts a JOIN deliveries d ON d.\"Id\" = a.\"DeliveryId\" WHERE d.\"DestinationId\" = {fixture.DestinationId}").SingleAsync(token));
-        Assert.Null(await configuration.ConfigureAsync(remote, root, profile.Username, profile.Password, token));
-        Assert.Equal("IDENTITY_LOCKED", await configuration.ConfigureAsync(remote, profile.Url, profile.Username, profile.Password, token));
+        Assert.Null(await configuration.ConfigureAsync(remote, 2, root, profile.Username, profile.Password, token));
+        Assert.Equal("IDENTITY_LOCKED", await configuration.ConfigureAsync(remote, 3, profile.Url, profile.Username, profile.Password, token));
         byte[] original = await File.ReadAllBytesAsync(Path.Combine(fixture.SpoolRoot, "spool", fixture.AssetId.ToString("N")), token);
         Assert.Equal(original, await File.ReadAllBytesAsync(Path.Combine(localRoot, "folder", originalName), token));
     }

@@ -23,16 +23,12 @@ RUN test -n "$VERSION" && test -n "$COMMIT" && \
     dotnet restore src/ShutterSpool.Server --locked-mode && \
     dotnet publish src/ShutterSpool.Server --no-restore -c Release -o /out \
       -p:OpenApiGenerateDocuments=false -p:Version="$VERSION" -p:SourceRevisionId="$COMMIT"
-RUN mkdir -p /runtime/var/lib/shutterspool/spool /runtime/var/cache/shutterspool && \
-    chown -R 1654:1654 /runtime/var/lib/shutterspool /runtime/var/cache/shutterspool
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:9e3919aff68057f3e45125c5255a71d3b5f40364e45ede883348688851b9f0df
 WORKDIR /app
 COPY --from=build --chown=1654:1654 /out/ ./
 COPY LICENSE ./
 COPY --from=web /source/artifacts/attribution/THIRD-PARTY-NOTICES.md /source/artifacts/attribution/sftpgo.json ./
-COPY --from=build --chown=1654:1654 /runtime/var/lib/shutterspool/ /var/lib/shutterspool/
-COPY --from=build --chown=1654:1654 /runtime/var/cache/shutterspool/ /var/cache/shutterspool/
 ARG VERSION
 ARG COMMIT
 LABEL org.opencontainers.image.version=$VERSION org.opencontainers.image.revision=$COMMIT

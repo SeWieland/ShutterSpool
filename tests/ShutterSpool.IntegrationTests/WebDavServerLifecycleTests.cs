@@ -20,7 +20,7 @@ public sealed partial class DeliveryWorkerPostgresTests
             || !container.All(character => char.IsAsciiLetterOrDigit(character) || character == '-'))
             throw Xunit.Sdk.SkipException.ForSkip("Set SHUTTERSPOOL_NEXTCLOUD_CONTAINER to a disposable m201-* container.");
         CancellationToken token = TestContext.Current.CancellationToken;
-        await using TestDatabase fixture = await TestDatabase.CreateAsync(token);
+        await using TestDatabase fixture = await TestDatabase.CreateAsync(token: token);
         using var clients = new NextcloudClients();
         string root = await CreateProviderCollectionAsync(profile, clients, token);
         string key = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
@@ -36,12 +36,12 @@ public sealed partial class DeliveryWorkerPostgresTests
         await database.SaveChangesAsync(token);
         string localRoot = Path.Combine(fixture.SpoolRoot, "local");
         Directory.CreateDirectory(localRoot);
-        Assert.Null(await new LocalDestinationConfigurationService(database).ConfigureAsync(fixture.DestinationId, localRoot, token));
+        Assert.Null(await new LocalDestinationConfigurationService(database).ConfigureAsync(fixture.DestinationId, 1, localRoot, token));
         Guid remote = Guid.NewGuid();
         database.Destinations.Add(new DestinationEntity { Id = remote, Name = "synthetic-runtime-webdav", Kind = "webdav" });
         await database.SaveChangesAsync(token);
         Assert.Null(await new EfWebDavDestinationConfiguration(database, protector, new WebDavDestinationDeliveryAdapter(clients))
-            .ConfigureAsync(remote, root, profile.Username, profile.Password, token));
+            .ConfigureAsync(remote, 0, root, profile.Username, profile.Password, token));
         await new DestinationRoutingAdminService(database).SetAsync(new(remote, true,
             [new("all", "All", 0, true, [], "runtime", "{suppliedName}")]), token);
         var actions = CreateActions(database, fixture.Originals);

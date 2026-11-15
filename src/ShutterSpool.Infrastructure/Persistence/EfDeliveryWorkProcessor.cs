@@ -5,11 +5,13 @@ using ShutterSpool.Application.Security;
 using ShutterSpool.Domain.Captures;
 using ShutterSpool.Domain.Delivery;
 using System.Diagnostics;
+using ShutterSpool.Application.Destinations;
 
 namespace ShutterSpool.Infrastructure.Persistence;
 
 internal sealed class EfDeliveryWorkProcessor(IDbContextFactory<ShutterSpoolDbContext> databaseFactory,
-    TimeProvider clock, DeliveryWorkerSettings settings, ICredentialProtector protector) : IDeliveryWorkStore
+    TimeProvider clock, DeliveryWorkerSettings settings, ICredentialProtector protector,
+    DestinationCapabilities? capabilities = null) : IDeliveryWorkStore
 {
     private readonly string _workerId = $"{Environment.MachineName[..Math.Min(Environment.MachineName.Length, 94)]}:{Guid.NewGuid():N}";
 
@@ -17,6 +19,7 @@ internal sealed class EfDeliveryWorkProcessor(IDbContextFactory<ShutterSpoolDbCo
     {
         await using ShutterSpoolDbContext database = await databaseFactory.CreateDbContextAsync(cancellationToken);
         DateTimeOffset now = clock.GetUtcNow();
+        string[] enabledKinds = [.. (capabilities ?? DestinationCapabilities.All).EnabledKinds];
         await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await LockRoutingAsync(database, cancellationToken);
         DeliveryEntity? delivery = await database.Deliveries.FromSqlInterpolated($"""
@@ -44,6 +47,7 @@ internal sealed class EfDeliveryWorkProcessor(IDbContextFactory<ShutterSpoolDbCo
                         AND attempt."Result" = 'Uncertain'
                         AND attempt."RetryNumber" = (SELECT max(latest."RetryNumber") FROM delivery_attempts latest WHERE latest."DeliveryId" = d."Id")))
                 )
+                AND config."Kind" = ANY({enabledKinds})
                 AND EXISTS (SELECT 1 FROM capture_assets member JOIN captures capture ON capture."Id" = member."CaptureId"
                     WHERE member."AssetId" = d."AssetId" AND capture."RetentionDisposition" = 'Active'
                         AND NOT capture."RetentionPaused")

@@ -21,11 +21,16 @@ public sealed class DestinationConfigurationConflictProblemDetails : Microsoft.A
     public required DestinationResponse Current { get; init; }
 }
 public sealed record DestinationConfigurationPageResponse(DestinationResponse[] Items, string? NextCursor);
+/// <summary>Destination kinds enabled by the deployment operator.</summary>
+public sealed record DestinationCapabilitiesResponse(IReadOnlyList<string> EnabledKinds);
 
 public static class DestinationEndpoints
 {
     public static RouteGroupBuilder MapDestinationEndpoints(this RouteGroupBuilder management)
     {
+        management.MapGet("/destinations/capabilities", (DestinationCapabilities capabilities) =>
+            Results.Ok(new DestinationCapabilitiesResponse(capabilities.EnabledKinds)))
+            .WithSummary("Read destination deployment capabilities").Produces<DestinationCapabilitiesResponse>();
         management.MapGet("/destinations", ListAsync).WithSummary("List configured Destinations").Produces<DestinationConfigurationPageResponse>().ProducesValidationProblem();
         management.MapGet("/destinations/{id:guid}", GetAsync).WithSummary("Read Destination configuration").Produces<DestinationResponse>().ProducesProblem(404);
         management.MapPut("/destinations/{id:guid}", UpdateAsync).WithSummary("Update Destination name")

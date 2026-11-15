@@ -35,8 +35,6 @@ internal static class ComposePackage
             Ipam = new Ipam { Config = [new() { ["subnet"] = "${IDENTITY_PROXY_SUBNET:?Set a free private /28 subnet for the identity proxy}" }] },
         };
         file.Volumes.Clear();
-        foreach (string name in new[] { "spool", "previews" })
-            file.Volumes[name] = new Volume { Name = "${COMPOSE_PROJECT_NAME:?Set a unique installation name}-" + name };
         foreach (var service in file.Services.Values)
         {
             service.Ports.Clear();
@@ -62,21 +60,12 @@ internal static class ComposePackage
             ["ASPNETCORE_URLS"] = "http://0.0.0.0:8080",
             ["ASPNETCORE_ENVIRONMENT"] = "Production",
             ["ShutterSpool__Deployment__Packaged"] = "true",
-            ["ShutterSpool__Security__EncryptionKeyFile"] = "/run/secrets/encryption-key",
-            ["ConnectionStrings__shutterspoolFile"] = "/run/secrets/database-connection",
-            ["ShutterSpool__Spool__RootPath"] = "/var/lib/shutterspool/spool",
-            ["ShutterSpool__Preview__CacheRootPath"] = "/var/cache/shutterspool",
             ["ShutterSpool__Preview__ImaginaryUrl"] = "http://imaginary:9000",
             ["ShutterSpool__ForwardedHeaders__KnownNetworks__0"] = "${PROXY_SUBNET:?Set the proxy-facing subnet trusted for forwarded headers}",
         };
         server.DependsOn.Clear();
         server.Networks = ["backend", "proxy"];
-        server.Volumes.Add(Mount("volume", "spool", "/var/lib/shutterspool/spool"));
-        server.Volumes.Add(Mount("volume", "previews", "/var/cache/shutterspool"));
-        server.Volumes.Add(Mount("bind", "./config/server.json", "/app/appsettings.Production.json", true));
         server.Volumes.Add(Mount("bind", "./restore-evidence", "/run/restore-evidence", true));
-        Secret(file, server, "encryption-key");
-        Secret(file, server, "database-connection");
         server.Healthcheck = Health(["CMD", "dotnet", "ShutterSpool.Server.dll", "--health-check"]);
 
         foreach (var (name, edge) in file.Services.Where(item => item.Key.StartsWith("camera-edge", StringComparison.Ordinal)))
@@ -112,12 +101,10 @@ internal static class ComposePackage
         }
         if (file.Services.Keys.Any(name => name.StartsWith("camera-edge", StringComparison.Ordinal)))
         {
-            Secret(file, server, "camera-callback-key");
             server.Environment["ShutterSpool__CameraIngress__Enabled"] = "true";
             server.Environment["ShutterSpool__CameraIngress__Hostname"] = "${INGEST_HOSTNAME:?Set the certificate and Source ingest hostname}";
             server.Environment["ShutterSpool__CameraIngress__InternalPort"] = "8081";
             server.Environment["ShutterSpool__CameraIngress__CallbackBaseUrl"] = "http://server:8081/internal/camera";
-            server.Environment["ShutterSpool__CameraIngress__CallbackKeyFile"] = "/run/secrets/camera-callback-key";
             server.Volumes.Add(Mount("bind", "./certificates/root.pem", "/run/certificates/root.pem", true));
         }
 
@@ -127,8 +114,6 @@ internal static class ComposePackage
         file.Services.Remove("keycloak-reconciler");
         foreach (string name in file.Secrets.Keys.Where(name => !file.Services.Values.Any(service => service.Secrets.Any(secret => secret.Source == name))).ToArray())
             file.Secrets.Remove(name);
-        file.Secrets["database-connection"] = new Secret { File = "./secrets/database-connection" };
-        file.Secrets["encryption-key"] = new Secret { File = "./secrets/encryption-key" };
     }
 
     private static Volume Mount(string type, string source, string target, bool readOnly = false) =>

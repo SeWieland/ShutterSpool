@@ -41,7 +41,11 @@ Keep photographs and curation controls prominent; disclose operational evidence 
 [PRODUCT.md](../../PRODUCT.md) explains the intended experience, [DESIGN.md](../../DESIGN.md) the established visual system.
 
 The SPA uses same-origin `/auth/config`, generated Kiota requests and `/live/changes` hints.
-The shell retains one workspace across `/` and `/captures/:id`; explicit Capture links open the requested photograph in Gallery.
+After sign-in, the shell loads the authenticated user's workspace memberships and confirms any URL selection before mounting private content.
+Complete discovery with exactly one accessible workspace and no explicit selection opens that workspace automatically.
+Otherwise, choose a listed workspace. An incomplete query stays retryable and permits explicitly choosing a confirmed workspace; it never opens an unconfirmed workspace or replaces an invalid or unavailable URL selection.
+The selected workspace ID stays in the page URL as `?workspace=<guid>` and is sent as `X-ShutterSpool-Workspace` on scoped API and authenticated preview requests. The live hub receives the same ID in its URL because WebSocket handshakes cannot set the scope header. Server membership checks remain authoritative; a URL value never grants access.
+The shell retains one selected workspace across `/` and `/captures/:id`; explicit Capture links open the requested photograph in Gallery. Switching workspaces confirms the existing unsaved-work departure guard, then reloads the shell so private drafts, previews and live state cannot cross workspace boundaries.
 Paged Capture reads and a bounded tile window keep browsing independent of original media size.
 Original downloads are not offered by this workspace; selection does not fetch originals.
 
@@ -79,7 +83,7 @@ Background loading or migration must not overwrite another tab's newer saved rec
 Bearer/refresh/ID tokens, private previews and curation drafts stay in memory.
 Only short-lived OIDC/PKCE transaction state uses tab-scoped `sessionStorage` (five-minute expiry).
 Validated workspace, appearance and filter preferences persist, along with account-scoped markers for unfinished destination setup.
-Selections and curation drafts do not persist. Credentials are write-only.
+Workspace selection remains in the active page URL and is not copied into browser storage. Capture selections and curation drafts do not persist. Credentials are write-only.
 The Server owns authorization and workflow truth, even when the UI hides a control.
 
 Curation autosave coalesces edits with at most one request in flight per Capture.
@@ -114,6 +118,7 @@ Custom password fields clear after submission; generated passwords appear only o
 An uncertain write requires a configuration reread before another deliberate action; no automatic retry or secret recovery is offered.
 Storage impact and privacy erasure use separate server previews and confirmations; incomplete impact cannot authorize automatic-removal activation.
 Storage capacity uses disjoint authoritative categories and the latest checked saved quota state, independently of the editing baseline.
+When the Server reports an assigned workspace allocation, Storage requires an active limit no greater than that allocation; the allocation is not deployment-wide free space.
 The dedicated review binds changed values and estimates to an immutable draft and request generation; returning to editing retains the draft and restores position/focus.
 Obsolete replies cannot replace a newer review, and incomplete movement/reclamation plans remain unknown.
 Unsaved Storage drafts survive Workspace/Storage section changes; leaving Settings requires saving or explicitly abandoning them.
@@ -137,8 +142,8 @@ The exact local callbacks are `http://localhost:5089/auth/callback` and
 `http://localhost:5089/auth/signout`; the browser origin is `http://localhost:5089` and PKCE S256 is required.
 
 For a physical phone, use trusted HTTPS for both Server and the issuer, with certificates valid for their exact hosts.
-Configure Kestrel's URL/certificate outside Git and set Server authority/bootstrap issuer to the externally advertised issuer;
-preserve the subject, audience, grants and persistent signing/encryption keys.
+Configure Kestrel's URL/certificate outside Git and use the externally advertised issuer for Server authority and each new workspace definition's `OwnerIssuer`.
+Preserve the subject, audience, grants and persistent signing/encryption keys. An existing workspace's grants do not change with configuration; an issuer change requires deliberate verified rebinding.
 Provision the public client's redirect and post-logout allowlists with exactly `<Server origin>/auth/callback`
 and `<Server origin>/auth/signout`, its browser origin with that same origin, and PKCE S256.
 A separate browser origin also requires its exact HTTPS origin in `ShutterSpool:Security:AllowedOrigins`.

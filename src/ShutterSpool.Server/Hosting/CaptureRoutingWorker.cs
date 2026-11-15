@@ -4,21 +4,26 @@ using ShutterSpool.Server.Api.Live;
 
 namespace ShutterSpool.Server.Hosting;
 
-internal sealed class CaptureRoutingWorker(IServiceScopeFactory scopes, IDeliveryWorkSignal signal, LiveChangeNotifier changes,
-    ILogger<CaptureRoutingWorker> logger) : BackgroundService
+internal sealed class CaptureRoutingWorker(IServiceScopeFactory scopes, IDeliveryWorkSignal signal, ILogger<CaptureRoutingWorker> logger) : BackgroundService
 {
+    private readonly WorkspaceWorkerCursor tenants = new(scopes);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
         {
-            bool processed;
+            bool processed = false;
             try
             {
-                await using AsyncServiceScope scope = scopes.CreateAsyncScope();
-                CaptureRoutingService routing = scope.ServiceProvider.GetRequiredService<CaptureRoutingService>();
-                processed = await routing.ProcessOneAsync(stoppingToken);
-                if (routing.LastChangedCaptureId is Guid captureId) changes.CaptureChanged(captureId, "routing");
-                if (processed) await signal.NotifyAsync(stoppingToken);
+                await using WorkspaceWorkerScope? scope = await tenants.NextAsync(stoppingToken);
+                if (scope is not null)
+                {
+                    LiveChangeNotifier changes = scope.ServiceProvider.GetRequiredService<LiveChangeNotifier>();
+                    CaptureRoutingService routing = scope.ServiceProvider.GetRequiredService<CaptureRoutingService>();
+                    processed = await routing.ProcessOneAsync(stoppingToken);
+                    if (routing.LastChangedCaptureId is Guid captureId) changes.CaptureChanged(captureId, "routing");
+                    if (processed) await signal.NotifyAsync(stoppingToken);
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch (Exception exception)

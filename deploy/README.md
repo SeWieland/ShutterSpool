@@ -37,17 +37,16 @@ For a package with bundled PostgreSQL, Valkey, Keycloak and Traefik:
    ```sh
    umask 077
    mkdir -p secrets certificates restore-evidence
-   cp config/server.json.example config/server.json
    cp config/identity.env.example config/identity.env
    ```
 
 2. Edit the generated `.env`, preserving its version and `SERVER_IMAGE`; keep the default `COMPOSE_FILE` selection.
    Choose a unique project name, free network subnets and reachable HTTPS/ingest addresses.
-   Set matching origins and administrator UUID in `config/server.json` and `config/identity.env`, and replace both Host rules in `package/traefik/dynamic.yml`.
+   Set matching origins and initial Owner subject in `config/appsettings.json` and `config/identity.env`, and replace both Host rules in `package/traefik/dynamic.yml`.
    The [configuration steps](#configure-and-start) identify the required values.
 3. Supply the [secret files for the bundled services](#configure-and-start) and [HTTPS/FTPS certificate files](certificates/README.md#required-files).
    Apply the documented consumer ownership and permissions before starting; certificates come from the operator or an external issuing service.
-4. Validate and start the installation, then check Server readiness:
+4. [Prepare and provision the workspace databases and storage](operations/README.md#workspace-provisioning) using the shared JSON configuration, then start and check readiness:
 
    ```sh
    docker compose config --quiet
@@ -79,19 +78,19 @@ Select additive files with `COMPOSE_FILE` in `.env`; Linux uses `:` as the separ
 The supplied default selects PostgreSQL, Valkey, Keycloak and Traefik:
 
 ```text
-COMPOSE_FILE=compose.yaml:components/postgres.yaml:components/valkey.yaml:components/keycloak.yaml:proxies/traefik.yaml
+COMPOSE_FILE=compose.yaml:components/workspaces.yaml:components/postgres.yaml:components/valkey.yaml:components/keycloak.yaml:proxies/traefik.yaml
 ```
 
 | Choice | Files/configuration |
 | --- | --- |
-| External PostgreSQL | Omit `components/postgres.yaml`; provide application database secret and bundled Keycloak's separate database settings if it remains enabled. |
-| External Valkey | Replace `components/valkey.yaml` with `components/valkey-external.yaml`; supply `secrets/valkey-connection`. |
+| External PostgreSQL | Omit `components/postgres.yaml`; provide control/workspace database secrets and bundled Keycloak's separate database settings if it remains enabled. |
+| External Valkey | Omit `components/valkey.yaml`; set `ConnectionStrings:valkey` in `config/appsettings.Production.json`. |
 | External OIDC | Omit `components/keycloak.yaml`; configure the existing issuer/client and explicit application grant. |
 | nginx | Replace `proxies/traefik.yaml` with `proxies/nginx.yaml`. |
 | Existing Docker proxy | Select `proxies/existing.yaml`; set `PROXY_NETWORK` to its dedicated external network. No bundled proxy or public Server port is added. |
 
-Choose exactly one proxy option and one Valkey option. Dependency choices are independent.
-For example, external PostgreSQL/OIDC with bundled Valkey uses core + Valkey + existing proxy.
+Choose exactly one proxy option and either bundled or external Valkey. Dependency choices are independent.
+For example, external PostgreSQL/OIDC with bundled Valkey uses core + workspaces + Valkey + existing proxy.
 Append operator overrides to `COMPOSE_FILE`; use the same complete selection for every lifecycle/maintenance command.
 Do not start overlapping Server instances with different file selections against the same database/spool.
 
@@ -101,7 +100,7 @@ Do not start overlapping Server instances with different file selections against
    A published release uses the exact public image digest supplied in its package; no source checkout, SDK, ORAS or registry credentials are needed.
    Operators should not rebuild a qualified image.
 2. Edit the generated `.env`, preserving its version and digest-pinned `SERVER_IMAGE` reference; `.env.example` is an unpopulated reference template.
-   Populate the configuration examples under `config` as directed by their filenames.
+   Fill the supplied files under `config`: shared defaults/workspace definitions in `appsettings.json`, runtime settings/credentials in `appsettings.Production.json`, and operator settings/credentials in `appsettings.Maintenance.json`. The [configuration table](operations/README.md#configure-once) describes their consumers.
    Set application/issuer HTTPS origins, persistent administrator UUID, ingest hostname, listen/advertised IPv4 addresses and ports.
    For default Traefik, replace both example Host rules in `package/traefik/dynamic.yml` with the application and public issuer hostnames.
    Select a free `BACKEND_SUBNET` for the private application network.
@@ -114,7 +113,7 @@ Do not start overlapping Server instances with different file selections against
    Use a persistent random base64 32-byte encryption key and a random callback key of at least 64 characters.
 5. Supply the HTTPS and enabled-FTPS certificates described in the [certificate guide](certificates/README.md).
    Consumers mount them read-only; no ACME/DNS credentials belong in this installation.
-6. Check consuming-user permissions, render the complete graph, then start:
+6. Check consuming-user permissions and [provision the named workspaces](operations/README.md#workspace-provisioning). Keep Server and edges stopped until provisioning succeeds, then start:
 
    ```sh
    docker compose config --quiet
@@ -123,34 +122,33 @@ Do not start overlapping Server instances with different file selections against
    docker compose exec -T server dotnet ShutterSpool.Server.dll --health-check
    ```
 
-| Secret file | Consumer |
+| Credential file | Consumer |
 | --- | --- |
-| `database-connection` | Server; complete Npgsql connection string, bundled example `Host=postgres;Database=shutterspool;Username=postgres;Password=<password>` |
-| `encryption-key` | Server; preserve with the matching database and backup |
-| `camera-callback-key` | Server and enabled edges |
-| `postgres-password` | Bundled PostgreSQL and bundled Keycloak's configured database connection |
-| `keycloak-admin-password` | Bundled identity bootstrap/reconciliation only |
-| `administrator-password` | Initial application identity creation only |
-| `valkey-connection` | Server when external Valkey is selected |
+| `config/appsettings.Production.json` | Server; runtime connection strings and persistent application secrets |
+| `config/appsettings.Maintenance.json` | Maintenance; runtime/migration connection strings and the same encryption key |
+| `secrets/camera-callback-key` | Enabled edges; must match `ShutterSpool:CameraIngress:CallbackKey` in `config/appsettings.Production.json` |
+| `secrets/postgres-password` | Bundled PostgreSQL and bundled Keycloak's configured database connection |
+| `secrets/keycloak-admin-password` | Bundled identity bootstrap/reconciliation only |
+| `secrets/administrator-password` | Initial application identity creation only |
 
 Server runs as UID/GID 1654; Keycloak/SFTPGo use UID/GID 1000.
-Use restricted host permissions for actual consumers: single-consumer secrets can use mode 0400 with the matching owner; the shared callback key uses owner 1000, group 1654 and mode 0440.
+Use restricted host permissions for actual consumers: single-consumer secrets can use mode 0400 with the matching owner; the edge callback-key file is readable only by its UID 1000 consumer; Server reads the matching value from its private JSON.
 Compose file-backed secrets are not an encrypted vault, and `uid`/`mode` declarations do not repair host ownership.
 Check the selected proxy's certificate access as well.
-File secrets are read at startup: replace them under operator control and restart affected services.
-Never regenerate the deployment encryption key or bootstrap subject on ordinary restart.
+Application secrets are read at startup: replace them under operator control and restart affected services.
+Never regenerate the deployment encryption key or configured identity subject on ordinary restart.
 
 Server's chiseled runtime contains no shell/curl/package manager. It retains public CA trust, ICU and timezone data.
 `/health/live` reports process liveness; `/health` and `/health/ready` include PostgreSQL readiness.
-Migrations and recovery complete before HTTP opens. Valkey, previews and telemetry do not gate authoritative recovery.
+Operator commands apply migrations before normal startup; validation and recovery complete before HTTP opens. Valkey, previews and telemetry do not gate authoritative recovery.
 Logs are bounded/redacted; OTLP is off unless configured. Never enable sensitive payload/SQL logging or attach media/tokens to reports.
 
-A Local destination requires its own persistent mount, writable by UID/GID 1654 and separate from the spool.
-Include it in an operator override, for example at `/deliveries`, and retain its storage across restores for conflict reconciliation.
-Do not deliver into the container's disposable writable layer.
+Local destinations are disabled unless the operator enables them.
+When enabled, use the workspace allocation's `destinations` directory, writable by UID/GID 1654 and outside its original spool.
+Retain destination storage across restores for conflict reconciliation; never deliver into the container's disposable writable layer.
 
-In **Delivery**, select the Local destination and open **Settings**. Enter the absolute path visible inside the Server container, such as `/deliveries`, or use **Browse…** and **Use this folder** to choose it.
-Browse shows the server's filesystem, not folders on the computer running your browser, and does not create missing folders or mounts.
+In **Delivery**, select a Local destination and open **Settings**. Choose a path inside that assigned directory, or use **Browse…** and **Use this folder**.
+Browse is confined to the workspace's destination root; it does not expose the host filesystem or create missing mounts.
 Choose **Save and test folder** to save the root and check write permission and supported publication; selecting a folder alone does not save or test it.
 **Test saved settings** becomes available once a folder is saved and there are no unsaved folder edits.
 
@@ -161,8 +159,10 @@ Bundled Keycloak uses a fixed public `KC_HOSTNAME` and a separate `KC_HOSTNAME_A
 Administrative endpoints and the master realm must stay private even on the public hostname: a separate admin URL alone is not access control.
 If administration access is needed, provide an explicitly restricted route separately.
 
-Initial reconciliation creates the application identity and its explicit issuer/subject grant; there is no first-login enrollment.
-Repeated reconciliation preserves existing passwords, subjects and grants. The package owns its application client redirect/audience/role-mapper settings.
+Identity reconciliation creates the initial username/password account without an email address. Fresh bundled realms make email and name fields optional, so the initial Owner can sign in without SMTP or email verification. This does not assert that a mailbox is verified.
+The separate workspace provisioning command creates its local grant from the operator-verified issuer/subject; there is no first-login enrollment.
+Repeated identity reconciliation preserves existing passwords and subjects; it does not manage workspace grants. The package owns its application client redirect and audience settings.
+The optional-contact profile is installed only when creating the realm; existing realm profile rules and account security settings are preserved. If setup stops between realm creation and profile installation, inspect the current native user profile, then deliberately import `package/realms/shutterspool-user-profile.json` through private Keycloak administration before retrying. An existing account that requires email verification needs operator resolution; restart does not clear its required actions or mark its email verified.
 If initial account creation is interrupted before its password is set, reconciliation keeps Server closed on retry.
 A trusted Keycloak operator must verify the configured subject and complete that account's password through private administration, then rerun `docker compose run --rm --no-deps keycloak-reconciler` before starting the graph.
 Reconciliation never restores a password an operator removed; an existing passwordless bootstrap account needs explicit operator resolution.
@@ -171,24 +171,21 @@ Remove bundled identity routes from the proxy examples when using an external is
 
 The supported OIDC contract requires discovery/JWKS, public-client authorization code + PKCE S256, JWT access tokens for the configured audience, browser CORS, exact callback/logout URLs and stable issuer/subject identity.
 Use `/auth/callback` and `/auth/signout` on the application origin.
-The administrator token role and local grant are both required.
-The default role is `shutterspool-admin`; set `ShutterSpool.Security.AdministratorRole` for another role name.
-Set `BootstrapIssuer` to the exact public issuer and `BootstrapSubject` to the administrator's existing stable subject to establish the initial local grant.
-Changing an issuer or subject requires deliberate grant migration; matching email addresses do not transfer access.
-`AdministratorRoleClaimType` can select a provider's flat role claim; its default preserves the existing `role` claim mapping.
-Nested provider-specific claims need a compatible provider mapping; arbitrary IdPs are not qualified merely because discovery succeeds.
+Workspace access requires an active local grant keyed by the verified issuer and subject; provider roles do not grant it.
+Set each workspace definition's `OwnerIssuer` and `OwnerSubject` before provisioning.
+Changing an issuer or subject requires deliberate verified rebinding; matching email addresses do not transfer access.
 Do not infer another provider's compatibility from the Keycloak configuration; verify its claims, PKCE, refresh and sign-out behavior explicitly.
 Sign-out clears the local browser session and attempts the provider's end-session flow. A provider session may survive when that flow is unavailable or fails; logout does not revoke already issued access tokens by itself.
 When bundled Keycloak uses external PostgreSQL, configure `KC_DB_URL_HOST`, `KC_DB_URL_DATABASE` and `KC_DB_USERNAME` in `config/identity.env`, and supply its database password secret.
 
-Public HTTPS discovery is default. For a private Keycloak backchannel, keep `Authority` and `BootstrapIssuer` on the exact public realm issuer, set `KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true`, and configure:
+Public HTTPS discovery is default. For a private Keycloak backchannel, keep `Authority` and each `OwnerIssuer` on the exact public realm issuer, set `KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true`, and configure:
 
 ```json
 "MetadataAddress": "http://keycloak:8080/realms/shutterspool/.well-known/openid-configuration",
 "AllowInsecureMetadataAddress": true
 ```
 
-These fields belong inside `ShutterSpool.Security` in `config/server.json`.
+These fields belong inside `ShutterSpool.Security` in the shared `config/appsettings.json`.
 The HTTP opt-in is only for an explicitly isolated backend network; prefer HTTPS for external infrastructure.
 Token validation still requires the public issuer. Browser authentication continues to use public HTTPS.
 For private CAs, provide a complete trusted bundle to each relevant runtime; never disable TLS validation.
@@ -215,7 +212,7 @@ Drain before profile withdrawal using the [maintenance procedure](operations/REA
 ## Backup, restore and upgrades
 
 Follow the [standard maintenance-window procedure](operations/README.md).
-Stop application/edge/identity writers, leave PostgreSQL available for logical dumps, copy the entire spool, and preserve matching keys/configuration/identity.
+Stop application/edge/identity writers, leave PostgreSQL available for logical dumps, capture the control and all workspace databases/roots, and preserve matching keys/configuration/identity.
 External-service owners retain their corresponding backup, availability and upgrade responsibilities.
 Supported versions/settings are the release's stated matrix, not all PostgreSQL/Redis-compatible/OIDC vendors.
 
@@ -223,25 +220,77 @@ Ordinary restore uses fresh isolated storage with no intervening privacy erasure
 Recovery predating erasure or with uncertain erasure history is unsupported; existing guards remain enforced.
 Upgrade only from the named compatible baseline. Rollback restores complete matching state, not a database schema downgrade.
 
-### Key validation on a compatible database
+### Fresh setup and key custody
 
-The package declares `initial-create` with initial migration `20261025211318_InitialCreate` and `fresh-install-only`: no historical upgrade predecessor is supported. Fresh databases enroll a protected key check; restarts validate the retained key.
-The following recovery guard applies only to a database already on this baseline; it cannot bypass schema rejection. Existing checks or decryptable destination credentials validate the retained key.
-A Source-only database without a key check cannot prove that key from password verifiers.
-Before stopping the compatible trusted instance, [export its complete current suppression evidence](operations/README.md#export-current-suppression-evidence).
-Copy the manifest/pages to `restore-evidence` with directory mode 0500/files 0400 owned by UID/GID 1654.
-Add inside `ShutterSpool` in `config/server.json`:
+This pre-alpha package requires fresh workspace/control state; it does not convert older installation layouts.
+Provisioning enrolls a protected key check before activation. Normal startup validates the retained key before recovery.
+Keep each previous installation's databases, media, keys and configuration intact; never erase them to bypass an incompatible-schema error.
+The [maintenance guide](operations/README.md) explains complete recovery and compatible upgrades.
 
-```json
-"Restore": {
-  "Enabled": true,
-  "SuppressionSnapshotId": "<exported-snapshot-guid>",
-  "EvidenceDirectory": "/run/restore-evidence"
-}
+## Integrate Server into an existing Swarm stack
+
+Server uses the same image and .NET settings in Swarm. This example covers one replica on the node holding its workspace storage; it does not convert the bundled Compose stack or its maintenance commands.
+Swarm runtime behavior and storage remain unqualified; qualify them on the selected deployment before relying on this example.
+Provision the databases, identity and storage first using the [maintenance procedure](operations/README.md#workspace-provisioning), and supply reachable dependency addresses in the settings.
+Set `ShutterSpool:ForwardedHeaders:KnownNetworks` to your dedicated proxy network's CIDR and `AllowedHosts` to the application hostname plus `server;localhost`.
+Attach Server to your existing private backend and HTTPS proxy overlay networks; forward the application to port 8080.
+
+Create versioned resources from the configured files on a Swarm manager:
+
+```sh
+docker config create shutterspool-settings-v1 config/appsettings.json
+docker secret create shutterspool-production-v1 config/appsettings.Production.json
 ```
 
-Keep proxy/edges stopped and recreate Server privately. Check readiness with its managed health command, retained identities, original hashes and curation.
-Wrong-key/incomplete evidence leaves startup closed. After successful enrollment disable the one-time Restore setting and recreate/recheck Server.
-This key enrollment procedure does not qualify disaster recovery after later erasure.
-Every historical migration chain, including the former Source-profile and Collection schemas, has no supported conversion to this initial baseline.
-Follow [moving from an older pre-alpha installation](operations/README.md#moving-from-an-older-pre-alpha-installation) for the fresh database/spool transition and retained-state requirements.
+Merge this Server service into your existing stack, replacing the image, node and external network names:
+
+```yaml
+version: "3.8"
+services:
+  server:
+    image: ${SERVER_IMAGE:?Use the release image pinned by digest}
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+      ShutterSpool__Deployment__Packaged: "true"
+    networks: [backend, proxy]
+    configs:
+      - source: shutterspool-settings-v1
+        target: /app/appsettings.json
+    secrets:
+      - source: shutterspool-production-v1
+        target: /app/appsettings.Production.json
+        uid: "1654"
+        gid: "1654"
+        mode: 0400
+    volumes:
+      - type: bind
+        source: /srv/shutterspool/studio
+        target: /srv/shutterspool/studio
+    stop_grace_period: 150s
+    healthcheck:
+      test: [CMD, dotnet, ShutterSpool.Server.dll, --health-check]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.hostname == YOUR_STORAGE_NODE]
+      update_config:
+        order: stop-first
+configs:
+  shutterspool-settings-v1:
+    external: true
+secrets:
+  shutterspool-production-v1:
+    external: true
+networks:
+  backend:
+    external: true
+  proxy:
+    external: true
+```
+
+Export `SERVER_IMAGE` before using `docker stack deploy`; Swarm does not load Compose's `.env` automatically.
+Keep one replica and the storage-node constraint. The mount must already exist with the configured allocation and UID/GID 1654 access; a replica count or bind mount does not enforce its storage budget.
+For maintenance, stop camera admission, scale Server to zero and wait for its task to stop before running operator commands against the same configuration and mounts. Never grant the runtime service the Maintenance secret.
+Settings changes use new config/secret resource names at the same target paths. Database, allocation and image upgrades still require the stopped-writer procedure; `stop-first` alone does not perform it.
+The example leaves camera edges and other services to your existing stack. See [Docker's configs](https://docs.docker.com/engine/swarm/configs/) and [service deployment](https://docs.docker.com/engine/swarm/services/) documentation for their lifecycle.

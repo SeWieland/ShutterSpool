@@ -7,33 +7,6 @@ namespace ShutterSpool.IntegrationTests;
 public sealed class RuntimeConfigurationTests
 {
     [Fact]
-    public void File_secrets_override_inline_values_and_keep_key_names_out_of_secret_values()
-    {
-        string root = Path.Combine(Path.GetTempPath(), $"shutterspool-config-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(root);
-        try
-        {
-            string keyFile = Path.Combine(root, "encryption");
-            string valkeyFile = Path.Combine(root, "valkey");
-            File.WriteAllText(keyFile, "synthetic-secret\n");
-            File.WriteAllText(valkeyFile, "synthetic-valkey:6379\n");
-            IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["ShutterSpool:Security:EncryptionKey"] = "inline-value",
-                ["ShutterSpool:Security:EncryptionKeyFile"] = keyFile,
-                ["ConnectionStrings:valkey"] = "inline-valkey:6379",
-                ["ConnectionStrings:valkeyFile"] = valkeyFile,
-            }).Build();
-
-            RuntimeConfiguration.LoadFileSecrets(configuration);
-
-            Assert.Equal("synthetic-secret", configuration["ShutterSpool:Security:EncryptionKey"]);
-            Assert.Equal("synthetic-valkey:6379", configuration.GetConnectionString("valkey"));
-        }
-        finally { Directory.Delete(root, recursive: true); }
-    }
-
-    [Fact]
     public void Packaged_configuration_rejects_missing_authoritative_and_identity_settings()
     {
         IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
@@ -53,11 +26,9 @@ public sealed class RuntimeConfigurationTests
         IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["ShutterSpool:Deployment:Packaged"] = "true",
-            ["ConnectionStrings:shutterspool"] = "Host=db;Database=app;Username=app;Password=synthetic",
+            ["ConnectionStrings:shutterspool-control"] = "Host=db;Database=app;Username=app;Password=synthetic",
             ["ShutterSpool:Security:Authority"] = authority,
             ["ShutterSpool:Security:Audience"] = "synthetic-audience",
-            ["ShutterSpool:Security:BootstrapIssuer"] = "https://identity.example.invalid/realms/shutterspool",
-            ["ShutterSpool:Security:BootstrapSubject"] = "synthetic-subject",
             ["ShutterSpool:Security:EncryptionKey"] = Convert.ToBase64String(new byte[32]),
             ["ShutterSpool:Spool:RootPath"] = "/var/lib/shutterspool/spool",
             ["ShutterSpool:ForwardedHeaders:KnownNetworks:0"] = "172.29.70.0/24",

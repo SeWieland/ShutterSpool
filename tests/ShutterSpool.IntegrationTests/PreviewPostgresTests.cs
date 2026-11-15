@@ -37,7 +37,7 @@ public sealed class PreviewPostgresTests
                 ["ShutterSpool:Preview:CacheRootPath"] = Path.Combine(root, "previews"),
             }).Build();
             await using var database = new ShutterSpoolDbContext(options);
-            await new DatabaseInitializer(database).InitializeAsync(root, TestContext.Current.CancellationToken);
+            await new DatabaseInitializer(database).InitializeAsync(root, cancellationToken: TestContext.Current.CancellationToken);
             database.Sources.Add(new SourceEntity { Id = sourceId, Name = "synthetic-preview-source" });
             database.SourceCredentials.Add(new SourceCredentialEntity
             {
@@ -59,11 +59,11 @@ public sealed class PreviewPostgresTests
             var spool = new FileSystemSpool(new FileSystemSpoolOptions { RootPath = root, ReservedBytes = 0 });
             var previews = new PreviewService(new EfPreviewSourceResolver(database), new FileSystemPreviewCache(configuration),
                 new ImaginaryPreviewGenerator(spool, http, settings, gate), settings);
-            Assert.Equal(PreviewState.Pending, (await previews.GetAsync(captureId, PreviewProfile.Grid, TestContext.Current.CancellationToken)).State);
+            Assert.Equal(PreviewState.Pending, (await previews.GetAsync(captureId, PreviewProfile.Grid, cancellationToken: TestContext.Current.CancellationToken)).State);
 
             await AddAssetAsync(database, jpegId, sourceId, spoolKey, jpeg.Length);
             await AddMembershipAsync(database, jpegId, captureId, "JPEG", true);
-            PreviewResult first = await previews.GetAsync(captureId, PreviewProfile.Grid, TestContext.Current.CancellationToken);
+            PreviewResult first = await previews.GetAsync(captureId, PreviewProfile.Grid, cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(PreviewState.Ready, first.State);
             Assert.Equal(ImaginaryHandler.WebP, first.Content);
             Assert.Equal(1, handler.Requests);
@@ -71,11 +71,11 @@ public sealed class PreviewPostgresTests
             Guid replayId = Guid.NewGuid();
             await AddAssetAsync(database, replayId, sourceId, "spool/replay", jpeg.Length);
             await AddMembershipAsync(database, replayId, captureId, "JPEG", false);
-            Assert.Equal(PreviewState.Ready, (await previews.GetAsync(captureId, PreviewProfile.Grid, TestContext.Current.CancellationToken)).State);
+            Assert.Equal(PreviewState.Ready, (await previews.GetAsync(captureId, PreviewProfile.Grid, cancellationToken: TestContext.Current.CancellationToken)).State);
             Assert.Equal(1, handler.Requests);
 
             Directory.Delete(Path.Combine(root, "previews"), recursive: true);
-            Assert.Equal(PreviewState.Ready, (await previews.GetAsync(captureId, PreviewProfile.Grid, TestContext.Current.CancellationToken)).State);
+            Assert.Equal(PreviewState.Ready, (await previews.GetAsync(captureId, PreviewProfile.Grid, cancellationToken: TestContext.Current.CancellationToken)).State);
             Assert.Equal(2, handler.Requests);
             Assert.Equal(jpeg, await File.ReadAllBytesAsync(originalPath, TestContext.Current.CancellationToken));
         }

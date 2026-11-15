@@ -3,10 +3,11 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import ts from 'typescript'
+import { parse } from '@vue/compiler-sfc'
 import { ref, shallowRef } from 'vue'
 
-function client(silent) {
-  const calls = { redirects: [], removed: 0 }
+function client(silent, callbackUser) {
+  const calls = { redirects: [], removed: 0, callbacks: 0 }
   let settings
   class Store {
     constructor(value) { this.options = value }
@@ -18,12 +19,15 @@ function client(silent) {
     events = { addAccessTokenExpiring() {}, addAccessTokenExpired() {}, addUserSignedOut() {} }
     clearStaleState = async () => {}
     signinSilent = silent
+    signinRedirectCallback = async () => { calls.callbacks++; return callbackUser }
     signinRedirect = async args => { calls.redirects.push(args) }
     removeUser = async () => { calls.removed++ }
     stopSilentRenew() {}
   }
+  const browserWindow = { parent: undefined }
+  browserWindow.parent = browserWindow
   const context = vm.createContext({
-    exports: {}, ref, shallowRef, clearNuxtState() {}, URL, AbortSignal,
+    exports: {}, ref, shallowRef, clearNuxtState() {}, URL, AbortSignal, window: browserWindow,
     location: { origin: 'https://photos.example', pathname: '/captures/shot', search: '' },
     sessionStorage: {}, setTimeout: () => 0,
     fetch: async () => ({ ok: true, json: async () => ({ authority: 'https://issuer.example', clientId: 'spa' }) }),
@@ -76,6 +80,41 @@ test('return targets cannot leave the origin or replay an auth callback', () => 
   for (const path of ['//evil.example/', 'https://evil.example', '/auth/callback?code=secret', '/\\evil.example'])
     assert.equal(c.api.localReturnTarget(path), '/')
   assert.equal(c.api.localReturnTarget('/captures/shot?view=detail'), '/captures/shot?view=detail')
+  assert.equal(c.api.localReturnTarget('/?workspace=00000000-0000-0000-0000-000000000001'), '/?workspace=00000000-0000-0000-0000-000000000001')
+})
+
+test('top-level callback keeps its token and initializes workspace scope before SPA return navigation', async () => {
+  const workspaceId = '2f2ed010-2a51-468a-a38a-a2372fba8211'
+  const callbackUser = { access_token: 'callback-token', state: { returnTo: `/?workspace=${workspaceId}` } }
+  const c = client(async () => { throw new Error('iframe unavailable') }, callbackUser)
+  const workspaceContext = vm.createContext({ exports: {}, URL, URLSearchParams,
+    window: { location: { origin: 'https://photos.example', pathname: '/auth/callback', search: '?code=oidc-code&workspace=untrusted' } },
+  })
+  vm.runInContext(ts.transpileModule(readFileSync(new URL('../app/lib/workspace-context.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, workspaceContext)
+  let mounted
+  let reloads = 0
+  const navigations = []
+  const callbackContext = vm.createContext({ exports: {}, ref,
+    window: { location: { replace: () => { reloads++ } } },
+    onMounted: action => { mounted = action },
+    navigateTo: async (target, options) => {
+      assert.equal(workspaceContext.exports.pageWorkspaceId, workspaceId, 'scope is initialized before the app route changes')
+      assert.equal(c.api.session.value, callbackUser, 'the OIDC token remains in the in-memory session')
+      navigations.push({ target, options })
+    },
+    require: name => name.endsWith('/session') ? c.api : workspaceContext.exports,
+  })
+  const callback = parse(readFileSync(new URL('../app/pages/auth/callback.vue', import.meta.url), 'utf8')).descriptor.scriptSetup.content
+  vm.runInContext(ts.transpileModule(callback, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, callbackContext)
+  await mounted()
+  assert.equal(c.calls.callbacks, 1)
+  assert.equal(c.calls.redirects.length, 0, 'return navigation does not start another top-level prompt:none flow')
+  assert.equal(c.api.session.value.access_token, 'callback-token')
+  assert.equal(workspaceContext.exports.pageWorkspaceId, workspaceId)
+  assert.equal(navigations.length, 1)
+  assert.equal(navigations[0].target, `/?workspace=${workspaceId}`)
+  assert.equal(navigations[0].options.replace, true)
+  assert.equal(reloads, 0, 'callback must not discard the in-memory OIDC session with a document reload')
 })
 
 test('offline renewal retains the active session; issuer revocation ends it', async () => {

@@ -4,6 +4,8 @@
 // @ts-ignore
 import { createDestinationConfigurationPageResponseFromDiscriminatorValue, createDestinationResponseFromDiscriminatorValue, createHttpValidationProblemDetailsFromDiscriminatorValue, createProblemDetailsFromDiscriminatorValue, serializeCreateDestinationRequest, serializeDestinationResponse, type CreateDestinationRequest, type DestinationConfigurationPageResponse, type DestinationResponse, type HttpValidationProblemDetails, type ProblemDetails } from '../../models/index.js';
 // @ts-ignore
+import { CapabilitiesRequestBuilderRequestsMetadata, type CapabilitiesRequestBuilder } from './capabilities/index.js';
+// @ts-ignore
 import { DestinationsItemRequestBuilderNavigationMetadata, DestinationsItemRequestBuilderRequestsMetadata, type DestinationsItemRequestBuilder } from './item/index.js';
 // @ts-ignore
 import { LocalFoldersRequestBuilderRequestsMetadata, type LocalFoldersRequestBuilder } from './localFolders/index.js';
@@ -14,6 +16,10 @@ import { type BaseRequestBuilder, type Guid, type KeysToExcludeForNavigationMeta
  * Builds and executes requests for operations under /management/destinations
  */
 export interface DestinationsRequestBuilder extends BaseRequestBuilder<DestinationsRequestBuilder> {
+    /**
+     * The capabilities property
+     */
+    get capabilities(): CapabilitiesRequestBuilder;
     /**
      * The localFolders property
      */
@@ -79,6 +85,9 @@ export const DestinationsRequestBuilderNavigationMetadata: Record<Exclude<keyof 
         requestsMetadata: DestinationsItemRequestBuilderRequestsMetadata,
         navigationMetadata: DestinationsItemRequestBuilderNavigationMetadata,
         pathParametersMappings: ["id"],
+    },
+    capabilities: {
+        requestsMetadata: CapabilitiesRequestBuilderRequestsMetadata,
     },
     localFolders: {
         requestsMetadata: LocalFoldersRequestBuilderRequestsMetadata,

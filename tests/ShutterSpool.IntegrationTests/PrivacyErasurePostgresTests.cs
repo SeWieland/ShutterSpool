@@ -149,7 +149,7 @@ public sealed partial class ConfigurationApiTests
         Directory.CreateDirectory(evidenceDirectory);
         Guid snapshotId;
         int pageCount;
-        await using (AsyncServiceScope scope = fixture.Server.Services.CreateAsyncScope())
+        await using (AsyncServiceScope scope = fixture.Scope())
         {
             var suppression = scope.ServiceProvider.GetRequiredService<PrivacyErasureSuppressionService>();
             PrivacyErasureProtectedManifest manifest = await suppression.CreateExportAsync(token);
@@ -190,7 +190,7 @@ public sealed partial class ConfigurationApiTests
         Assert.True(File.Exists(cameraReceivePath));
         Assert.True(File.Exists(derivativePath));
 
-        await using (AsyncServiceScope scope = fixture.Server.Services.CreateAsyncScope())
+        await using (AsyncServiceScope scope = fixture.Scope())
         {
             var suppression = scope.ServiceProvider.GetRequiredService<PrivacyErasureSuppressionService>();
             var erasure = scope.ServiceProvider.GetRequiredService<PrivacyErasureService>();
@@ -429,7 +429,7 @@ public sealed partial class ConfigurationApiTests
             Assert.Null((await verifyRecovery.Assets.SingleAsync(item => item.Id == assetId, token)).CameraMake);
         }
 
-        await using (AsyncServiceScope scope = fixture.Server.Services.CreateAsyncScope())
+        await using (AsyncServiceScope scope = fixture.Scope())
         {
             PrivacyErasureService service = scope.ServiceProvider.GetRequiredService<PrivacyErasureService>();
             Assert.Equal(1, await service.ProcessPendingAsync(10, token));

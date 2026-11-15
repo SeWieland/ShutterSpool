@@ -5,12 +5,12 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import { parse, compileTemplate, compileScript } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
-import { ref, reactive, computed, watch, nextTick, effectScope } from 'vue';
+import { ref, shallowRef, reactive, computed, watch, nextTick, effectScope } from 'vue';
 
 function moduleAt(name, overrides = {}) {
     const path = ['useGalleryGrid', 'useWorkspaceClock', 'usePhotoViewer', 'useViewerSession', 'useCurationVisit', 'useCaptureBrowser', 'useCaptureCurationActions', 'useWorkspacePreferences'].includes(name) ? `../app/composables/${name}.ts` : `../app/lib/${name}.ts`;
     const moduleWatch = name === 'useWorkspacePreferences' ? watch : () => {};
-    const context = vm.createContext({ exports: {}, AbortController, setTimeout, clearTimeout, ...overrides.globals,
+    const context = vm.createContext({ exports: {}, AbortController, URL, URLSearchParams, setTimeout, clearTimeout, ...overrides.globals,
         require: name => name === 'vue' ? overrides.vue ?? { ref, reactive, computed, watch: moduleWatch, nextTick, onMounted() {}, onUnmounted() {}, onScopeDispose() {}, provide() {}, inject: (_key, fallback) => fallback }
             : name.endsWith('/api') ? overrides.api ?? { api: {}, handleFailure: error => error.responseStatusCode }
                 : name.endsWith('/session') ? overrides.session ?? { accessGeneration: () => 0 }
@@ -35,7 +35,7 @@ function workspace(read, batch = async () => ({ items: [] }), browser = {}) {
     const modules = { curation: moduleAt('curation-session'), interactions: moduleAt('workspace-interactions'), preferences: moduleAt('workspace-preferences'), preferencesComposable: moduleAt('useWorkspacePreferences'), retention: moduleAt('retention'), slideshow: moduleAt('gallery-slideshow'), chrome: moduleAt('fullscreen-chrome'), grid: moduleAt('useGalleryGrid'), clock: moduleAt('useWorkspaceClock'), viewer: moduleAt('usePhotoViewer'), viewerSession: moduleAt('useViewerSession', { globals: { document: documentState, HTMLElement: WorkspaceHTMLElement }, vue: { ...Vue, nextTick: browser.nextTick ?? nextTick, onMounted() {}, onUnmounted() {} } }), curationVisit: moduleAt('useCurationVisit'), curationActions: moduleAt('useCaptureCurationActions', { api: { api: testApi, cancellable: signal => ({ signal }), handleFailure: error => error.responseStatusCode }, session: { accessGeneration: () => generation } }), captureBrowser: moduleAt('useCaptureBrowser') };
     const context = vm.createContext({
         exports: {}, AbortController, HTMLElement: WorkspaceHTMLElement, structuredClone, session, localStorage: browser.storage, clearTimeout, setTimeout, useRouter: () => browser.router ?? ({ replace: async () => {}, beforeEach: () => () => {} }), ref, reactive, computed, defineProps: () => browser.props ?? ({}),
-        watch: browser.watch ?? (() => {}), onMounted() {}, onUnmounted(callback) { dispose = callback; }, onBeforeRouteLeave() {}, defineExpose: value => Object.assign(browser.exposed ??= {}, value), nextTick: browser.nextTick ?? (async () => {}),
+        watch: browser.watch ?? (() => {}), onMounted() {}, onUnmounted(callback) { dispose = callback; }, onBeforeRouteLeave() {}, defineExpose: value => Object.assign(browser.exposed ??= {}, value), nextTick: browser.nextTick ?? (async () => {}), shallowRef,
         window: { confirm: () => true, scrollY: 640, scrollBy() {}, scrollTo() {}, addEventListener() {}, removeEventListener() {}, ...browser.window },
         document: documentState,
         require: name => name.endsWith('/api') ? { api: { management: {
@@ -44,7 +44,7 @@ function workspace(read, batch = async () => ({ items: [] }), browser = {}) {
         } }, cancellable: signal => ({getKey: () => 'shutterspool.abort', signal}), handleFailure: browser.handleFailure ?? (error => error.responseStatusCode) }
             : name.endsWith('/session') ? { session, accessGeneration: () => generation, onAccessLost: callback => { lost = callback; return () => {}; } }
                     : name.endsWith('/reconcile') ? { useReconciliation: refresh => ({ online: ref(true), connected: ref(true), activity: ref(undefined), authActivity: ref(undefined), phaseActivity: ref(undefined), unassignedRejection: ref(false), recoverySequence: ref(0), connectionRecovery: ref(0), initialize: async () => {}, invalidate: (scopes, ids, previews) => refresh(ids, previews, new Set(typeof scopes === 'string' ? [scopes] : scopes)), refresh: () => refresh(undefined, undefined, new Set(['capture', 'previews', 'sources', 'delivery', 'storage', 'erasure'])) }) }
-                    : name.endsWith('/workspace-preferences') ? modules.preferences : name.endsWith('/useWorkspacePreferences') ? modules.preferencesComposable : name.endsWith('/useGalleryGrid') ? modules.grid : name.endsWith('/useWorkspaceClock') ? modules.clock : name.endsWith('/usePhotoViewer') ? modules.viewer : name.endsWith('/useViewerSession') ? modules.viewerSession : name.endsWith('/useCurationVisit') ? modules.curationVisit : name.endsWith('/useCaptureCurationActions') ? modules.curationActions : name.endsWith('/useCaptureBrowser') ? modules.captureBrowser : name.endsWith('/read-pool') ? moduleAt('read-pool') : name.endsWith('/curation-session') ? modules.curation : name.endsWith('/retention') ? modules.retention : name.endsWith('/gallery-slideshow') ? modules.slideshow : name.endsWith('/fullscreen-chrome') ? modules.chrome : modules.interactions,
+                    : name.endsWith('/workspace-preferences') ? modules.preferences : name.endsWith('/useWorkspacePreferences') ? modules.preferencesComposable : name.endsWith('/useGalleryGrid') ? modules.grid : name.endsWith('/useWorkspaceClock') ? modules.clock : name.endsWith('/usePhotoViewer') ? modules.viewer : name.endsWith('/useViewerSession') ? modules.viewerSession : name.endsWith('/useCurationVisit') ? modules.curationVisit : name.endsWith('/useCaptureCurationActions') ? modules.curationActions : name.endsWith('/useCaptureBrowser') ? modules.captureBrowser : name.endsWith('/read-pool') ? moduleAt('read-pool') : name.endsWith('/curation-session') ? modules.curation : name.endsWith('/retention') ? modules.retention : name.endsWith('/gallery-slideshow') ? modules.slideshow : name.endsWith('/fullscreen-chrome') ? modules.chrome : name.endsWith('/workspace-context') ? moduleAt('workspace-context') : modules.interactions,
         loseAccess() { generation++; session.value = null; lost(); },
     });
     const source = parse(readFileSync(new URL('../app/components/OperationalWorkspace.vue', import.meta.url), 'utf8')).descriptor.scriptSetup.content;
@@ -628,10 +628,11 @@ function component(name, props, api) {
     let accessLost;
     const context = vm.createContext({
         exports: {}, AbortController, defineProps: () => props, defineEmits: () => () => {},
-        ref, computed, watch, nextTick, onUnmounted: callback => unmounted.push(callback), onMounted() {},
+        ref, shallowRef, computed, watch, nextTick, onUnmounted: callback => unmounted.push(callback), onMounted() {},
         require: moduleName => moduleName.endsWith('/api')
             ? { api, cancellable: signal => ({getKey: () => 'shutterspool.abort', signal}), handleFailure: error => error.responseStatusCode }
             : moduleName.endsWith('/workspace-interactions') ? moduleAt('workspace-interactions')
+            : moduleName.endsWith('/destination-capabilities') ? moduleAt('destination-capabilities')
             : moduleName.endsWith('/read-pool') ? moduleAt('read-pool')
             : { accessGeneration: () => generation, onAccessLost: callback => { accessLost = callback; return () => {}; } },
     });
@@ -1361,6 +1362,7 @@ test('inline destination editing keeps its confirmed owner when the visible dest
     } } };
     const view = component('DeliveryWorkspace', reactive({ online: true, generation: 0, motionEnabled: false }), api);
     try {
+        view.read("destinationCapabilityState.value = 'ready'; enabledDestinationKinds.value = ['local', 'webdav']");
         await settle(); await view.read("open('a')");
         items = [{ id: 'b', name: 'B', kind: 'webdav' }]; await view.read('list()');
         assert.equal(view.read('destination.value?.id'), 'a');
@@ -2000,9 +2002,9 @@ test('route guard preserves internal slideshow URLs and immediately cancels navi
     let guard;
     const run = workspace(async id => ({ id }), undefined, { router: { replace: async () => {}, beforeEach: callback => { guard = callback; return () => {}; } } });
     run("full.value=true; view.value='Gallery'; activeId.value='a'; slideshow.playing=true");
-    assert.equal(guard({path:'/captures/a'}), true);
+    assert.equal(guard({path:'/captures/a', query:{}}), true);
     assert.equal(run('slideshow.playing'), true);
-    assert.equal(guard({path:'/'}), true);
+    assert.equal(guard({path:'/', query:{}}), true);
     assert.equal(run('slideshow.playing'), false);
     assert.equal(run('full.value'), false);
 });

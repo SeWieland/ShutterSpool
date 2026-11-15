@@ -2,27 +2,16 @@ namespace ShutterSpool.Server.Hosting;
 
 internal static class RuntimeConfiguration
 {
-    public static void LoadFileSecrets(IConfiguration configuration)
-    {
-        Load(configuration, "ConnectionStrings:shutterspoolFile", "ConnectionStrings:shutterspool");
-        Load(configuration, "ConnectionStrings:valkeyFile", "ConnectionStrings:valkey");
-        Load(configuration, "ShutterSpool:Security:EncryptionKeyFile", "ShutterSpool:Security:EncryptionKey");
-        Load(configuration, "ShutterSpool:CameraIngress:CallbackKeyFile", "ShutterSpool:CameraIngress:CallbackKey");
-    }
-
     public static void ValidatePackaged(IConfiguration configuration)
     {
         if (!configuration.GetValue<bool>("ShutterSpool:Deployment:Packaged")) return;
 
         string[] required =
         [
-            "ConnectionStrings:shutterspool",
+            "ConnectionStrings:shutterspool-control",
             "ShutterSpool:Security:Authority",
             "ShutterSpool:Security:Audience",
-            "ShutterSpool:Security:BootstrapIssuer",
-            "ShutterSpool:Security:BootstrapSubject",
             "ShutterSpool:Security:EncryptionKey",
-            "ShutterSpool:Spool:RootPath",
         ];
         if (required.Any(key => string.IsNullOrWhiteSpace(configuration[key])))
             throw new InvalidOperationException("Packaged deployment requires PostgreSQL, identity, encryption-key and spool configuration.");
@@ -38,12 +27,4 @@ internal static class RuntimeConfiguration
             throw new InvalidOperationException("Packaged deployment requires an explicit trusted proxy network.");
     }
 
-    private static void Load(IConfiguration configuration, string pathKey, string valueKey)
-    {
-        string? path = configuration[pathKey];
-        if (string.IsNullOrWhiteSpace(path)) return;
-        string value = File.ReadAllText(path).TrimEnd('\r', '\n');
-        if (string.IsNullOrWhiteSpace(value)) throw new InvalidOperationException($"The configured secret file '{pathKey}' is empty.");
-        configuration[valueKey] = value;
-    }
 }

@@ -88,7 +88,7 @@ public sealed partial class ConfigurationApiTests
             start.SignalAndWait(token);
             await using var database = new ShutterSpoolDbContext(fixture.Database.Options);
             return await new EfCameraIngressStore(database, TimeProvider.System)
-                .CreateLoginAsync(source.Id, source.Username, 1, token, SourceConnectionProfile.ModernFtps);
+                .CreateLoginAsync(source.Id, source.Username, 1, SourceConnectionProfile.ModernFtps, token);
         }, token);
         Task<HttpResponseMessage> removalTask = Task.Run(async () =>
         {

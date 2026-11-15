@@ -19,12 +19,14 @@ public interface IDestinationConfigurationStore
     Task<DestinationRemovalWrite> RemoveAsync(Guid id, long expectedRevision, CancellationToken cancellationToken);
 }
 
-public sealed class DestinationManagementService(IDestinationConfigurationStore store, ICredentialProtector protector)
+public sealed class DestinationManagementService(IDestinationConfigurationStore store, ICredentialProtector protector,
+    DestinationCapabilities? capabilities = null)
 {
     public async Task<DestinationConfiguration> CreateAsync(string name, string kind, string? secret, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(name) || name.Trim().Length > 256) throw new ArgumentException("Provide a destination name of at most 256 characters.");
         if (kind is not ("local" or "webdav")) throw new ArgumentException("The destination kind is unsupported.");
+        (capabilities ?? DestinationCapabilities.All).EnsureEnabled(kind);
         if (secret is not null && Encoding.UTF8.GetByteCount(secret) > 4_096) throw new ArgumentException("The credential exceeds its supported size.");
         var destination = new DestinationConfiguration(Guid.NewGuid(), name.Trim(), kind, true, 0, null, null, null, !string.IsNullOrEmpty(secret));
         await store.CreateAsync(destination, string.IsNullOrEmpty(secret) ? null : protector.Protect(secret), cancellationToken);
@@ -42,6 +44,8 @@ public sealed class DestinationManagementService(IDestinationConfigurationStore 
     {
         if (string.IsNullOrWhiteSpace(name) || name.Trim().Length > 256)
             throw new ArgumentException("Provide a destination name of at most 256 characters.");
+        if (await store.GetAsync(id, token) is { } current)
+            (capabilities ?? DestinationCapabilities.All).EnsureEnabled(current.Kind);
         return await store.UpdateNameAsync(id, expectedRevision, name.Trim(), token);
     }
 }

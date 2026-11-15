@@ -20,12 +20,12 @@ public sealed partial class CameraIngressIntegrationTests
         await using var fixture = await CameraIngressFixture.CreateAsync();
         Guid sourceId = await fixture.CreateSourceAsync("auth-attribution", "camera-secret");
 
-        Assert.Null(await fixture.Ingress.AuthenticateAsync("cam_auth-attribution", "wrong-secret", Token));
+        Assert.Null(await fixture.Ingress.AuthenticateAsync("cam_auth-attribution", "wrong-secret", cancellationToken: Token));
         Assert.Empty(fixture.AuthenticationRecorder.Observations);
         Assert.Single(fixture.AuthenticationRecorder.Unassigned);
 
         Assert.NotNull(await new EfSourceConfigurationStore(fixture.Database).SetIngressEnabledAsync(sourceId, false, Token));
-        Assert.Null(await fixture.Ingress.AuthenticateAsync("cam_auth-attribution", "camera-secret", Token));
+        Assert.Null(await fixture.Ingress.AuthenticateAsync("cam_auth-attribution", "camera-secret", cancellationToken: Token));
         SourceAuthenticationObservation rejection = Assert.Single(fixture.AuthenticationRecorder.Observations);
         Assert.Equal(sourceId, rejection.SourceId);
         Assert.Equal(SourceAuthenticationOutcome.Rejected, rejection.Outcome);
@@ -36,7 +36,7 @@ public sealed partial class CameraIngressIntegrationTests
     {
         await using var fixture = await CameraIngressFixture.CreateAsync();
         Guid sourceId = await fixture.CreateSourceAsync("one-pass", "camera-secret");
-        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_one-pass", "camera-secret", Token))!;
+        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_one-pass", "camera-secret", cancellationToken: Token))!;
         SourceAuthenticationObservation observed = Assert.Single(fixture.AuthenticationRecorder.Observations);
         Assert.Equal(sourceId, observed.SourceId);
         Assert.Equal(SourceAuthenticationOutcome.Succeeded, observed.Outcome);
@@ -68,7 +68,7 @@ public sealed partial class CameraIngressIntegrationTests
     {
         await using var fixture = await CameraIngressFixture.CreateAsync();
         Guid sourceId = await fixture.CreateSourceAsync("phase-activity", "camera-secret");
-        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_phase-activity", "camera-secret", Token))!;
+        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_phase-activity", "camera-secret", cancellationToken: Token))!;
         const string path = "/DCIM/DSC0001.JPG";
         const string session = "FTP_session-phase-activity";
         long timestamp = CurrentTimestamp();
@@ -105,7 +105,7 @@ public sealed partial class CameraIngressIntegrationTests
     {
         await using var fixture = await CameraIngressFixture.CreateAsync();
         Guid sourceId = await fixture.CreateSourceAsync("phase-commit-window", "camera-secret");
-        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_phase-commit-window", "camera-secret", Token))!;
+        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_phase-commit-window", "camera-secret", cancellationToken: Token))!;
         const string path = "/DCIM/DSC0002.JPG";
         const string session = "FTP_session-phase-commit-window";
         long admittedAt = CurrentTimestamp();
@@ -134,7 +134,7 @@ public sealed partial class CameraIngressIntegrationTests
     {
         await using var fixture = await CameraIngressFixture.CreateAsync();
         await fixture.CreateSourceAsync("directory-metadata", "camera-secret");
-        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_directory-metadata", "camera-secret", Token))!;
+        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_directory-metadata", "camera-secret", cancellationToken: Token))!;
         await fixture.Ingress.CreateDirectoryAsync(login.Id, "/DCIM/100MEDIA", Token);
         const string path = "/DCIM/100MEDIA/PHOTO.JPG";
         const string session = "FTP_session-directory-metadata";
@@ -164,8 +164,8 @@ public sealed partial class CameraIngressIntegrationTests
         await using var fixture = await CameraIngressFixture.CreateAsync();
         Guid sourceId = await fixture.CreateSourceAsync("metadata-reconnect", "camera-secret");
         await fixture.CreateSourceAsync("metadata-other-source", "other-secret");
-        CameraLogin firstLogin = (await fixture.Ingress.AuthenticateAsync("cam_metadata-reconnect", "camera-secret", Token))!;
-        CameraLogin otherLogin = (await fixture.Ingress.AuthenticateAsync("cam_metadata-other-source", "other-secret", Token))!;
+        CameraLogin firstLogin = (await fixture.Ingress.AuthenticateAsync("cam_metadata-reconnect", "camera-secret", cancellationToken: Token))!;
+        CameraLogin otherLogin = (await fixture.Ingress.AuthenticateAsync("cam_metadata-other-source", "other-secret", cancellationToken: Token))!;
         const string path = "/DCIM/100MEDIA/PHOTO.JPG";
         const string session = "FTP_session-metadata-reconnect";
         byte[] original = [1, 2, 3];
@@ -176,7 +176,7 @@ public sealed partial class CameraIngressIntegrationTests
         await fixture.Ingress.ReceiveAsync(firstLogin.Id, path, new MemoryStream(original), 1_024, Token);
         await fixture.Ingress.CompleteAsync(firstLogin.Id, firstLogin.Username, session, path, firstAdmission + 1_000, original.Length, Token);
 
-        CameraLogin secondLogin = (await fixture.Ingress.AuthenticateAsync("cam_metadata-reconnect", "camera-secret", Token))!;
+        CameraLogin secondLogin = (await fixture.Ingress.AuthenticateAsync("cam_metadata-reconnect", "camera-secret", cancellationToken: Token))!;
         Assert.NotEqual(firstLogin.Id, secondLogin.Id);
         CameraFileInfo? firstStat = await fixture.Ingress.GetFileInfoAsync(secondLogin.Id, path, Token);
         IReadOnlyList<CameraFileInfo> firstListing = await fixture.Ingress.GetDirectoryAsync(secondLogin.Id, "/DCIM/100MEDIA", Token);
@@ -198,7 +198,7 @@ public sealed partial class CameraIngressIntegrationTests
         await fixture.Ingress.CompleteAsync(secondLogin.Id, secondLogin.Username, secondSession, path, secondAdmission + 1_000,
             replacement.Length, Token);
 
-        CameraLogin reconnectedLogin = (await fixture.Ingress.AuthenticateAsync("cam_metadata-reconnect", "camera-secret", Token))!;
+        CameraLogin reconnectedLogin = (await fixture.Ingress.AuthenticateAsync("cam_metadata-reconnect", "camera-secret", cancellationToken: Token))!;
         CameraFileInfo? latest = await fixture.Ingress.GetFileInfoAsync(reconnectedLogin.Id, path, Token);
         CameraFileInfo latestListing = Assert.Single(await fixture.Ingress.GetDirectoryAsync(reconnectedLogin.Id, "/DCIM/100MEDIA", Token));
         Assert.NotEqual(secondLogin.Id, reconnectedLogin.Id);
@@ -219,7 +219,7 @@ public sealed partial class CameraIngressIntegrationTests
     {
         await using var fixture = await CameraIngressFixture.CreateAsync();
         await fixture.CreateSourceAsync("eof", "camera-secret");
-        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_eof", "camera-secret", Token))!;
+        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_eof", "camera-secret", cancellationToken: Token))!;
         string path = "/DCIM/DSC0000.JPG";
         long admittedAt = CurrentTimestamp() - 601_000_000_000;
         const string session = "FTP_session-eof";
@@ -253,7 +253,7 @@ public sealed partial class CameraIngressIntegrationTests
     {
         await using var fixture = await CameraIngressFixture.CreateAsync();
         Guid sourceId = await fixture.CreateSourceAsync("commit-recovery", "camera-secret");
-        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_commit-recovery", "camera-secret", Token))!;
+        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_commit-recovery", "camera-secret", cancellationToken: Token))!;
         const string path = "/DCIM/DSC0000.JPG";
         const string session = "FTP_session-commit-recovery";
         long admittedAt = CurrentTimestamp();
@@ -292,7 +292,7 @@ public sealed partial class CameraIngressIntegrationTests
     {
         await using var fixture = await CameraIngressFixture.CreateAsync();
         Guid sourceId = await fixture.CreateSourceAsync("timestamp-fence", "camera-secret");
-        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_timestamp-fence", "camera-secret", Token))!;
+        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_timestamp-fence", "camera-secret", cancellationToken: Token))!;
         const string path = "/DCIM/DSC0000.JPG";
         const string session = "FTP_timestamp-fence";
         byte[] bytes = [3, 1, 4, 1, 5];
@@ -330,7 +330,7 @@ public sealed partial class CameraIngressIntegrationTests
     {
         await using var fixture = await CameraIngressFixture.CreateAsync();
         await fixture.CreateSourceAsync("failed", "camera-secret");
-        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_failed", "camera-secret", Token))!;
+        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_failed", "camera-secret", cancellationToken: Token))!;
         const string path = "/DCIM/DSC0000.JPG";
         const string session = "FTP_session-failed";
         long admittedAt = CurrentTimestamp();
@@ -355,7 +355,7 @@ public sealed partial class CameraIngressIntegrationTests
     {
         await using var fixture = await CameraIngressFixture.CreateAsync();
         Guid sourceId = await fixture.CreateSourceAsync("receipt-failure", "camera-secret");
-        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_receipt-failure", "camera-secret", Token))!;
+        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_receipt-failure", "camera-secret", cancellationToken: Token))!;
         const string path = "/DCIM/DSC0000.JPG";
         byte[] bytes = [2, 3, 5, 7, 11];
         long admittedAt = CurrentTimestamp();
@@ -390,7 +390,7 @@ public sealed partial class CameraIngressIntegrationTests
     {
         await using var fixture = await CameraIngressFixture.CreateAsync();
         await fixture.CreateSourceAsync("camera", "camera-secret");
-        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_camera", "camera-secret", Token))!;
+        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_camera", "camera-secret", cancellationToken: Token))!;
         string path = "/DCIM/DSC0001.JPG";
         string session = "FTP_session-1";
         long admittedAt = CurrentTimestamp();
@@ -421,7 +421,7 @@ public sealed partial class CameraIngressIntegrationTests
     {
         await using var fixture = await CameraIngressFixture.CreateAsync();
         Guid sourceId = await fixture.CreateSourceAsync("rotation", "camera-secret");
-        CameraLogin oldLogin = (await fixture.Ingress.AuthenticateAsync("cam_rotation", "camera-secret", Token))!;
+        CameraLogin oldLogin = (await fixture.Ingress.AuthenticateAsync("cam_rotation", "camera-secret", cancellationToken: Token))!;
         long timestamp = CurrentTimestamp();
         const string path = "/DCIM/DSC0002.JPG";
         const string session = "FTP_session-rotation";
@@ -438,7 +438,7 @@ public sealed partial class CameraIngressIntegrationTests
         await Assert.ThrowsAsync<CameraIngressRejectedException>(() => fixture.Ingress.AdmitAsync(
             oldLogin.Id, oldLogin.Username, session, path, timestamp + 1_000_000_000, 1_024, 2, 600, Token));
 
-        CameraLogin newLogin = (await fixture.Ingress.AuthenticateAsync("cam_rotation", "replacement-secret", Token))!;
+        CameraLogin newLogin = (await fixture.Ingress.AuthenticateAsync("cam_rotation", "replacement-secret", cancellationToken: Token))!;
         await fixture.Ingress.AdmitAsync(newLogin.Id, newLogin.Username, session, path, timestamp + 1_000_000_000,
             1_024, 2, 600, Token);
         Assert.NotEqual(oldLogin.Id, newLogin.Id);
@@ -450,8 +450,8 @@ public sealed partial class CameraIngressIntegrationTests
         await using var fixture = await CameraIngressFixture.CreateAsync();
         Guid sourceId = await fixture.CreateSourceAsync("legacy-ftps", "camera-secret");
 
-        Assert.Null(await fixture.Ingress.AuthenticateAsync("cam_legacy-ftps", "camera-secret", Token, SourceConnectionProfile.LegacyFtps));
-        CameraLogin modernLogin = (await fixture.Ingress.AuthenticateAsync("cam_legacy-ftps", "camera-secret", Token))!;
+        Assert.Null(await fixture.Ingress.AuthenticateAsync("cam_legacy-ftps", "camera-secret", SourceConnectionProfile.LegacyFtps, Token));
+        CameraLogin modernLogin = (await fixture.Ingress.AuthenticateAsync("cam_legacy-ftps", "camera-secret", cancellationToken: Token))!;
         Assert.Equal(SourceConnectionProfile.ModernFtps, modernLogin.ConnectionProfile);
 
         var legacyLoginId = Guid.NewGuid();
@@ -472,10 +472,10 @@ public sealed partial class CameraIngressIntegrationTests
         Assert.Equal(SourceConnectionProfile.LegacyFtps, enabled.Current!.ConnectionProfile);
         Assert.Equal(2, enabled.Current.CredentialGeneration);
 
-        CameraLogin legacyLogin = (await fixture.Ingress.AuthenticateAsync("cam_legacy-ftps", "camera-secret", Token,
-            SourceConnectionProfile.LegacyFtps))!;
+        CameraLogin legacyLogin = (await fixture.Ingress.AuthenticateAsync("cam_legacy-ftps", "camera-secret",
+            SourceConnectionProfile.LegacyFtps, Token))!;
         Assert.Equal(SourceConnectionProfile.LegacyFtps, legacyLogin.ConnectionProfile);
-        Assert.Null(await fixture.Ingress.AuthenticateAsync("cam_legacy-ftps", "camera-secret", Token));
+        Assert.Null(await fixture.Ingress.AuthenticateAsync("cam_legacy-ftps", "camera-secret", cancellationToken: Token));
 
         SourceConfigurationWrite suspended = await configuration.SetIngressEnabledAsync(sourceId,
             enabled.Current.ConfigurationRevision, false, Token);
@@ -487,8 +487,8 @@ public sealed partial class CameraIngressIntegrationTests
             legacyLogin.Username, "FTP_legacy-stale-generation", "/DCIM/DSC0000.JPG", CurrentTimestamp(),
             1_024, 2, 600, Token));
 
-        CameraLogin activeLegacyLogin = (await fixture.Ingress.AuthenticateAsync("cam_legacy-ftps", "camera-secret", Token,
-            SourceConnectionProfile.LegacyFtps))!;
+        CameraLogin activeLegacyLogin = (await fixture.Ingress.AuthenticateAsync("cam_legacy-ftps", "camera-secret",
+            SourceConnectionProfile.LegacyFtps, Token))!;
         long timestamp = CurrentTimestamp();
         await fixture.Ingress.AdmitAsync(activeLegacyLogin.Id, activeLegacyLogin.Username, "FTP_legacy", "/DCIM/DSC0001.JPG",
             timestamp, 1_024, 2, 600, Token);
@@ -515,7 +515,7 @@ public sealed partial class CameraIngressIntegrationTests
     {
         await using var fixture = await CameraIngressFixture.CreateAsync();
         await fixture.CreateSourceAsync("recovery", "camera-secret");
-        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_recovery", "camera-secret", Token))!;
+        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_recovery", "camera-secret", cancellationToken: Token))!;
         string path = "/DCIM/DSC0003.JPG";
         const string session = "FTP_session-recovery";
         long firstTimestamp = CurrentTimestamp() - 601_000_000_000;
@@ -528,7 +528,7 @@ public sealed partial class CameraIngressIntegrationTests
         await fixture.Store.ReleaseHandoffAsync(firstTransfer, Token);
 
         await fixture.CreateSourceAsync("recovery-new", "new-camera-secret");
-        CameraLogin otherLogin = (await fixture.Ingress.AuthenticateAsync("cam_recovery-new", "new-camera-secret", Token))!;
+        CameraLogin otherLogin = (await fixture.Ingress.AuthenticateAsync("cam_recovery-new", "new-camera-secret", cancellationToken: Token))!;
         await fixture.Ingress.AdmitAsync(otherLogin.Id, otherLogin.Username, "FTP_session-new", "/DCIM/DSC0005.JPG",
             CurrentTimestamp(), 1_024, 2, 600, Token);
         CameraUploadAdmission retained = Assert.Single(await fixture.Store.GetRecoverableAsync(Token), item => item.Id == firstTransfer);
@@ -570,7 +570,7 @@ public sealed partial class CameraIngressIntegrationTests
     {
         await using var fixture = await CameraIngressFixture.CreateAsync();
         await fixture.CreateSourceAsync("deadline", "camera-secret");
-        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_deadline", "camera-secret", Token))!;
+        CameraLogin login = (await fixture.Ingress.AuthenticateAsync("cam_deadline", "camera-secret", cancellationToken: Token))!;
         string path = "/DCIM/DSC0004.JPG";
         long now = CurrentTimestamp();
         long stale = now - 601_000_000_000;
@@ -621,7 +621,7 @@ public sealed partial class CameraIngressIntegrationTests
         {
             ArchitectureTestDatabase fixture = await ArchitectureTestDatabase.CreateAsync();
             var database = new ShutterSpoolDbContext(fixture.Options);
-            await new DatabaseInitializer(database).InitializeAsync(fixture.SpoolRoot, Token);
+            await new DatabaseInitializer(database).InitializeAsync(fixture.SpoolRoot, cancellationToken: Token);
             var protectionOptions = Options.Create(new CredentialProtectionOptions { EncryptionKey = Convert.ToBase64String(new byte[32]) });
             return new(fixture, database, new SecretProtector(protectionOptions));
         }

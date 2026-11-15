@@ -17,7 +17,7 @@ public sealed class LocalFileDeliveryTests
         File.WriteAllText(System.IO.Path.Combine(fixture.Path, "photo.raw"), "synthetic");
         string[] before = Directory.GetFileSystemEntries(fixture.Path).Order().ToArray();
 
-        LocalDirectoryListingResult result = LocalDirectoryBrowser.Browse(fixture.Path, CancellationToken.None);
+        LocalDirectoryListingResult result = LocalDirectoryBrowser.Browse(fixture.Path, cancellationToken: CancellationToken.None);
 
         Assert.Null(result.Error);
         Assert.Equal(["alpha", "zebra"], result.Listing!.Directories.Select(entry => entry.Name));
@@ -28,9 +28,10 @@ public sealed class LocalFileDeliveryTests
     [Fact]
     public void Browsing_rejects_relative_and_missing_paths_with_readable_errors()
     {
-        Assert.Equal("Enter an absolute directory path.", LocalDirectoryBrowser.Browse("relative", CancellationToken.None).Error);
+        Assert.Equal("Enter an absolute directory path.", LocalDirectoryBrowser.Browse("relative", cancellationToken: CancellationToken.None).Error);
         Assert.Equal("The directory does not exist or cannot be read.",
-            LocalDirectoryBrowser.Browse(System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid().ToString("N")), CancellationToken.None).Error);
+            LocalDirectoryBrowser.Browse(System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid().ToString("N")),
+                cancellationToken: CancellationToken.None).Error);
     }
 
     [Fact]
@@ -38,7 +39,7 @@ public sealed class LocalFileDeliveryTests
     {
         string root = System.IO.Path.GetPathRoot(System.IO.Path.GetTempPath())!;
 
-        LocalDirectoryListingResult result = LocalDirectoryBrowser.Browse(root, CancellationToken.None);
+        LocalDirectoryListingResult result = LocalDirectoryBrowser.Browse(root, cancellationToken: CancellationToken.None);
 
         Assert.Null(result.Error);
         Assert.Equal(System.IO.Path.GetFullPath(root), result.Listing!.Path);
@@ -54,10 +55,10 @@ public sealed class LocalFileDeliveryTests
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
         { Assert.Skip("This host does not permit creating a directory symlink."); }
 
-        LocalDirectoryListingResult result = LocalDirectoryBrowser.Browse(fixture.Path, CancellationToken.None);
+        LocalDirectoryListingResult result = LocalDirectoryBrowser.Browse(fixture.Path, cancellationToken: CancellationToken.None);
 
         Assert.Equal(["real"], result.Listing!.Directories.Select(entry => entry.Name));
-        Assert.NotNull(LocalDirectoryBrowser.Browse(System.IO.Path.Combine(fixture.Path, "linked"), CancellationToken.None).Error);
+        Assert.NotNull(LocalDirectoryBrowser.Browse(System.IO.Path.Combine(fixture.Path, "linked"), cancellationToken: CancellationToken.None).Error);
     }
 
     [Fact]
@@ -67,7 +68,7 @@ public sealed class LocalFileDeliveryTests
         for (int index = 0; index < 205; index++)
             Directory.CreateDirectory(System.IO.Path.Combine(fixture.Path, $"folder-{index:D3}"));
 
-        LocalDirectoryListing listing = LocalDirectoryBrowser.Browse(fixture.Path, CancellationToken.None).Listing!;
+        LocalDirectoryListing listing = LocalDirectoryBrowser.Browse(fixture.Path, cancellationToken: CancellationToken.None).Listing!;
 
         Assert.Equal(200, listing.Directories.Count);
         Assert.True(listing.Truncated);

@@ -9,12 +9,12 @@ namespace ShutterSpool.IntegrationTests;
 public sealed partial class ConfigurationApiTests
 {
     [Fact]
-    public async Task Inactive_quota_does_not_report_unknown_accounting_as_blocked_ingest()
+    public async Task Provisioned_workspace_has_known_accounting_and_admits_within_its_allocation()
     {
         await using var fixture = await ConfigurationApiFixture.CreateAsync();
         CancellationToken token = TestContext.Current.CancellationToken;
         JsonObject? capacity = await fixture.Client.GetFromJsonAsync<JsonObject>("/management/retention/capacity", token);
-        Assert.True(capacity!["unknownAccounting"]!.GetValue<bool>());
+        Assert.False(capacity!["unknownAccounting"]!.GetValue<bool>());
         Assert.False(capacity["admissionBlocked"]!.GetValue<bool>());
         Assert.DoesNotContain(capacity["blockers"]!.AsArray(), item => item!.GetValue<string>() == "admission-blocked");
     }

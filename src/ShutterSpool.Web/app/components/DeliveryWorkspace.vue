@@ -3,6 +3,7 @@ import { createUntypedString, createUntypedNumber, createUntypedNull } from '@mi
 import { api, cancellable, handleFailure } from '../lib/api';
 import { accessGeneration, session } from '../lib/session';
 import { createReadPool } from '../lib/read-pool';
+import { isDestinationKindEnabled } from '../lib/destination-capabilities';
 import type { DestinationResponse, DestinationRoutingResponse, RoutingDeliveryPageResponse, RoutingRuleDto } from '../api/models';
 const props = defineProps<{
     gridMaximumDimension?: number;
@@ -14,6 +15,8 @@ const props = defineProps<{
     previewVersions?: Record<string, number>;
 }>();
 const destinations = ref<DestinationResponse[]>([]);
+const enabledDestinationKinds = shallowRef<string[]>([]);
+const destinationCapabilityState = ref<'loading' | 'ready' | 'failed'>('loading');
 const editor = ref<HTMLElement>();
 const destinationCursor = ref<string | null>();
 const selected = ref('');
@@ -139,6 +142,18 @@ const settingsRevision = ref<number | null>();
 const lanes = [{ name: 'Queued', state: 'Pending' }, { name: 'Running', state: 'Running' }, { name: 'Confirmed', state: 'Delivered' }];
 const name = ref('');
 const kind = ref('local');
+const canCreateKind = (value: string | null | undefined) => destinationCapabilityState.value === 'ready' && isDestinationKindEnabled(enabledDestinationKinds.value, value);
+const selectedKindEnabled = computed(() => canCreateKind(destination.value?.kind ?? undefined));
+const enabledCreationKinds = computed(() => ['local', 'webdav'].filter(canCreateKind));
+const emptyDestinationGuidance = computed(() => {
+    if (destinationCapabilityState.value !== 'ready') return 'Enabled destination types must be confirmed before one can be added.';
+    if (enabledCreationKinds.value.length === 2) return 'Configure local or mounted storage, or WebDAV / Nextcloud, then define its rules.';
+    if (enabledCreationKinds.value[0] === 'local') return 'Configure local or mounted storage, then define its rules.';
+    if (enabledCreationKinds.value[0] === 'webdav') return 'Configure a WebDAV / Nextcloud destination, then define its rules.';
+    return 'Ask the operator to enable a destination type before adding one.';
+});
+let capabilitySequence = 0;
+let capabilityController: AbortController | undefined;
 const root = ref('');
 const url = ref('');
 const username = ref('');
@@ -179,9 +194,32 @@ function loadedStatus(id: string) {
     if (rows.length && rows.every(row => row.state === 'Delivered')) return { icon: 'i-lucide-check', state: 'success', text: 'Recent deliveries confirmed; open Work for older history' };
     return { icon: 'i-lucide-info', state: 'neutral', text: rows.length ? 'Recent deliveries are still in progress' : 'No recent deliveries' };
 }
+function destinationKindLabel(kind: string | null | undefined) {
+    return kind === 'local' ? 'Local storage' : kind === 'webdav' ? 'WebDAV / Nextcloud' : `${kind ?? 'Unknown'} destination`;
+}
 const operators = (fact: string) => ['rating', 'size', 'captureTime'].includes(fact) ? ['equals', 'gt', 'gte', 'lt', 'lte'] : fact === 'label' ? ['equals', 'present', 'absent'] : fact === 'tags' ? ['contains'] : fact === 'suppliedName' ? ['equals', 'glob'] : ['equals'];
 let listPending: boolean | undefined;
 let listing: Promise<void> | undefined;
+async function refreshDestinationCapabilities() {
+    const request = ++capabilitySequence;
+    capabilityController?.abort();
+    const controller = capabilityController = new AbortController();
+    destinationCapabilityState.value = 'loading';
+    try {
+        const result = await api.management.destinations.capabilities.get({ options: [cancellable(controller.signal)] });
+        if (disposed || controller.signal.aborted || request !== capabilitySequence) return;
+        if (!Array.isArray(result?.enabledKinds) || !result.enabledKinds.every(value => typeof value === 'string'))
+            throw new Error('Destination capabilities are unavailable.');
+        enabledDestinationKinds.value = result.enabledKinds;
+        destinationCapabilityState.value = 'ready';
+        if (!selected.value && !canCreateKind(kind.value))
+            kind.value = enabledCreationKinds.value[0] ?? '';
+    } catch (error) {
+        if (disposed || controller.signal.aborted || request !== capabilitySequence) return;
+        handleFailure(error);
+        destinationCapabilityState.value = 'failed';
+    }
+}
 function list(next = false): Promise<void> {
     listPending = next;
     return listing ??= (async () => {
@@ -395,7 +433,7 @@ watch(tab, value => {
     if (value === 'Work')
         void readWork();
 });
-onMounted(() => list());
+onMounted(() => { void list(); void refreshDestinationCapabilities(); });
 watch(() => props.generation, () => {
     void list();
     if (selected.value)
@@ -411,6 +449,8 @@ onUnmounted(() => {
     listController?.abort();
     editorController?.abort();
     workController?.abort();
+    capabilitySequence++;
+    capabilityController?.abort();
     password.value = '';
     listPending = undefined;
     destinations.value = [];
@@ -419,12 +459,13 @@ onUnmounted(() => {
     routing.value = undefined;
 });
 function addRule() {
-    if (rules.value.length >= 128)
+    if (!selectedKindEnabled.value || rules.value.length >= 128)
         return;
     rules.value.push({ id: crypto.randomUUID(), name: 'New rule', order: rules.value.length, conditionMode: 0, negate: false, required: true, folderTemplate: '', filenameTemplate: '{suppliedName}', conditions: [] });
     dirtyRules.value = true;
 }
 function move(index: number, delta: number) {
+    if (!selectedKindEnabled.value) return;
     const target = index + delta;
     if (target < 0 || target >= rules.value.length)
         return;
@@ -435,7 +476,7 @@ function move(index: number, delta: number) {
 }
 let dragged = -1;
 function drop(index: number) {
-    if (dragged < 0 || dragged === index)
+    if (!selectedKindEnabled.value || dragged < 0 || dragged === index)
         return;
     const [rule] = rules.value.splice(dragged, 1);
     if (rule)
@@ -451,7 +492,7 @@ function conditionValue(condition: Condition) {
     return createUntypedString(condition.value);
 }
 async function saveRules() {
-    if (busy.value || setupIncomplete.value || ruleConflict.value || !props.online || authoritativeOwner.value !== selected.value)
+    if (!selectedKindEnabled.value || busy.value || setupIncomplete.value || ruleConflict.value || !props.online || authoritativeOwner.value !== selected.value)
         return;
     const access = accessGeneration();
     const id = selected.value;
@@ -479,6 +520,8 @@ async function saveRules() {
 }
 async function settings(action: 'create' | 'name' | 'provider' | 'toggle' | 'test') {
     if (busy.value || configConflict.value || !props.online || action !== 'create' && authoritativeOwner.value !== selected.value)
+        return;
+    if (action === 'create' ? !canCreateKind(kind.value) : !selectedKindEnabled.value)
         return;
     if ((action === 'toggle' && (dirtyRules.value || ruleConflict.value)) || (setupIncomplete.value && ruleConflict.value && (action === 'provider' || action === 'test')))
         return;
@@ -642,13 +685,16 @@ function close() {
 </script>
 
 <template>
+        <p v-if="destinationCapabilityState !== 'ready'" class="notice" role="status">
+            {{ destinationCapabilityState === 'loading' ? 'Loading enabled destination types…' : 'Enabled destination types are unavailable. Creation and changes are disabled.' }}
+            <button v-if="destinationCapabilityState === 'failed'" type="button" @click="refreshDestinationCapabilities">Retry destination types</button>
+        </p>
+        <p v-else-if="!enabledCreationKinds.length" class="notice" role="status">No destination types are enabled in this deployment. Ask the operator if you need another type.</p>
         <div v-if="!destinations.length" class="empty">
             <h2>
-                Add a destination
+                {{ enabledCreationKinds.length ? 'Add a destination' : 'No destinations yet' }}
             </h2>
-            <p>
-                Configure local or mounted storage, or WebDAV / Nextcloud, then define its rules.
-            </p>
+            <p>{{ emptyDestinationGuidance }}</p>
         </div>
         <article
             v-for="item in destinations.filter(value => !incomplete.includes(String(value.id)))"
@@ -665,9 +711,10 @@ function close() {
                         {{ item.name }}
                     </h2>
                     <span>
-                        {{ item.kind === 'webdav' ? 'WebDAV' : 'Local storage' }}
+                        {{ destinationKindLabel(item.kind) }}
                         ·
                         {{ item.enabled ? 'Enabled' : 'Paused' }}
+                        <template v-if="destinationCapabilityState === 'ready' && !isDestinationKindEnabled(enabledDestinationKinds, item.kind)"> · Unavailable in this deployment</template>
                     </span>
                 </div>
             </button>
@@ -694,7 +741,7 @@ function close() {
             Older destinations
         </button>
         <button v-for="id in incomplete" :key="id" @click="open(id)">Continue destination setup</button>
-        <section v-if="!selected" class="settings-panel panel">
+        <section v-if="!selected && enabledCreationKinds.length" class="settings-panel panel">
             <h2>
                 New destination
             </h2>
@@ -707,16 +754,13 @@ function close() {
                     <label class="field">
                         Provider
                         <select v-model="kind" @change="dirtyProvider = true">
-                            <option value="local">
-                                Local / mounted storage
-                            </option>
-                            <option value="webdav">
-                                WebDAV / Nextcloud
+                            <option v-for="kindOption in ['local', 'webdav']" :key="kindOption" :value="kindOption" :disabled="!canCreateKind(kindOption)">
+                                {{ kindOption === 'local' ? 'Local / mounted storage' : 'WebDAV / Nextcloud' }}
                             </option>
                         </select>
                     </label>
                 </div>
-                <button class="primary" :disabled="busy">
+                <button class="primary" :disabled="busy || !canCreateKind(kind)">
                     Create destination
                 </button>
             </form>
@@ -740,22 +784,24 @@ function close() {
             >
                 {{ item }}
             </button>
-            <button class="destination-return" aria-label="New destination" title="New destination" @click="close"><UIcon name="i-lucide-plus" /></button>
+            <button class="destination-return" aria-label="New destination" title="New destination" :disabled="destinationCapabilityState !== 'ready' || !enabledCreationKinds.length" @click="close"><UIcon name="i-lucide-plus" /></button>
         </nav>
+        <p v-if="destinationCapabilityState === 'ready' && destination && !selectedKindEnabled" class="notice" role="status">{{ destinationKindLabel(destination.kind) }} is unavailable in this deployment. Saved settings and delivery history remain visible; configuration, tests and route changes are disabled.</p>
         <section v-if="authoritativeOwner === selected && tab === 'Rules'" class="rules-workspace">
             <p class="muted">
                 Ordered, first-match rules. Targets remain under the configured destination root.
             </p>
+            <p v-if="destinationCapabilityState === 'ready' && !selectedKindEnabled" class="muted">Saved rules are read-only while this destination type is unavailable.</p>
             <p v-if="ruleConflict" class="notice error">
                 Server rules changed. Your draft is retained.
                 <button :disabled="busy || !online" @click="reloadRules()">
                     Use server rules
                 </button>
-                <button :disabled="busy || !online" @click="replaceRulesWithDraft()">
+                <button :disabled="busy || !online || !selectedKindEnabled" @click="replaceRulesWithDraft()">
                     Explicitly replace with my draft
                 </button>
             </p>
-            <div class="rule-list" @input="dirtyRules = true" @change="dirtyRules = true">
+            <fieldset class="destination-rule-set" :disabled="!selectedKindEnabled"><legend class="sr-only">Destination routing rules</legend><div class="rule-list" @input="dirtyRules = true" @change="dirtyRules = true">
                 <details
                     v-for="(rule,index) in rules"
                     :key="rule.id ?? index"
@@ -764,7 +810,7 @@ function close() {
                     @drop.prevent="drop(index)"
                 >
                     <summary><UIcon name="i-lucide-chevron-right" class="disclosure-chevron" aria-hidden="true" />
-                        <span class="drag-handle" draggable="true" @dragstart="dragged = index" aria-label="Drag rule to reorder">
+                        <span class="drag-handle" :draggable="selectedKindEnabled" @dragstart="dragged = index" aria-label="Drag rule to reorder">
                             <UIcon name="i-lucide-grip-vertical" />
                         </span>
                         <span class="rule-title">
@@ -895,12 +941,12 @@ function close() {
                         </div>
                     </div>
                 </details>
-            </div>
+            </div></fieldset>
             <div class="actions">
-                <button :disabled="rules.length >= 128" @click="addRule">
+                <button :disabled="!selectedKindEnabled || rules.length >= 128" @click="addRule">
                     Add rule
                 </button>
-                <button class="primary" :disabled="busy || !dirtyRules || ruleConflict || !online" @click="saveRules">
+                <button class="primary" :disabled="!selectedKindEnabled || busy || !dirtyRules || ruleConflict || !online" @click="saveRules">
                     Save rules
                 </button>
                 <button :disabled="busy || !online" @click="reloadRules()">
@@ -958,19 +1004,20 @@ function close() {
             <form @input="dirtyName = true" @submit.prevent="settings('name')">
                 <label class="field">
                     Name
-                    <input v-model="name" maxlength="200" required />
+                    <input v-model="name" maxlength="200" required :disabled="!selectedKindEnabled" />
                 </label>
-                <button :disabled="busy || configConflict">
+                <button :disabled="busy || configConflict || !selectedKindEnabled">
                     Save name
                 </button>
             </form>
             <form @input="dirtyProvider = true" @submit.prevent="destination?.kind === 'local' || setupIncomplete ? saveAndTest() : settings('provider')">
+                <fieldset class="destination-provider-fields" :disabled="!selectedKindEnabled">
                 <template v-if="destination?.kind === 'local'">
                     <label class="field">
                         Destination folder
                         <input v-model="root" required maxlength="2048" :aria-describedby="feedback ? 'local-folder-help local-folder-feedback' : 'local-folder-help'" />
                     </label>
-                    <button type="button" :disabled="busy || configConflict || !online" @click="folderPickerOpen = true"><UIcon name="i-lucide-folder-open" /> Browse…</button>
+                    <button type="button" :disabled="busy || configConflict || !online || !selectedKindEnabled" @click="folderPickerOpen = true"><UIcon name="i-lucide-folder-open" /> Browse…</button>
                     <p id="local-folder-help" class="muted">Use an existing, writable folder on the machine running ShutterSpool. Enter its full path or choose Browse, then Save and test folder.</p>
                     <p v-if="feedback" id="local-folder-feedback" role="status" class="notice">
                         {{ feedback }}
@@ -997,16 +1044,17 @@ function close() {
                     </label>
                 </template>
                 <div class="actions">
-                    <button :disabled="busy || configConflict">
+                    <button :disabled="busy || configConflict || !selectedKindEnabled">
                         {{ destination?.kind === 'local' ? 'Save and test folder' : setupIncomplete ? 'Save and test provider settings' : 'Save provider settings' }}
                     </button>
-                    <button type="button" :disabled="busy || configConflict || localFolderNeedsSave" @click="settings('test')">
+                    <button type="button" :disabled="busy || configConflict || localFolderNeedsSave || !selectedKindEnabled" @click="settings('test')">
                         Test saved settings
                     </button>
                 </div>
+                </fieldset>
             </form>
             <div class="actions">
-                <button :disabled="busy || configConflict || dirtyRules || setupIncomplete" @click="settings('toggle')">
+                <button :disabled="busy || configConflict || dirtyRules || setupIncomplete || !selectedKindEnabled" @click="settings('toggle')">
                     {{ routing?.enabled ? 'Disable destination' : 'Enable destination' }}
                 </button>
             </div>
@@ -1022,7 +1070,7 @@ function close() {
             Reload saved settings
         </button>
     </p>
-    <LocalFolderPicker v-if="folderPickerOpen && destination?.kind === 'local'" :key="selected" :initial-path="root" :online="online" @select="root = $event; dirtyProvider = true; folderPickerOpen = false" @close="folderPickerOpen = false" />
+    <LocalFolderPicker v-if="folderPickerOpen && destination?.kind === 'local' && selectedKindEnabled" :key="selected" :initial-path="root" :online="online" @select="root = $event; dirtyProvider = true; folderPickerOpen = false" @close="folderPickerOpen = false" />
     <dialog ref="discardDialog" class="discard-dialog" aria-labelledby="discard-destination-title">
         <h2 id="discard-destination-title">Discard unsaved destination changes?</h2>
         <p>Your saved settings and rules are preserved.</p>

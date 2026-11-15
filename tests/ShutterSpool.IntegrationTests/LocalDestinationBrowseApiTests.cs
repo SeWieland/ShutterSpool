@@ -10,7 +10,7 @@ public sealed partial class ConfigurationApiTests
     public async Task Local_folder_browse_returns_directory_contract_and_validation_errors()
     {
         await using var fixture = await ConfigurationApiFixture.CreateAsync();
-        string root = Path.Combine(Path.GetTempPath(), $"shutterspool-browse-{Guid.NewGuid():N}");
+        string root = Path.Combine(fixture.Database.SpoolRoot, "destinations", "browse");
         Directory.CreateDirectory(root);
         Directory.CreateDirectory(Path.Combine(root, "child"));
         await File.WriteAllTextAsync(Path.Combine(root, "original.raw"), "synthetic", TestContext.Current.CancellationToken);
@@ -41,7 +41,7 @@ public sealed partial class ConfigurationApiTests
     {
         await using var fixture = await ConfigurationApiFixture.CreateAsync();
         CancellationToken token = TestContext.Current.CancellationToken;
-        string root = Path.Combine(Path.GetTempPath(), $"shutterspool-root-{Guid.NewGuid():N}");
+        string root = Path.Combine(fixture.Database.SpoolRoot, "destinations", "target");
         Directory.CreateDirectory(root);
         try
         {
@@ -58,7 +58,7 @@ public sealed partial class ConfigurationApiTests
             Assert.Contains("absolute directory path", problem.RootElement.GetProperty("detail").GetString(), StringComparison.OrdinalIgnoreCase);
             Assert.Equal("INVALID_ROOT", problem.RootElement.GetProperty("errors").GetProperty("rootPath")[0].GetString());
 
-            string missingRoot = Path.Combine(Path.GetTempPath(), $"shutterspool-missing-{Guid.NewGuid():N}");
+            string missingRoot = Path.Combine(fixture.Database.SpoolRoot, "destinations", "missing");
             using HttpResponseMessage unavailable = await fixture.Client.PutAsJsonAsync($"/management/destinations/{id}/local",
                 new { expectedRevision = 0, rootPath = missingRoot }, token);
             Assert.Equal(HttpStatusCode.BadRequest, unavailable.StatusCode);

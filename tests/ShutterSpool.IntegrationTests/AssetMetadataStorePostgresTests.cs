@@ -30,7 +30,7 @@ public sealed class AssetMetadataStorePostgresTests
             Guid assetId;
             await using (var database = new ShutterSpoolDbContext(options))
             {
-                await new DatabaseInitializer(database).InitializeAsync(spoolRoot, TestContext.Current.CancellationToken);
+                await new DatabaseInitializer(database).InitializeAsync(spoolRoot, cancellationToken: TestContext.Current.CancellationToken);
                 Guid sourceId = await AddSourceAsync(database, TestContext.Current.CancellationToken);
                 assetId = await CommitAssetAsync(database, sourceId, TestContext.Current.CancellationToken);
             }
@@ -104,7 +104,7 @@ public sealed class AssetMetadataStorePostgresTests
             Guid sourceId;
             await using (var database = new ShutterSpoolDbContext(options))
             {
-                await new DatabaseInitializer(database).InitializeAsync(spoolRoot, TestContext.Current.CancellationToken);
+                await new DatabaseInitializer(database).InitializeAsync(spoolRoot, cancellationToken: TestContext.Current.CancellationToken);
                 sourceId = await AddSourceAsync(database, TestContext.Current.CancellationToken);
                 var journal = new EfIngestJournal(database);
                 var operation = new IngestOperation(Guid.NewGuid(), Guid.NewGuid(), sourceId, "synthetic.jpg", "partial", IngestOperationState.Receiving);

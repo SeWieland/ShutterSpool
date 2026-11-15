@@ -35,8 +35,15 @@ internal sealed partial class ShutterSpoolDbContext(DbContextOptions<ShutterSpoo
     internal DbSet<WebDavDestinationEntity> WebDavDestinations => Set<WebDavDestinationEntity>();
     internal DbSet<AuthorizationGrant> AuthorizationGrants => Set<AuthorizationGrant>();
 
+    internal DbSet<WorkspaceIdentityEntity> WorkspaceIdentities => Set<WorkspaceIdentityEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<WorkspaceIdentityEntity>(entity =>
+        {
+            entity.ToTable("workspace_identity");
+            entity.HasKey(item => item.Id);
+        });
         ConfigureConfiguration(modelBuilder);
         ConfigureQuota(modelBuilder);
         ConfigureProtections(modelBuilder);
@@ -286,4 +293,12 @@ internal sealed partial class ShutterSpoolDbContext(DbContextOptions<ShutterSpoo
             entity.Property(state => state.State).HasMaxLength(24);
         });
     }
+}
+
+internal sealed class WorkspaceIdentityEntity
+{
+    public Guid Id { get; set; }
+    public string StorageIdentity { get; set; } = "";
+    public Guid OperationId { get; set; }
+    public bool BootstrapComplete { get; set; }
 }

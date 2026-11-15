@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 import { compileScript, parse } from '@vue/compiler-sfc';
-import { ref, reactive, computed, watch, nextTick, onMounted, onUnmounted, createRenderer, h } from 'vue';
+import { ref, shallowRef, reactive, computed, watch, nextTick, onMounted, onUnmounted, createRenderer, h } from 'vue';
 import * as Vue from 'vue';
 
 function deferred() {
@@ -17,6 +17,7 @@ async function flushMicrotasks(rounds = 12) { for (let i = 0; i < rounds; i++) a
 function compile(name, context) {
     const source = parse(readFileSync(new URL(`../app/components/${name}.vue`, import.meta.url), 'utf8')).descriptor.scriptSetup.content;
     vm.runInContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
+    if (name === 'DeliveryWorkspace') vm.runInContext("destinationCapabilityState.value = 'ready'; enabledDestinationKinds.value = ['local', 'webdav']", context);
     return expression => vm.runInContext(expression, context);
 }
 function compileMounted(name, context) {
@@ -40,6 +41,9 @@ function createTestRenderer() {
 const readPoolContext = vm.createContext({ exports: {} });
 vm.runInContext(ts.transpileModule(readFileSync(new URL('../app/lib/read-pool.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, readPoolContext);
 const readPoolModule = readPoolContext.exports;
+const destinationCapabilityContext = vm.createContext({ exports: {} });
+vm.runInContext(ts.transpileModule(readFileSync(new URL('../app/lib/destination-capabilities.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, destinationCapabilityContext);
+const destinationCapabilityModule = destinationCapabilityContext.exports;
 
 test('Delivery command stays locked after a lost response until a new authoritative work row arrives', async () => {
     let rejectRetry;
@@ -47,7 +51,7 @@ test('Delivery command stays locked after a lost response until a new authoritat
     const props = reactive({ work: { id: 'delivery-1', assetId: 'asset-1', destinationId: 'destination-1', state: 'Failed' }, online: true, recoverySequence: 0 });
     const events = [];
     let unmount = () => {};
-    const context = vm.createContext({ exports: {}, AbortController, ref, reactive, computed, watch, nextTick,
+    const context = vm.createContext({ exports: {}, AbortController, ref, shallowRef, reactive, computed, watch, nextTick,
         defineProps: () => props, defineEmits: () => (...event) => events.push(event),
         onUnmounted(callback) { unmount = callback; },
         require: name => name.endsWith('/session') ? { accessGeneration: () => 1, onAccessLost: () => () => {} }
@@ -81,7 +85,7 @@ test('Delivery attempts reads cancel superseded owner requests and cannot replac
     const props = reactive({ work: { id: 'delivery-1', assetId: 'asset-1', destinationId: 'destination-1', state: 'Failed' }, online: true });
     const requests = [];
     let unmount = () => {};
-    const context = vm.createContext({ exports: {}, AbortController, ref, reactive, computed, watch, nextTick,
+    const context = vm.createContext({ exports: {}, AbortController, ref, shallowRef, reactive, computed, watch, nextTick,
         defineProps: () => props, defineEmits: () => () => {}, onUnmounted(callback) { unmount = callback; },
         require: name => name.endsWith('/session') ? { accessGeneration: () => 1, onAccessLost: () => () => {} }
             : name.endsWith('/workspace-interactions') ? { deliveryPresentation: () => ({ tone: 'attention', label: 'Failed', icon: 'i-lucide-x' }) }
@@ -106,11 +110,11 @@ test('Delivery attempts reads cancel superseded owner requests and cannot replac
 
 test('Source reports a newly edited Source draft through the typed dirty event', async () => {
     const events = [];
-    const context = vm.createContext({ exports: {}, AbortController, ref, reactive, computed, watch, nextTick,
+    const context = vm.createContext({ exports: {}, AbortController, ref, shallowRef, reactive, computed, watch, nextTick,
         defineProps: () => ({ sources: [] }), defineEmits: () => (...event) => events.push(event),
         onMounted() {}, onUnmounted() {}, ResizeObserver: class { observe() {} disconnect() {} },
         require: name => name.endsWith('/source-activity') ? { SourceActivityState: class { clear() {} }, activityPresentation: () => ({}), sourceActivityCounters: () => ({}), sourceStatusPosition: () => ({}) }
-            : name.endsWith('/read-pool') ? readPoolModule
+            : name.endsWith('/destination-capabilities') ? destinationCapabilityModule : name.endsWith('/read-pool') ? readPoolModule
                 : name.endsWith('/session') ? { accessGeneration: () => 1, onAccessLost: () => () => {} }
                 : { api: { management: { sources: { get: async () => ({ items: [] }) }, sourceCapabilities: { get: async () => ({ profiles: [] }) } } }, cancellable: signal => ({ signal }), handleFailure() {}, readSourceAuthenticationObservations: async () => ({ items: [] }), readSourceActivity: async () => ({ items: [], epoch: '', coverageComplete: true }) },
     });
@@ -123,11 +127,11 @@ test('Source reports a newly edited Source draft through the typed dirty event',
 test('mounted New destination controls report dirty state from real template input events', async () => {
     const events = [];
     const warnings = [];
-    const context = vm.createContext({ exports: {}, AbortController, setTimeout, clearTimeout, ref, reactive, computed, watch, nextTick, onMounted, onUnmounted, HTMLElement: class {}, Document: class {},
+    const context = vm.createContext({ exports: {}, AbortController, setTimeout, clearTimeout, ref, shallowRef, reactive, computed, watch, nextTick, onMounted, onUnmounted, HTMLElement: class {}, Document: class {},
         require: name => name === 'vue' ? Vue : name.includes('kiota') ? { createUntypedString: value => ({ getValue: () => value }), createUntypedNumber: value => ({ getValue: () => value }), createUntypedNull: () => ({ getValue: () => null }) }
-            : name.endsWith('/read-pool') ? readPoolModule
+            : name.endsWith('/destination-capabilities') ? destinationCapabilityModule : name.endsWith('/read-pool') ? readPoolModule
                 : name.endsWith('/session') ? { accessGeneration: () => 1, session: { value: { profile: { iss: 'issuer', sub: 'subject' } } } }
-                    : { api: { management: { destinations: { get: async () => ({ items: [] }) } } }, cancellable: signal => ({ signal }), handleFailure() {} },
+                    : { api: { management: { destinations: { get: async () => ({ items: [] }), capabilities: { get: async () => ({ enabledKinds: ['local', 'webdav'] }) } } } }, cancellable: signal => ({ signal }), handleFailure() {} },
     });
     const component = compileMounted('DeliveryWorkspace', context);
     const mounted = createTestRenderer();
@@ -177,11 +181,11 @@ test('mounted rule conflict controls keep the draft locked through failed and pe
             put: async body => { saveCount++; if (rejectSave) throw new Error('save reply lost'); return { ...route(), configurationRevision: routeRevision + 1, rules: body.rules }; },
         },
     });
-    const context = vm.createContext({ exports: {}, AbortController, setTimeout, clearTimeout, ref, reactive, computed, watch, nextTick, onMounted, onUnmounted, HTMLElement: class {}, Document: class {},
+    const context = vm.createContext({ exports: {}, AbortController, setTimeout, clearTimeout, ref, shallowRef, reactive, computed, watch, nextTick, onMounted, onUnmounted, HTMLElement: class {}, Document: class {},
         require: name => name === 'vue' ? Vue : name.includes('kiota') ? { createUntypedString: value => ({ getValue: () => value }), createUntypedNumber: value => ({ getValue: () => value }), createUntypedNull: () => ({ getValue: () => null }) }
-            : name.endsWith('/read-pool') ? readPoolModule
+            : name.endsWith('/destination-capabilities') ? destinationCapabilityModule : name.endsWith('/read-pool') ? readPoolModule
                 : name.endsWith('/session') ? { accessGeneration: () => 1, session: { value: { profile: { iss: 'issuer', sub: 'subject' } } } }
-                    : { api: { management: { destinations: { get: async () => { listCount++; return { items: [{ id: 'destination-1', name: 'Destination', kind: 'local', configurationRevision: 1, enabled: false }] }; }, byId: endpoint } } }, cancellable: signal => ({ signal }), handleFailure: () => 503 },
+                    : { api: { management: { destinations: { get: async () => { listCount++; return { items: [{ id: 'destination-1', name: 'Destination', kind: 'local', configurationRevision: 1, enabled: false }] }; }, capabilities: { get: async () => ({ enabledKinds: ['local', 'webdav'] }) }, byId: endpoint } } }, cancellable: signal => ({ signal }), handleFailure: () => 503 },
     });
     const component = compileMounted('DeliveryWorkspace', context);
     const mounted = createTestRenderer();
@@ -272,10 +276,10 @@ test('Delivery inventory and editor rereads share a four-request metadata limit'
         return gate.promise.then(() => value).finally(() => { active--; });
     };
     const page = { items: Array.from({ length: 6 }, (_, index) => ({ id: `destination-${index}`, name: `Destination ${index}`, kind: 'local', configurationRevision: 1 })) };
-    const context = vm.createContext({ exports: {}, AbortController, ref, reactive, computed, watch() {}, onMounted() {}, onUnmounted() {}, nextTick,
+    const context = vm.createContext({ exports: {}, AbortController, ref, shallowRef, reactive, computed, watch() {}, onMounted() {}, onUnmounted() {}, nextTick,
         defineProps: () => ({ online: true, generation: 0, motionEnabled: false }), defineEmits: () => () => {},
         require: name => name.includes('kiota') ? { createUntypedString: value => ({ getValue: () => value }), createUntypedNumber: value => ({ getValue: () => value }), createUntypedNull: () => ({ getValue: () => null }) }
-            : name.endsWith('/read-pool') ? readPoolModule
+            : name.endsWith('/destination-capabilities') ? destinationCapabilityModule : name.endsWith('/read-pool') ? readPoolModule
                 : name.endsWith('/session') ? { accessGeneration: () => 1, session: { value: { profile: { iss: 'issuer', sub: 'subject' } } } }
                     : { api: { management: { destinations: {
                         get: () => track('list', page),
@@ -304,11 +308,11 @@ test('Delivery inventory and editor rereads share a four-request metadata limit'
 
 test('a late Source display response cannot replace a newer owner read', async () => {
     const requests = [];
-    const context = vm.createContext({ exports: {}, AbortController, ref, reactive, computed, watch() {}, nextTick,
+    const context = vm.createContext({ exports: {}, AbortController, ref, shallowRef, reactive, computed, watch() {}, nextTick,
         defineProps: () => ({ sources: [{ id: 'source-1' }] }), defineEmits: () => () => {},
         onMounted() {}, onUnmounted() {}, ResizeObserver: class { observe() {} disconnect() {} },
         require: name => name.endsWith('/source-activity') ? { SourceActivityState: class { clear() {} }, activityPresentation: () => ({}), sourceActivityCounters: () => ({}), sourceStatusPosition: () => ({}) }
-            : name.endsWith('/read-pool') ? readPoolModule
+            : name.endsWith('/destination-capabilities') ? destinationCapabilityModule : name.endsWith('/read-pool') ? readPoolModule
                 : name.endsWith('/session') ? { accessGeneration: () => 1, onAccessLost: () => () => {} }
                 : { api: { management: { sources: { byId: () => ({ display: { get: options => new Promise(resolve => requests.push({ resolve, signal: options.options[0].signal })) } }) } } }, cancellable: signal => ({ signal }), handleFailure() {}, readSourceAuthenticationObservations: async () => ({ items: [] }), readSourceActivity: async () => ({ items: [], epoch: '', coverageComplete: true }) },
     });
@@ -344,7 +348,7 @@ test('mounted DeliveryWork invalidates a pending command when its editor unmount
     const source = parse(readFileSync(new URL('../app/components/DeliveryWork.vue', import.meta.url), 'utf8')).descriptor.scriptSetup.content;
     const app = renderer.createApp({
         setup(_props, { emit }) {
-            const context = vm.createContext({ exports: {}, AbortController, ref, reactive, computed, watch, nextTick,
+            const context = vm.createContext({ exports: {}, AbortController, ref, shallowRef, reactive, computed, watch, nextTick,
                 onUnmounted, defineProps: () => props, defineEmits: () => (...args) => { emitted.push(args); emit(...args); },
                 require: name => name.endsWith('/session') ? { accessGeneration: () => 1, onAccessLost: () => () => {} }
                     : name.endsWith('/workspace-interactions') ? { deliveryPresentation: () => ({ tone: 'attention', label: 'Failed', icon: 'i-lucide-x' }) }
@@ -372,10 +376,10 @@ test('explicit destination reload keeps each draft locked until its matching aut
     let pendingSettings = false;
     let pendingRules = false;
     const ruleSaves = [];
-    const context = vm.createContext({ exports: {}, AbortController, ref, reactive, computed, watch() {}, onMounted() {}, onUnmounted() {}, nextTick,
+    const context = vm.createContext({ exports: {}, AbortController, ref, shallowRef, reactive, computed, watch() {}, onMounted() {}, onUnmounted() {}, nextTick,
         defineProps: () => ({ online: true, generation: 0, motionEnabled: false }), defineEmits: () => () => {},
         require: name => name.includes('kiota') ? { createUntypedString: value => ({ getValue: () => value }), createUntypedNumber: value => ({ getValue: () => value }), createUntypedNull: () => ({ getValue: () => null }) }
-            : name.endsWith('/read-pool') ? readPoolModule
+            : name.endsWith('/destination-capabilities') ? destinationCapabilityModule : name.endsWith('/read-pool') ? readPoolModule
             : name.endsWith('/session') ? { accessGeneration: () => 1, session: { value: { profile: { iss: 'issuer', sub: 'subject' } } } }
                 : { cancellable: signal => ({ signal }), handleFailure: () => 503, api: { management: { destinations: {
                     get: async () => ({ items: [] }),
@@ -463,10 +467,10 @@ test('Source refresh bounds all capture and display metadata requests to four in
         pending.push(item);
         return gate.promise.finally(() => { active--; });
     };
-    const context = vm.createContext({ exports: {}, AbortController, ref, reactive, computed, watch() {}, onMounted() {}, onUnmounted() {}, nextTick, ResizeObserver: class { observe() {} disconnect() {} },
+    const context = vm.createContext({ exports: {}, AbortController, ref, shallowRef, reactive, computed, watch() {}, onMounted() {}, onUnmounted() {}, nextTick, ResizeObserver: class { observe() {} disconnect() {} },
         defineProps: () => ({ sources }), defineEmits: () => () => {},
         require: name => name.endsWith('/source-activity') ? { SourceActivityState: class { clear() {} }, activityPresentation: () => ({}), sourceActivityCounters: () => ({}), sourceStatusPosition: () => ({}) }
-            : name.endsWith('/read-pool') ? readPoolModule
+            : name.endsWith('/destination-capabilities') ? destinationCapabilityModule : name.endsWith('/read-pool') ? readPoolModule
                 : name.endsWith('/session') ? { accessGeneration: () => 1, onAccessLost: () => () => {} }
                 : { api: { management: { captures: { get: request }, sources: { byId: () => ({ display: { get: request } }) } } }, cancellable: signal => ({ signal }), handleFailure() {}, readSourceAuthenticationObservations: async () => ({ items: [] }), readSourceActivity: async () => ({ items: [], epoch: '', coverageComplete: true }) },
     });
@@ -496,10 +500,10 @@ test('Source refresh submits later owners while a first-wave transport remains p
         displays.push(item);
         item.signal.addEventListener('abort', () => reject(new Error('aborted')));
     });
-    const context = vm.createContext({ exports: {}, AbortController, ref, reactive, computed, watch() {}, onMounted() {}, onUnmounted() {}, nextTick, ResizeObserver: class { observe() {} disconnect() {} },
+    const context = vm.createContext({ exports: {}, AbortController, ref, shallowRef, reactive, computed, watch() {}, onMounted() {}, onUnmounted() {}, nextTick, ResizeObserver: class { observe() {} disconnect() {} },
         defineProps: () => ({ sources }), defineEmits: () => () => {},
         require: name => name.endsWith('/source-activity') ? { SourceActivityState: class { clear() {} }, activityPresentation: () => ({}), sourceActivityCounters: () => ({}), sourceStatusPosition: () => ({}) }
-            : name.endsWith('/read-pool') ? readPoolModule
+            : name.endsWith('/destination-capabilities') ? destinationCapabilityModule : name.endsWith('/read-pool') ? readPoolModule
                 : name.endsWith('/session') ? { accessGeneration: () => 1, onAccessLost: () => () => {} }
                     : { api: { management: { captures: { get: getCapture }, sources: { byId: () => ({ display: { get: getDisplay } }) } } }, cancellable: signal => ({ signal }), handleFailure() {}, readSourceAuthenticationObservations: async () => ({ items: [] }), readSourceActivity: async () => ({ items: [], epoch: '', coverageComplete: true }) },
     });
@@ -530,10 +534,10 @@ test('same-ID Source recovery cancels pending metadata and starts a fresh pass',
         requests.push(entry);
         signal.addEventListener('abort', () => reject(new Error('aborted')));
     });
-    const context = vm.createContext({ exports: {}, AbortController, ref, reactive, computed, watch() {}, onMounted() {}, onUnmounted() {}, nextTick, ResizeObserver: class { observe() {} disconnect() {} },
+    const context = vm.createContext({ exports: {}, AbortController, ref, shallowRef, reactive, computed, watch() {}, onMounted() {}, onUnmounted() {}, nextTick, ResizeObserver: class { observe() {} disconnect() {} },
         defineProps: () => ({ sources: [source] }), defineEmits: () => () => {},
         require: name => name.endsWith('/source-activity') ? { SourceActivityState: class { clear() {} }, activityPresentation: () => ({}), sourceActivityCounters: () => ({}), sourceStatusPosition: () => ({}) }
-            : name.endsWith('/read-pool') ? readPoolModule
+            : name.endsWith('/destination-capabilities') ? destinationCapabilityModule : name.endsWith('/read-pool') ? readPoolModule
                 : name.endsWith('/session') ? { accessGeneration: () => 1, onAccessLost: () => () => {} }
                 : { api: { management: { captures: { get }, sources: { byId: () => ({ display: { get } }) } } }, cancellable: signal => ({ signal }), handleFailure() {}, readSourceAuthenticationObservations: async () => ({ items: [] }), readSourceActivity: async () => ({ items: [], epoch: '', coverageComplete: true }) },
     });
@@ -573,11 +577,11 @@ test('mounted Source watchers refresh unchanged IDs after recovery, activity, an
     const renderer = createRenderer(host);
     const source = parse(readFileSync(new URL('../app/components/SourceWorkspace.vue', import.meta.url), 'utf8')).descriptor.scriptSetup.content;
     const app = renderer.createApp({ setup() {
-        const context = vm.createContext({ exports: {}, AbortController, ref, reactive, computed, watch, nextTick, onUnmounted, clearInterval, clearTimeout, setInterval: () => 1,
+        const context = vm.createContext({ exports: {}, AbortController, ref, shallowRef, reactive, computed, watch, nextTick, onUnmounted, clearInterval, clearTimeout, setInterval: () => 1,
             onMounted: callback => callback(), defineProps: () => props, defineEmits: () => () => {}, ResizeObserver: class { observe() {} disconnect() {} },
             window: { addEventListener() {}, removeEventListener() {} },
             require: name => name.endsWith('/source-activity') ? { SourceActivityState: class { constructor() { this.items = new Map(); this.available = true; this.revision = 0; } clear() {} reconcile() {} observe() {} }, activityPresentation: () => ({}), sourceActivityCounters: () => ({}), sourceStatusPosition: () => ({}) }
-                : name.endsWith('/read-pool') ? readPoolModule
+                : name.endsWith('/destination-capabilities') ? destinationCapabilityModule : name.endsWith('/read-pool') ? readPoolModule
                     : name.endsWith('/session') ? { accessGeneration: () => 1, onAccessLost: () => () => {} }
                     : { api: { management: { captures: { get: () => request('capture') }, sourceCapabilities: { get: () => tracked('capabilities', { profiles: [] }) }, sources: { byId: () => ({ display: { get: () => request('display') } }) } } }, cancellable: signal => ({ signal }), handleFailure() {}, readSourceAuthenticationObservations: async () => tracked('authentication', { items: [] }), readSourceActivity: async () => tracked('activity', { items: [], epoch: '', coverageComplete: true }) },
         });

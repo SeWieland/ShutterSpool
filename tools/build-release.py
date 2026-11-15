@@ -28,7 +28,7 @@ UPGRADE_BASELINE = {"kind": "fresh-install-only", "publishedRelease": None}
 COMPOSE_VARIABLES = {
     "BACKEND_SUBNET", "COMPOSE_PROJECT_NAME", "HTTPS_LISTEN_ADDRESS", "HTTPS_PORT",
     "IDENTITY_PROXY_SUBNET", "INGEST_ADVERTISED_ADDRESS", "INGEST_HOSTNAME", "INGEST_LISTEN_ADDRESS",
-    "POSTGRES_DB", "POSTGRES_INIT_SKIP_APP", "POSTGRES_USER", "PROXY_NETWORK", "PROXY_SUBNET", "SERVER_IMAGE",
+    "POSTGRES_DB", "POSTGRES_USER", "PROXY_NETWORK", "PROXY_SUBNET", "SERVER_IMAGE",
 }
 
 
@@ -162,7 +162,7 @@ def prepare(args: argparse.Namespace) -> Path:
             validate_attribution(compose, attribution)
             shutil.copy2(compose, stage / relative)
         (stage / "package").mkdir()
-        for helper in ("edge-entrypoint.sh", "identity-entrypoint.sh", "postgres-init.sh"):
+        for helper in ("edge-entrypoint.sh", "identity-entrypoint.sh", "postgres-init.sh", "workspace-databases.sql"):
             shutil.copy2(ROOT / "deploy/package" / helper, stage / "package" / helper)
         shutil.copytree(ROOT / "src/ShutterSpool.AppHost/Realms", stage / "package/realms")
         shutil.copytree(ROOT / "src/ShutterSpool.AppHost/Themes/shutterspool", stage / "package/theme")

@@ -1,0 +1,44 @@
+services:
+  server:
+    configs:
+      - source: appsettings
+        target: /app/appsettings.json
+    volumes:
+      - type: bind
+        source: /srv/shutterspool/studio
+        target: /srv/shutterspool/studio
+        bind:
+          create_host_path: false
+    secrets:
+      - source: production-settings
+        target: /app/appsettings.Production.json
+  maintenance:
+    image: ${SERVER_IMAGE:?Select the qualified Server image}
+    profiles: [maintenance]
+    restart: "no"
+    networks: [backend]
+    command: [--workspace-upgrade]
+    environment:
+      ASPNETCORE_ENVIRONMENT: Maintenance
+      ShutterSpool__Deployment__Packaged: "true"
+    configs:
+      - source: appsettings
+        target: /app/appsettings.json
+    volumes:
+      - ./restore-evidence:/run/restore-evidence:ro
+      - type: bind
+        source: /srv/shutterspool/studio
+        target: /srv/shutterspool/studio
+        bind:
+          create_host_path: false
+    secrets:
+      - source: maintenance-settings
+        target: /app/appsettings.Maintenance.json
+configs:
+  appsettings:
+    file: ./config/appsettings.json
+secrets:
+  production-settings:
+    file: ./config/appsettings.Production.json
+  maintenance-settings:
+    file: ./config/appsettings.Maintenance.json

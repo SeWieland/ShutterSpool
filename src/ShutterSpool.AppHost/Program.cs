@@ -21,14 +21,15 @@ var imaginaryConcurrency = builder.AddParameter("imaginary-concurrency", "20");
 var imaginaryCpus = builder.AddParameter("imaginary-cpus", "2");
 var imaginaryHttpTimeout = builder.AddParameter("imaginary-http-timeout-seconds", "120");
 var postgres = builder.AddPostgres("postgres", password: postgresPassword)
+    .WithHostPort(builder.Configuration.GetValue("ShutterSpool:Development:DatabasePort", 54329))
     .WithDataVolume("shutterspool-postgres");
-var shutterspoolDatabase = postgres.AddDatabase("shutterspool", builder.Configuration["ShutterSpool:DatabaseName"] ?? "shutterspool");
 var keycloakDatabase = postgres.AddDatabase("keycloak-data", "keycloak");
 var valkey = builder.AddValkey("valkey")
     .WithDataVolume("shutterspool-valkey");
 var postgresEndpoint = postgres.GetEndpoint("tcp");
+int identityPort = builder.Configuration.GetValue("ShutterSpool:Development:IdentityPort", 8082);
 var keycloak = builder.AddContainer("keycloak", "quay.io/keycloak/keycloak", "26.6")
-    .WithHttpEndpoint(targetPort: 8080)
+    .WithHttpEndpoint(port: identityPort, targetPort: 8080)
     .WithArgs("start", "--import-realm", "--http-enabled=true", "--hostname-strict=false")
     .WithEnvironment("KC_BOOTSTRAP_ADMIN_USERNAME", keycloakAdministrator)
     .WithEnvironment("KC_BOOTSTRAP_ADMIN_PASSWORD", keycloakAdministratorPassword)
@@ -76,26 +77,80 @@ if (!builder.ExecutionContext.IsPublishMode)
             context.Args.Add(argument);
     });
 var server = builder.AddProject<Projects.ShutterSpool_Server>("server")
-    .WithReference(shutterspoolDatabase)
     .WithReference(valkey)
     .WaitFor(postgres)
     .WaitFor(valkey)
     .WaitForCompletion(keycloakReconciler)
     .WithEnvironment("ShutterSpool__Security__Authority", keycloakAuthority)
     .WithEnvironment("ShutterSpool__Security__Audience", "shutterspool-server")
-    .WithEnvironment("ShutterSpool__Security__BootstrapIssuer", keycloakAuthority)
-    .WithEnvironment("ShutterSpool__Security__BootstrapSubject", shutterspoolAdministratorSubject)
     .WithEnvironment("ShutterSpool__Security__EncryptionKey", securityEncryptionKey)
     .WithEnvironment("ShutterSpool__CameraCredentials__MinimumPasswordLength",
         builder.Configuration["ShutterSpool:CameraCredentials:MinimumPasswordLength"] ?? "12")
-    .WithEnvironment("ShutterSpool__Spool__RootPath", Path.GetFullPath(builder.Configuration["ShutterSpool:Spool:RootPath"] ?? "../../.data/spool"))
     .WithEnvironment("ShutterSpool__Spool__ReservedBytes", builder.Configuration["ShutterSpool:Spool:ReservedBytes"] ?? "1073741824")
     .WithEnvironment("ShutterSpool__Preview__ImaginaryUrl", imaginary.GetEndpoint("http"))
     .WithEnvironment("ShutterSpool__Preview__MaxConcurrentGenerations", previewGenerationSlots)
     .WithEnvironment("ShutterSpool__Preview__GenerationQueueTimeoutSeconds", previewQueueTimeout)
     .WithEnvironment("ShutterSpool__Preview__GenerationTimeoutSeconds", previewGenerationTimeout)
-    .WithEnvironment("ShutterSpool__Preview__PrewarmMode", previewPrewarmMode)
-    .WithEnvironment("ShutterSpool__Preview__CacheRootPath", Path.GetFullPath("../../.data/previews"));
+    .WithEnvironment("ShutterSpool__Preview__PrewarmMode", previewPrewarmMode);
+if (!builder.ExecutionContext.IsPublishMode)
+{
+    string storageRoot = Path.GetFullPath(Path.Combine(
+        builder.Configuration["ShutterSpool:Development:RootPath"] ?? "../../.data/workspaces-dev", "studio"));
+    Directory.CreateDirectory(storageRoot);
+    var controlRuntimePassword = builder.AddParameter("control-runtime-password", new GenerateParameterDefault
+    {
+        MinLength = 32, Lower = true, Upper = true, Numeric = true, Special = false,
+    }, secret: true, persist: true);
+    var studioRuntimePassword = builder.AddParameter("studio-runtime-password", new GenerateParameterDefault
+    {
+        MinLength = 32, Lower = true, Upper = true, Numeric = true, Special = false,
+    }, secret: true, persist: true);
+    var migrationPassword = builder.AddParameter("workspace-migration-password", new GenerateParameterDefault
+    {
+        MinLength = 32, Lower = true, Upper = true, Numeric = true, Special = false,
+    }, secret: true, persist: true);
+    var postgresImage = postgres.Resource.Annotations.OfType<ContainerImageAnnotation>().Single();
+    var databases = builder.AddContainer("workspace-databases", postgresImage.Image,
+            postgresImage.Tag ?? throw new InvalidOperationException("The PostgreSQL dependency requires an explicit image tag."))
+        .WithEntrypoint("psql").WithArgs("-f", "/setup/workspace-databases.sql")
+        .WithEnvironment("PGHOST", postgresEndpoint.Property(EndpointProperty.Host))
+        .WithEnvironment("PGPORT", postgresEndpoint.Property(EndpointProperty.Port))
+        .WithEnvironment("PGUSER", "postgres").WithEnvironment("PGDATABASE", "postgres")
+        .WithEnvironment("PGPASSWORD", postgresPassword)
+        .WithEnvironment("CONTROL_RUNTIME_PASSWORD", controlRuntimePassword)
+        .WithEnvironment("STUDIO_RUNTIME_PASSWORD", studioRuntimePassword).WithEnvironment("MIGRATION_PASSWORD", migrationPassword)
+        .WithBindMount("../../deploy/package/workspace-databases.sql", "/setup/workspace-databases.sql", isReadOnly: true)
+        .WaitFor(postgres);
+
+    void ConfigureWorkspace(IResourceBuilder<ProjectResource> resource, bool maintenance)
+    {
+        resource.WithEnvironment("ASPNETCORE_ENVIRONMENT", "Development")
+            .WithEnvironment("ShutterSpool__Security__Authority", keycloakAuthority)
+            .WithEnvironment("ShutterSpool__Security__EncryptionKey", securityEncryptionKey)
+            .WithEnvironment("ShutterSpool__Workspaces__Definitions__studio__StorageRoot", storageRoot)
+            .WithEnvironment("ShutterSpool__Workspaces__Definitions__studio__OwnerIssuer", keycloakAuthority)
+            .WithEnvironment("ShutterSpool__Workspaces__Definitions__studio__OwnerSubject", shutterspoolAdministratorSubject)
+            .WithEnvironment("ConnectionStrings__shutterspool-control", ReferenceExpression.Create(
+                $"Host={postgresEndpoint.Property(EndpointProperty.Host)};Port={postgresEndpoint.Property(EndpointProperty.Port)};Database=shutterspool_control;Username=shutterspool_control_runtime;Password={controlRuntimePassword}"))
+            .WithEnvironment("ConnectionStrings__Workspaces__studio__Runtime", ReferenceExpression.Create(
+                $"Host={postgresEndpoint.Property(EndpointProperty.Host)};Port={postgresEndpoint.Property(EndpointProperty.Port)};Database=shutterspool_studio;Username=shutterspool_studio_runtime;Password={studioRuntimePassword}"));
+        if (maintenance)
+            resource.WithEnvironment("ConnectionStrings__shutterspool-control-migration", ReferenceExpression.Create(
+                $"Host={postgresEndpoint.Property(EndpointProperty.Host)};Port={postgresEndpoint.Property(EndpointProperty.Port)};Database=shutterspool_control;Username=shutterspool_migration;Password={migrationPassword}"))
+                .WithEnvironment("ConnectionStrings__Workspaces__studio__Migration", ReferenceExpression.Create(
+                    $"Host={postgresEndpoint.Property(EndpointProperty.Host)};Port={postgresEndpoint.Property(EndpointProperty.Port)};Database=shutterspool_studio;Username=shutterspool_migration;Password={migrationPassword}"));
+    }
+    var control = builder.AddProject<Projects.ShutterSpool_Server>("workspace-control-init", options => options.ExcludeLaunchProfile = true)
+        .WithArgs("--workspace-control-init").WaitForCompletion(databases).WaitForCompletion(keycloakReconciler);
+    var workspace = builder.AddProject<Projects.ShutterSpool_Server>("workspace-provision", options => options.ExcludeLaunchProfile = true)
+        .WithArgs("--workspace-provision", "studio").WaitForCompletion(control);
+    ConfigureWorkspace(control, maintenance: true);
+    ConfigureWorkspace(workspace, maintenance: true);
+    ConfigureWorkspace(server, maintenance: false);
+    server.WaitForCompletion(workspace);
+}
+foreach ((string key, string value) in WorkspaceRuntimeConfiguration.ForServer(builder.Configuration))
+    server.WithEnvironment(key, value);
 if (!builder.ExecutionContext.IsPublishMode) builder.AddJavaScriptApp("web", "../ShutterSpool.Web")
     .WithReference(server)
     .WithHttpEndpoint(env: "PORT")

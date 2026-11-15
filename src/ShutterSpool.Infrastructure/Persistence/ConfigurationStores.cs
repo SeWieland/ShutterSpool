@@ -9,10 +9,12 @@ using ShutterSpool.Domain.Sources;
 using ShutterSpool.Domain.Collections;
 using ShutterSpool.Infrastructure.Destinations.WebDav;
 using System.Text.Json;
+using ShutterSpool.Application.Workspaces;
 
 namespace ShutterSpool.Infrastructure.Persistence;
 
-internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database) : ISourceConfigurationStore
+internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database, IWorkspaceRegistry? registry = null,
+    WorkspaceContext? workspace = null) : ISourceConfigurationStore
 {
     public Task<SourceManagementConfiguration[]> ListAsync(int limit, string? afterName, Guid? afterId, CancellationToken token)
     {
@@ -84,6 +86,7 @@ internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database)
         if (credential.Username == username
             && System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(verifier, credential.SecretVerifier))
             throw new UnchangedSourceCredentialException();
+        if (registry is not null) await registry.RegisterIngressAsync(WorkspaceIngressHandle.Username(username), id, token);
         credential.Username = username;
         credential.SecretVerifier = verifier;
         credential.CredentialGeneration = checked(credential.CredentialGeneration + 1);
@@ -109,6 +112,7 @@ internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database)
         }
         if (credential.IsIngressEnabled != enabled)
         {
+            if (enabled && registry is not null) await registry.RegisterIngressAsync(WorkspaceIngressHandle.Username(credential.Username), id, token);
             credential.IsIngressEnabled = enabled;
             credential.CredentialGeneration = checked(credential.CredentialGeneration + 1);
             source.ConfigurationRevision++;
@@ -168,6 +172,7 @@ internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database)
         var credentialEntity = new SourceCredentialEntity
         {
             SourceId = source.Id, Username = source.Username, VirtualRoot = source.VirtualRoot, SecretVerifier = source.SecretVerifier,
+            IsIngressEnabled = workspace is null,
         };
         database.Sources.Add(sourceEntity);
         database.SourceCredentials.Add(credentialEntity);
@@ -181,6 +186,14 @@ internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database)
             throw new ConfigurationConflictException();
         }
         await transaction.CommitAsync(cancellationToken);
+        if (workspace is not null)
+        {
+            await transaction.DisposeAsync();
+            // A failed control write leaves a visible disabled Source whose credentials can be repaired.
+            await registry!.RegisterIngressAsync(WorkspaceIngressHandle.Username(source.Username), source.Id, cancellationToken);
+            credentialEntity.IsIngressEnabled = true;
+            await database.SaveChangesAsync(cancellationToken);
+        }
     }
 
     public async Task<SourcePolicy?> UpdatePolicyAsync(Guid id, SourceCurationMode mode, int delaySeconds, CancellationToken cancellationToken)
@@ -218,6 +231,7 @@ internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database)
         if (source.IsArchived) return null;
         if (credential.IsIngressEnabled != enabled)
         {
+            if (enabled && registry is not null) await registry.RegisterIngressAsync(WorkspaceIngressHandle.Username(credential.Username), id, cancellationToken);
             credential.IsIngressEnabled = enabled;
             credential.CredentialGeneration = checked(credential.CredentialGeneration + 1);
             source.ConfigurationRevision++;
@@ -381,34 +395,22 @@ internal sealed class EfDestinationConfigurationStore(ShutterSpoolDbContext data
 
 internal sealed class EfWebDavDestinationConfiguration(ShutterSpoolDbContext database,
     ShutterSpool.Application.Security.ICredentialProtector protector,
-    WebDavDestinationDeliveryAdapter adapter) : IWebDavDestinationConfiguration
+    WebDavDestinationDeliveryAdapter adapter, DestinationCapabilities? capabilities = null) : IWebDavDestinationConfiguration
 {
-    public Task<WebDavDestinationConfiguration?> GetAsync(Guid destinationId, CancellationToken cancellationToken) =>
-        database.WebDavDestinations.AsNoTracking().Where(item => item.DestinationId == destinationId)
-            .Select(item => new WebDavDestinationConfiguration(item.CollectionUrl, item.Username)).SingleOrDefaultAsync(cancellationToken);
-
-    public async Task<string?> ConfigureAsync(Guid destinationId, string collectionUrl, string username, string password,
-        CancellationToken cancellationToken)
-        => await ConfigureCoreAsync(destinationId, null, collectionUrl, username, password, cancellationToken);
-
-    public Task<string?> ConfigureAsync(Guid destinationId, long expectedRevision, string collectionUrl,
-        string username, string? password, CancellationToken cancellationToken) =>
-        ConfigureCoreAsync(destinationId, expectedRevision, collectionUrl, username, password, cancellationToken);
-
-    private async Task<string?> ConfigureCoreAsync(Guid destinationId, long? expectedRevision, string collectionUrl,
+    public async Task<string?> ConfigureAsync(Guid destinationId, long expectedRevision, string collectionUrl,
         string username, string? password, CancellationToken cancellationToken)
     {
+        if (!(capabilities ?? DestinationCapabilities.All).IsEnabled("webdav")) return "DESTINATION_TYPE_DISABLED";
         if (collectionUrl is null || !WebDavDestinationUris.TryCollection(collectionUrl, out Uri? normalized)) return "INVALID_COLLECTION_URL";
         if (string.IsNullOrWhiteSpace(username) || username.Length > 256 || username.Contains(':') || username.Any(char.IsControl)
             || password is not null && password.Length is 0 or > 4096) return "INVALID_CREDENTIALS";
-        if (!await database.Destinations.AnyAsync(item => item.Id == destinationId && item.Kind == "webdav", cancellationToken)) return "DESTINATION_NOT_FOUND";
         await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(hashtextextended('shutterspool-routing', 0))", cancellationToken);
         DestinationEntity? destination = await database.Destinations.FromSqlInterpolated($"SELECT * FROM destinations WHERE \"Id\" = {destinationId} AND \"Kind\" = 'webdav' FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
         if (destination is null) return "DESTINATION_NOT_FOUND";
         if (destination.IsArchived) return "DESTINATION_ARCHIVED";
-        if (expectedRevision is long expected && destination.ConfigurationRevision != expected) return "CONFIGURATION_CONFLICT";
+        if (destination.ConfigurationRevision != expectedRevision) return "CONFIGURATION_CONFLICT";
         WebDavDestinationEntity? config = await database.WebDavDestinations.SingleOrDefaultAsync(item => item.DestinationId == destinationId, cancellationToken);
         bool identityChanged = config is null || config.CollectionUrl != normalized.AbsoluteUri || config.Username != username.Trim();
         if (identityChanged && await database.Deliveries.AnyAsync(item => item.DestinationId == destinationId, cancellationToken)) return "IDENTITY_LOCKED";
@@ -428,15 +430,12 @@ internal sealed class EfWebDavDestinationConfiguration(ShutterSpoolDbContext dat
         return null;
     }
 
-    public async Task<(bool Writable, string? ErrorCode)> TestAsync(Guid destinationId, CancellationToken cancellationToken)
-    {
-        (bool writable, string? error, _) = await TestWithRevisionAsync(destinationId, cancellationToken);
-        return (writable, error);
-    }
-
     public async Task<(bool Writable, string? ErrorCode, long TestedConfigurationRevision)> TestWithRevisionAsync(
         Guid destinationId, CancellationToken cancellationToken)
     {
+        if (!(capabilities ?? DestinationCapabilities.All).IsEnabled("webdav"))
+            return (false, "DESTINATION_TYPE_DISABLED", await database.Destinations.AsNoTracking()
+                .Where(item => item.Id == destinationId).Select(item => item.ConfigurationRevision).SingleOrDefaultAsync(cancellationToken));
         var config = await (from destination in database.Destinations.AsNoTracking()
             join item in database.WebDavDestinations.AsNoTracking() on destination.Id equals item.DestinationId
             join credential in database.DestinationCredentials.AsNoTracking() on item.DestinationId equals credential.DestinationId
@@ -463,17 +462,5 @@ internal sealed class EfAccessGrantStore(ShutterSpoolDbContext database) : IAcce
     public Task<bool> IsActiveAsync(string issuer, string subject, CancellationToken cancellationToken) =>
         database.AuthorizationGrants.AsNoTracking().AnyAsync(grant => grant.IsActive && grant.Issuer == issuer && grant.Subject == subject, cancellationToken);
 
-    public async Task BootstrapAsync(string issuer, string subject, CancellationToken cancellationToken)
-    {
-        await using var transaction = database.Database.IsRelational() ? await database.Database.BeginTransactionAsync(cancellationToken) : null;
-        if (transaction is not null)
-            await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(hashtextextended('shutterspool-bootstrap', 0))", cancellationToken);
-        var replaced = await database.AuthorizationGrants.Where(grant => grant.IsBootstrap && (grant.Issuer != issuer || grant.Subject != subject)).ToListAsync(cancellationToken);
-        foreach (AuthorizationGrant grant in replaced) grant.IsActive = false;
-        AuthorizationGrant? selected = await database.AuthorizationGrants.SingleOrDefaultAsync(grant => grant.Issuer == issuer && grant.Subject == subject, cancellationToken);
-        if (selected is null) database.AuthorizationGrants.Add(new AuthorizationGrant { Issuer = issuer, Subject = subject, IsActive = true, IsBootstrap = true });
-        else { selected.IsActive = true; selected.IsBootstrap = true; }
-        await database.SaveChangesAsync(cancellationToken);
-        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
-    }
+
 }

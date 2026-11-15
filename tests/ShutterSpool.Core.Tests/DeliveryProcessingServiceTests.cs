@@ -20,7 +20,7 @@ public sealed class DeliveryProcessingServiceTests
         var service = new DeliveryProcessingService(store, new UnusedOriginalReader(),
             new DeliveryAdapterRegistry([]), new DeliveryWorkerSettings(), TimeProvider.System);
 
-        Assert.True(await service.ProcessOneAsync(TestContext.Current.CancellationToken));
+        Assert.True(await service.ProcessOneAsync(cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(DeliveryResultKind.ConfigurationFailure, store.Result?.Kind);
         Assert.Equal("DESTINATION_KIND_UNSUPPORTED", store.Result?.ErrorCode);
     }
@@ -36,7 +36,7 @@ public sealed class DeliveryProcessingServiceTests
         var service = new DeliveryProcessingService(store, new OriginalReader(bytes, seekable),
             new DeliveryAdapterRegistry([adapter]), new DeliveryWorkerSettings(), TimeProvider.System);
 
-        Assert.True(await service.ProcessOneAsync(TestContext.Current.CancellationToken));
+        Assert.True(await service.ProcessOneAsync(cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(bytes, adapter.Transferred);
         Assert.Equal(DeliveryResultKind.Confirmed, store.Result?.Kind);
     }
@@ -51,12 +51,12 @@ public sealed class DeliveryProcessingServiceTests
             new DeliveryAdapterRegistry([adapter]), new DeliveryWorkerSettings(), TimeProvider.System);
         Guid? hintedCapture = null;
 
-        Task<bool> processing = service.ProcessOneAsync(TestContext.Current.CancellationToken, captureId =>
+        Task<bool> processing = service.ProcessOneAsync(captureId =>
         {
             Assert.True(store.IsRunning);
             hintedCapture = captureId;
             throw new InvalidOperationException("synthetic notifier failure");
-        });
+        }, TestContext.Current.CancellationToken);
 
         await adapter.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
         Assert.Equal(store.CaptureId, hintedCapture);

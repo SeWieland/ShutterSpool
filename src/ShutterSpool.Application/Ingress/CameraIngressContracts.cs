@@ -57,8 +57,8 @@ public interface ICameraTransferActivityPublisher
 
 public interface ICameraIngressStore
 {
-    Task<CameraLogin?> CreateLoginAsync(Guid sourceId, string username, long credentialGeneration, CancellationToken cancellationToken,
-        SourceConnectionProfile connectionProfile = SourceConnectionProfile.ModernFtps);
+    Task<CameraLogin?> CreateLoginAsync(Guid sourceId, string username, long credentialGeneration,
+        SourceConnectionProfile connectionProfile = SourceConnectionProfile.ModernFtps, CancellationToken cancellationToken = default);
     Task<CameraLogin?> FindLoginAsync(Guid loginId, CancellationToken cancellationToken);
     Task<CameraUploadAdmission?> AdmitAsync(Guid loginId, string username, string sessionId, string virtualPath, long timestamp,
         Guid admissionId, Guid assetId, long maximumUploadBytes, string receiveKey,

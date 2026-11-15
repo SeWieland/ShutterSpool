@@ -1,0 +1,43 @@
+{
+  "ShutterSpool": {
+    "Preview": {
+      "PrewarmMode": "Off"
+    },
+    "Spool": {
+      "ReservedBytes": 1073741824
+    },
+    "Security": {
+      "ClientId": "shutterspool-web",
+      "Audience": "shutterspool-server",
+      "Authority": "https://identity.example.invalid/realms/shutterspool"
+    },
+    "CameraCredentials": {
+      "MinimumPasswordLength": 12
+    },
+    "ShutdownTimeoutSeconds": 120,
+    "Workspaces": {
+      "UsableCapacityBytes": 107374182400,
+      "Definitions": {
+        "studio": {
+          "StorageRoot": "/srv/shutterspool/studio",
+          "AllocatedBytes": 107374182400,
+          "OwnerIssuer": "https://identity.example.invalid/realms/shutterspool",
+          "OwnerSubject": "REPLACE_WITH_VERIFIED_IDENTITY_SUBJECT"
+        }
+      }
+    },
+    "CameraIngress": {
+      "Hostname": "ingest.example.invalid"
+    }
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Warning",
+      "Microsoft.AspNetCore": "Error"
+    },
+    "Console": {
+      "FormatterName": "json"
+    }
+  },
+  "AllowedHosts": "photographs.example.invalid;server;localhost"
+}

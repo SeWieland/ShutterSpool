@@ -40,12 +40,12 @@ public sealed class CaptureGroupingPostgresTests
             await using (var database = new ShutterSpoolDbContext(options))
             {
                 await database.Database.MigrateAsync(token);
-                tiff = await AddAssetAsync(database, source, "shoot/IMG_0042.tif", "tiff-a", "OTHER", token, captureTime: shot);
-                raw = await AddAssetAsync(database, source, "shoot/IMG_0042.arw", "raw-a", "RAW", token, captureTime: shot);
-                jpeg = await AddAssetAsync(database, source, "shoot/IMG_0042.jpg", "jpeg-a", "JPEG", token, captureTime: shot);
-                dng = await AddAssetAsync(database, source, "shoot/IMG_0042.dng", "dng-a", "OTHER", token, captureTime: shot);
-                changedTiff = await AddAssetAsync(database, source, "shoot/IMG_0042.tif", "tiff-b", "OTHER", token, captureTime: shot);
-                unknown = await AddAssetAsync(database, source, "shoot/IMG_0042.xmp", "unknown", null, token, outcome: "Unsupported", omitTime: true);
+                tiff = await AddAssetAsync(database, source, "shoot/IMG_0042.tif", "tiff-a", "OTHER", captureTime: shot, cancellationToken: token);
+                raw = await AddAssetAsync(database, source, "shoot/IMG_0042.arw", "raw-a", "RAW", captureTime: shot, cancellationToken: token);
+                jpeg = await AddAssetAsync(database, source, "shoot/IMG_0042.jpg", "jpeg-a", "JPEG", captureTime: shot, cancellationToken: token);
+                dng = await AddAssetAsync(database, source, "shoot/IMG_0042.dng", "dng-a", "OTHER", captureTime: shot, cancellationToken: token);
+                changedTiff = await AddAssetAsync(database, source, "shoot/IMG_0042.tif", "tiff-b", "OTHER", captureTime: shot, cancellationToken: token);
+                unknown = await AddAssetAsync(database, source, "shoot/IMG_0042.xmp", "unknown", null, outcome: "Unsupported", omitTime: true, cancellationToken: token);
             }
 
             Assert.Equal(6, await GroupUntilEmptyAsync(options, token));
@@ -59,7 +59,8 @@ public sealed class CaptureGroupingPostgresTests
                 "SELECT \"LastPrimaryIngestedAt\" FROM captures WHERE \"Id\" = @capture",
                 await CaptureIdAsync(verify, tiff, token), token));
             Assert.Equal(2, await ScalarAsync(verify, "SELECT count(*) FROM capture_assets WHERE \"CaptureId\" = @capture AND \"Role\" = 'OTHER' AND \"IsPrimary\"",
-                token, ("capture", await CaptureIdAsync(verify, tiff, token))));
+                [("capture", await CaptureIdAsync(verify, tiff, token))],
+                token));
             Assert.Equal("variant_name_conflict", await TextAsync(verify,
                 "SELECT \"GroupingReason\" FROM capture_assets WHERE \"AssetId\" = @asset", changedTiff, token));
             Assert.Equal("missing_or_uncertain_time", await TextAsync(verify,
@@ -97,7 +98,7 @@ public sealed class CaptureGroupingPostgresTests
             await using (var database = new ShutterSpoolDbContext(options))
             {
                 await database.Database.MigrateAsync(token);
-                raw = await AddAssetAsync(database, source, "lock/FRAME_1.ARW", "lock-raw", "RAW", token);
+                raw = await AddAssetAsync(database, source, "lock/FRAME_1.ARW", "lock-raw", "RAW", cancellationToken: token);
                 await SetIngestedOneDayAgoAsync(database, raw, token);
             }
             Assert.Equal(1, await GroupUntilEmptyAsync(options, token));
@@ -107,7 +108,7 @@ public sealed class CaptureGroupingPostgresTests
 
             await using (var database = new ShutterSpoolDbContext(options))
             {
-                jpeg = await AddAssetAsync(database, source, "lock/FRAME_1.jpg", "lock-jpeg", "JPEG", token);
+                jpeg = await AddAssetAsync(database, source, "lock/FRAME_1.jpg", "lock-jpeg", "JPEG", cancellationToken: token);
             }
 
             var locker = new NpgsqlConnection(connection);
@@ -172,8 +173,9 @@ public sealed class CaptureGroupingPostgresTests
             await using (var database = new ShutterSpoolDbContext(options))
             {
                 await database.Database.MigrateAsync(TestContext.Current.CancellationToken);
-                rawId = await AddAssetAsync(database, sourceId, "shoot/IMG_0042.ARW", "raw-bytes", "RAW", TestContext.Current.CancellationToken, null, null);
-                jpegId = await AddAssetAsync(database, sourceId, "shoot/img_0042.jpg", "jpeg-bytes", "JPEG", TestContext.Current.CancellationToken);
+                rawId = await AddAssetAsync(database, sourceId, "shoot/IMG_0042.ARW", "raw-bytes", "RAW", null, null,
+                    cancellationToken: TestContext.Current.CancellationToken);
+                jpegId = await AddAssetAsync(database, sourceId, "shoot/img_0042.jpg", "jpeg-bytes", "JPEG", cancellationToken: TestContext.Current.CancellationToken);
             }
 
             await using (var first = new ShutterSpoolDbContext(options))
@@ -195,15 +197,16 @@ public sealed class CaptureGroupingPostgresTests
 
             await using (var verify = new ShutterSpoolDbContext(options))
             {
-                Assert.Equal(1, await ScalarAsync(verify, "SELECT count(*) FROM captures", TestContext.Current.CancellationToken));
-                Assert.Equal(2, await ScalarAsync(verify, "SELECT count(*) FROM capture_assets WHERE \"IsPrimary\"", TestContext.Current.CancellationToken));
-                Assert.Equal(1, await ScalarAsync(verify, "SELECT count(DISTINCT \"CaptureId\") FROM capture_assets WHERE \"AssetId\" IN (@raw, @jpeg)", TestContext.Current.CancellationToken, ("raw", rawId), ("jpeg", jpegId)));
+                Assert.Equal(1, await ScalarAsync(verify, "SELECT count(*) FROM captures", [], TestContext.Current.CancellationToken));
+                Assert.Equal(2, await ScalarAsync(verify, "SELECT count(*) FROM capture_assets WHERE \"IsPrimary\"", [], TestContext.Current.CancellationToken));
+                Assert.Equal(1, await ScalarAsync(verify, "SELECT count(DISTINCT \"CaptureId\") FROM capture_assets WHERE \"AssetId\" IN (@raw, @jpeg)",
+                    [("raw", rawId), ("jpeg", jpegId)], TestContext.Current.CancellationToken));
             }
 
             Guid replayId;
             await using (var database = new ShutterSpoolDbContext(options))
             {
-                replayId = await AddAssetAsync(database, sourceId, "shoot/IMG_0042.ARW", "raw-bytes", "RAW", TestContext.Current.CancellationToken);
+                replayId = await AddAssetAsync(database, sourceId, "shoot/IMG_0042.ARW", "raw-bytes", "RAW", cancellationToken: TestContext.Current.CancellationToken);
                 var grouper = new CaptureGroupingService(new EfCaptureGroupingStore(database));
                 Assert.True(await grouper.ProcessOneAsync(TestContext.Current.CancellationToken));
                 Assert.False(await grouper.ProcessOneAsync(TestContext.Current.CancellationToken));
@@ -211,36 +214,41 @@ public sealed class CaptureGroupingPostgresTests
 
             await using (var verify = new ShutterSpoolDbContext(options))
             {
-                Assert.Equal(1, await ScalarAsync(verify, "SELECT count(*) FROM captures", TestContext.Current.CancellationToken));
-                Assert.Equal(2, await ScalarAsync(verify, "SELECT count(*) FROM capture_assets WHERE \"IsPrimary\"", TestContext.Current.CancellationToken));
-                Assert.Equal(1, await ScalarAsync(verify, "SELECT count(*) FROM capture_assets WHERE \"AssetId\" = @asset AND \"RelatedAssetId\" = @raw AND \"GroupingReason\" = 'recognized_replay'", TestContext.Current.CancellationToken, ("asset", replayId), ("raw", rawId)));
+                Assert.Equal(1, await ScalarAsync(verify, "SELECT count(*) FROM captures", [], TestContext.Current.CancellationToken));
+                Assert.Equal(2, await ScalarAsync(verify, "SELECT count(*) FROM capture_assets WHERE \"IsPrimary\"", [], TestContext.Current.CancellationToken));
+                Assert.Equal(1, await ScalarAsync(verify, "SELECT count(*) FROM capture_assets WHERE \"AssetId\" = @asset AND \"RelatedAssetId\" = @raw AND \"GroupingReason\" = 'recognized_replay'",
+                    [("asset", replayId), ("raw", rawId)], TestContext.Current.CancellationToken));
             }
 
             Guid unsupportedReplayId;
             await using (var database = new ShutterSpoolDbContext(options))
             {
-                unsupportedReplayId = await AddAssetAsync(database, sourceId, "shoot/IMG_0042.ARW", "raw-bytes", null,
-                    TestContext.Current.CancellationToken, outcome: "Unsupported");
+                unsupportedReplayId = await AddAssetAsync(database, sourceId, "shoot/IMG_0042.ARW", "raw-bytes", null, outcome: "Unsupported",
+                    cancellationToken: TestContext.Current.CancellationToken);
                 Assert.True(await new CaptureGroupingService(new EfCaptureGroupingStore(database)).ProcessOneAsync(TestContext.Current.CancellationToken));
             }
             await using (var verify = new ShutterSpoolDbContext(options))
             {
-                Assert.Equal(1, await ScalarAsync(verify, "SELECT count(*) FROM captures", TestContext.Current.CancellationToken));
+                Assert.Equal(1, await ScalarAsync(verify, "SELECT count(*) FROM captures", [], TestContext.Current.CancellationToken));
                 Assert.Equal(1, await ScalarAsync(verify, "SELECT count(*) FROM capture_assets WHERE \"AssetId\" = @asset AND \"RelatedAssetId\" IN (@raw, @replay) AND \"Role\" = 'OTHER' AND \"GroupingReason\" = 'recognized_replay'",
-                    TestContext.Current.CancellationToken, ("asset", unsupportedReplayId), ("raw", rawId), ("replay", replayId)));
+                    [("asset", unsupportedReplayId), ("raw", rawId), ("replay", replayId)],
+                    TestContext.Current.CancellationToken));
             }
 
             Guid conflictingReplayId;
             await using (var database = new ShutterSpoolDbContext(options))
             {
-                conflictingReplayId = await AddAssetAsync(database, sourceId, "shoot/IMG_0042.ARW", "raw-bytes", "RAW", TestContext.Current.CancellationToken, "Conflicting Camera", "CONFLICT");
+                conflictingReplayId = await AddAssetAsync(database, sourceId, "shoot/IMG_0042.ARW", "raw-bytes", "RAW", "Conflicting Camera", "CONFLICT",
+                    cancellationToken: TestContext.Current.CancellationToken);
                 Assert.True(await new CaptureGroupingService(new EfCaptureGroupingStore(database)).ProcessOneAsync(TestContext.Current.CancellationToken));
             }
 
             await using (var verify = new ShutterSpoolDbContext(options))
             {
-                Assert.Equal(2, await ScalarAsync(verify, "SELECT count(DISTINCT \"CaptureId\") FROM capture_assets WHERE \"AssetId\" IN (@raw, @jpeg, @conflict)", TestContext.Current.CancellationToken, ("raw", rawId), ("jpeg", jpegId), ("conflict", conflictingReplayId)));
-                Assert.Equal(0, await ScalarAsync(verify, "SELECT count(*) FROM capture_assets WHERE \"AssetId\" = @asset AND \"RelatedAssetId\" IS NOT NULL", TestContext.Current.CancellationToken, ("asset", conflictingReplayId)));
+                Assert.Equal(2, await ScalarAsync(verify, "SELECT count(DISTINCT \"CaptureId\") FROM capture_assets WHERE \"AssetId\" IN (@raw, @jpeg, @conflict)",
+                    [("raw", rawId), ("jpeg", jpegId), ("conflict", conflictingReplayId)], TestContext.Current.CancellationToken));
+                Assert.Equal(0, await ScalarAsync(verify, "SELECT count(*) FROM capture_assets WHERE \"AssetId\" = @asset AND \"RelatedAssetId\" IS NOT NULL",
+                    [("asset", conflictingReplayId)], TestContext.Current.CancellationToken));
             }
         }
         finally
@@ -290,7 +298,7 @@ public sealed class CaptureGroupingPostgresTests
             await using (var database = new ShutterSpoolDbContext(options))
             {
                 await database.Database.MigrateAsync(token);
-                lateRaw = await AddAssetAsync(database, source, "late/FRAME_1.ARW", "late-raw", "RAW", token);
+                lateRaw = await AddAssetAsync(database, source, "late/FRAME_1.ARW", "late-raw", "RAW", cancellationToken: token);
                 await SetIngestedOneDayAgoAsync(database, lateRaw, token);
             }
             Assert.Equal(1, await GroupUntilEmptyAsync(options, token));
@@ -305,43 +313,50 @@ public sealed class CaptureGroupingPostgresTests
 
             await using (var database = new ShutterSpoolDbContext(options))
             {
-                lateJpeg = await AddAssetAsync(database, source, "late/frame_1.jpg", "late-jpeg", "JPEG", token);
-                changedBytes = await AddAssetAsync(database, source, "late/FRAME_1.ARW", "changed-raw", "RAW", token);
-                crossSource = await AddAssetAsync(database, Guid.NewGuid(), "late/FRAME_1.ARW", "late-raw", "RAW", token);
-                unsupported = await AddAssetAsync(database, source, "other/unsupported.bin", "unsupported", null, token, outcome: "Unsupported");
-                failed = await AddAssetAsync(database, source, "other/failed.jpg", "failed", null, token, outcome: "Failed", omitTime: true);
+                lateJpeg = await AddAssetAsync(database, source, "late/frame_1.jpg", "late-jpeg", "JPEG", cancellationToken: token);
+                changedBytes = await AddAssetAsync(database, source, "late/FRAME_1.ARW", "changed-raw", "RAW", cancellationToken: token);
+                crossSource = await AddAssetAsync(database, Guid.NewGuid(), "late/FRAME_1.ARW", "late-raw", "RAW", cancellationToken: token);
+                unsupported = await AddAssetAsync(database, source, "other/unsupported.bin", "unsupported", null, outcome: "Unsupported", cancellationToken: token);
+                failed = await AddAssetAsync(database, source, "other/failed.jpg", "failed", null, outcome: "Failed", omitTime: true, cancellationToken: token);
 
                 DateTime baseTime = new(2025, 3, 4, 5, 6, 7, DateTimeKind.Unspecified);
                 timeConflict = [
-                    await AddAssetAsync(database, source, "time/TIME_1.ARW", "time-raw", "RAW", token, captureTime: baseTime),
-                    await AddAssetAsync(database, source, "time/TIME_1.jpg", "time-jpeg", "JPEG", token, captureTime: baseTime.AddMinutes(1))];
+                    await AddAssetAsync(database, source, "time/TIME_1.ARW", "time-raw", "RAW", captureTime: baseTime, cancellationToken: token),
+                    await AddAssetAsync(database, source, "time/TIME_1.jpg", "time-jpeg", "JPEG", captureTime: baseTime.AddMinutes(1), cancellationToken: token)];
                 offsetPair = [
-                    await AddAssetAsync(database, source, "offset/OFFSET_1.ARW", "offset-raw", "RAW", token, captureTime: baseTime, captureOffset: TimeSpan.FromHours(2)),
-                    await AddAssetAsync(database, source, "offset/OFFSET_1.jpg", "offset-jpeg", "JPEG", token, captureTime: baseTime.AddHours(-1), captureOffset: TimeSpan.FromHours(1))];
+                    await AddAssetAsync(database, source, "offset/OFFSET_1.ARW", "offset-raw", "RAW", captureTime: baseTime, captureOffset: TimeSpan.FromHours(2),
+                        cancellationToken: token),
+                    await AddAssetAsync(database, source, "offset/OFFSET_1.jpg", "offset-jpeg", "JPEG", captureTime: baseTime.AddHours(-1), captureOffset: TimeSpan.FromHours(1),
+                        cancellationToken: token)];
                 mixedZone = [
-                    await AddAssetAsync(database, source, "zone/ZONE_1.ARW", "zone-raw", "RAW", token, captureTime: baseTime, captureOffset: TimeSpan.FromHours(2)),
-                    await AddAssetAsync(database, source, "zone/ZONE_1.jpg", "zone-jpeg", "JPEG", token, captureTime: baseTime)];
+                    await AddAssetAsync(database, source, "zone/ZONE_1.ARW", "zone-raw", "RAW", captureTime: baseTime, captureOffset: TimeSpan.FromHours(2),
+                        cancellationToken: token),
+                    await AddAssetAsync(database, source, "zone/ZONE_1.jpg", "zone-jpeg", "JPEG", captureTime: baseTime, cancellationToken: token)];
                 fractionalPair = [
-                    await AddAssetAsync(database, source, "fraction-pair/FRACTION_PAIR_1.ARW", "fraction-raw", "RAW", token, captureTime: baseTime.AddMilliseconds(123), fractionalDigits: 3),
-                    await AddAssetAsync(database, source, "fraction-pair/FRACTION_PAIR_1.jpg", "fraction-jpeg", "JPEG", token, captureTime: baseTime.AddTicks(1_234_560), fractionalDigits: 6)];
+                    await AddAssetAsync(database, source, "fraction-pair/FRACTION_PAIR_1.ARW", "fraction-raw", "RAW", captureTime: baseTime.AddMilliseconds(123), fractionalDigits: 3,
+                        cancellationToken: token),
+                    await AddAssetAsync(database, source, "fraction-pair/FRACTION_PAIR_1.jpg", "fraction-jpeg", "JPEG", captureTime: baseTime.AddTicks(1_234_560), fractionalDigits: 6,
+                        cancellationToken: token)];
                 fractionalConflict = [
-                    await AddAssetAsync(database, source, "fraction-conflict/FRACTION_CONFLICT_1.ARW", "fraction-raw", "RAW", token, captureTime: baseTime.AddMilliseconds(123), fractionalDigits: 3),
-                    await AddAssetAsync(database, source, "fraction-conflict/FRACTION_CONFLICT_1.jpg", "fraction-jpeg", "JPEG", token, captureTime: baseTime.AddMilliseconds(124), fractionalDigits: 3)];
+                    await AddAssetAsync(database, source, "fraction-conflict/FRACTION_CONFLICT_1.ARW", "fraction-raw", "RAW", captureTime: baseTime.AddMilliseconds(123), fractionalDigits: 3,
+                        cancellationToken: token),
+                    await AddAssetAsync(database, source, "fraction-conflict/FRACTION_CONFLICT_1.jpg", "fraction-jpeg", "JPEG", captureTime: baseTime.AddMilliseconds(124), fractionalDigits: 3,
+                        cancellationToken: token)];
                 uncertainTime = [
-                    await AddAssetAsync(database, source, "uncertain/UNCERTAIN_1.ARW", "uncertain-raw", "RAW", token, uncertainTime: true),
-                    await AddAssetAsync(database, source, "uncertain/UNCERTAIN_1.jpg", "uncertain-jpeg", "JPEG", token)];
+                    await AddAssetAsync(database, source, "uncertain/UNCERTAIN_1.ARW", "uncertain-raw", "RAW", uncertainTime: true, cancellationToken: token),
+                    await AddAssetAsync(database, source, "uncertain/UNCERTAIN_1.jpg", "uncertain-jpeg", "JPEG", cancellationToken: token)];
                 cameraConflict = [
-                    await AddAssetAsync(database, source, "camera/CAMERA_1.ARW", "camera-raw", "RAW", token, cameraSerial: "CAM-A"),
-                    await AddAssetAsync(database, source, "camera/CAMERA_1.jpg", "camera-jpeg", "JPEG", token, cameraSerial: "CAM-B")];
+                    await AddAssetAsync(database, source, "camera/CAMERA_1.ARW", "camera-raw", "RAW", cameraSerial: "CAM-A", cancellationToken: token),
+                    await AddAssetAsync(database, source, "camera/CAMERA_1.jpg", "camera-jpeg", "JPEG", cameraSerial: "CAM-B", cancellationToken: token)];
                 ambiguous = [
-                    await AddAssetAsync(database, source, "collision/COLLISION_1.ARW", "collision-raw-1", "RAW", token),
-                    await AddAssetAsync(database, source, "collision/COLLISION_1.ARW", "collision-raw-2", "RAW", token),
-                    await AddAssetAsync(database, source, "collision/COLLISION_1.jpg", "collision-jpeg", "JPEG", token)];
-                ambiguousLate = await AddAssetAsync(database, source, "collision/COLLISION_1.ARW", "collision-raw-3", "RAW", token);
+                    await AddAssetAsync(database, source, "collision/COLLISION_1.ARW", "collision-raw-1", "RAW", cancellationToken: token),
+                    await AddAssetAsync(database, source, "collision/COLLISION_1.ARW", "collision-raw-2", "RAW", cancellationToken: token),
+                    await AddAssetAsync(database, source, "collision/COLLISION_1.jpg", "collision-jpeg", "JPEG", cancellationToken: token)];
+                ambiguousLate = await AddAssetAsync(database, source, "collision/COLLISION_1.ARW", "collision-raw-3", "RAW", cancellationToken: token);
 
                 string expandedStem = new('\uFB03', 400);
-                unicodeStem = await AddAssetAsync(database, source, $"unicode/{expandedStem}.ARW", "unicode-raw", null, token, outcome: "Unsupported");
-                followingAsset = await AddAssetAsync(database, source, "unicode/next.bin", "next-other", null, token, outcome: "Unsupported");
+                unicodeStem = await AddAssetAsync(database, source, $"unicode/{expandedStem}.ARW", "unicode-raw", null, outcome: "Unsupported", cancellationToken: token);
+                followingAsset = await AddAssetAsync(database, source, "unicode/next.bin", "next-other", null, outcome: "Unsupported", cancellationToken: token);
             }
 
             Assert.True(await GroupUntilEmptyAsync(options, token) >= 12);
@@ -351,18 +366,18 @@ public sealed class CaptureGroupingPostgresTests
             await using (var database = new ShutterSpoolDbContext(options))
             {
                 selectivelyAmbiguous = [
-                    await AddAssetAsync(database, source, "selective/SELECTIVE_1.ARW", "selective-a", "RAW", token, cameraSerial: "A"),
-                    await AddAssetAsync(database, source, "selective/SELECTIVE_1.ARW", "selective-c", "RAW", token, cameraSerial: "A"),
-                    await AddAssetAsync(database, source, "selective/SELECTIVE_1.ARW", "selective-b", "RAW", token, cameraSerial: "B")];
+                    await AddAssetAsync(database, source, "selective/SELECTIVE_1.ARW", "selective-a", "RAW", cameraSerial: "A", cancellationToken: token),
+                    await AddAssetAsync(database, source, "selective/SELECTIVE_1.ARW", "selective-c", "RAW", cameraSerial: "A", cancellationToken: token),
+                    await AddAssetAsync(database, source, "selective/SELECTIVE_1.ARW", "selective-b", "RAW", cameraSerial: "B", cancellationToken: token)];
             }
             Assert.Equal(3, await GroupUntilEmptyAsync(options, token));
             await using (var database = new ShutterSpoolDbContext(options))
                 selectivelyAmbiguous = [.. selectivelyAmbiguous,
-                    await AddAssetAsync(database, source, "selective/SELECTIVE_1.jpg", "selective-k", "JPEG", token, cameraSerial: "A")];
+                    await AddAssetAsync(database, source, "selective/SELECTIVE_1.jpg", "selective-k", "JPEG", cameraSerial: "A", cancellationToken: token)];
             Assert.Equal(1, await GroupUntilEmptyAsync(options, token));
             await using (var database = new ShutterSpoolDbContext(options))
                 selectivelyAmbiguous = [.. selectivelyAmbiguous,
-                    await AddAssetAsync(database, source, "selective/SELECTIVE_1.jpg", "selective-j", "JPEG", token, cameraSerial: null)];
+                    await AddAssetAsync(database, source, "selective/SELECTIVE_1.jpg", "selective-j", "JPEG", cameraSerial: null, cancellationToken: token)];
             Assert.Equal(1, await GroupUntilEmptyAsync(options, token));
 
             await using var verify = new ShutterSpoolDbContext(options);
@@ -372,8 +387,8 @@ public sealed class CaptureGroupingPostgresTests
             Assert.Equal(completedDue, await ReadDateTimeOffsetAsync(verify, "SELECT \"ReleaseDueAt\" FROM captures WHERE \"Id\" = @capture", completedId, token));
             Assert.NotEqual(await CaptureIdAsync(verify, lateRaw, token), await CaptureIdAsync(verify, changedBytes, token));
             Assert.NotEqual(await CaptureIdAsync(verify, lateRaw, token), await CaptureIdAsync(verify, crossSource, token));
-            Assert.Equal(2, await ScalarAsync(verify, "SELECT count(*) FROM capture_assets WHERE \"AssetId\" IN (@asset1, @asset2) AND \"Role\" = 'OTHER' AND \"IsPrimary\" = true", token,
-                ("asset1", unsupported), ("asset2", failed)));
+            Assert.Equal(2, await ScalarAsync(verify, "SELECT count(*) FROM capture_assets WHERE \"AssetId\" IN (@asset1, @asset2) AND \"Role\" = 'OTHER' AND \"IsPrimary\" = true",
+                [("asset1", unsupported), ("asset2", failed)], token));
             Assert.Equal(2, await DistinctCaptureCountAsync(verify, timeConflict, token));
             Assert.Equal(1, await DistinctCaptureCountAsync(verify, offsetPair, token));
             Assert.Equal(2, await DistinctCaptureCountAsync(verify, mixedZone, token));
@@ -387,8 +402,8 @@ public sealed class CaptureGroupingPostgresTests
             Assert.Equal(5, await DistinctCaptureCountAsync(verify, selectivelyAmbiguous, token));
             Assert.Equal("ambiguous_candidates", await TextAsync(verify,
                 "SELECT \"GroupingReason\" FROM capture_assets WHERE \"AssetId\" = @asset", ambiguous[2], token));
-            Assert.Equal(1_200, await ScalarAsync(verify, "SELECT char_length(\"NormalizedStem\") FROM captures JOIN capture_assets ON captures.\"Id\" = capture_assets.\"CaptureId\" WHERE capture_assets.\"AssetId\" = @asset", token,
-                ("asset", unicodeStem)));
+            Assert.Equal(1_200, await ScalarAsync(verify, "SELECT char_length(\"NormalizedStem\") FROM captures JOIN capture_assets ON captures.\"Id\" = capture_assets.\"CaptureId\" WHERE capture_assets.\"AssetId\" = @asset",
+                [("asset", unicodeStem)], token));
             Assert.NotEqual(await CaptureIdAsync(verify, unicodeStem, token), await CaptureIdAsync(verify, followingAsset, token));
         }
         finally
@@ -399,9 +414,10 @@ public sealed class CaptureGroupingPostgresTests
         }
     }
 
-    private static async Task<Guid> AddAssetAsync(ShutterSpoolDbContext database, Guid sourceId, string name, string sha, string? role, CancellationToken cancellationToken,
+    private static async Task<Guid> AddAssetAsync(ShutterSpoolDbContext database, Guid sourceId, string name, string sha, string? role,
         string? cameraModel = "Synthetic Camera", string? cameraSerial = "SYNTH-1", string outcome = "Complete",
-        DateTime? captureTime = null, TimeSpan? captureOffset = null, bool uncertainTime = false, bool omitTime = false, int fractionalDigits = 0)
+        DateTime? captureTime = null, TimeSpan? captureOffset = null, bool uncertainTime = false, bool omitTime = false, int fractionalDigits = 0,
+            CancellationToken cancellationToken = default)
     {
         await EnsureSourceAsync(database.Database.GetDbConnection().ConnectionString, sourceId, cancellationToken);
         Guid assetId = Guid.NewGuid();
@@ -447,7 +463,7 @@ public sealed class CaptureGroupingPostgresTests
         await database.Database.MigrateAsync(cancellationToken);
     }
 
-    private static async Task<long> ScalarAsync(ShutterSpoolDbContext database, string sql, CancellationToken cancellationToken, params (string Name, Guid Value)[] parameters)
+    private static async Task<long> ScalarAsync(ShutterSpoolDbContext database, string sql, (string Name, Guid Value)[] parameters, CancellationToken cancellationToken)
     {
         await database.Database.OpenConnectionAsync(cancellationToken);
         await using var command = database.Database.GetDbConnection().CreateCommand();
@@ -479,7 +495,7 @@ public sealed class CaptureGroupingPostgresTests
 
     private static async Task<Guid> CaptureIdAsync(ShutterSpoolDbContext database, Guid assetId, CancellationToken cancellationToken)
     {
-        object? value = await ScalarObjectAsync(database, "SELECT \"CaptureId\" FROM capture_assets WHERE \"AssetId\" = @asset", cancellationToken, ("asset", assetId));
+        object? value = await ScalarObjectAsync(database, "SELECT \"CaptureId\" FROM capture_assets WHERE \"AssetId\" = @asset", [("asset", assetId)], cancellationToken);
         return (Guid)value!;
     }
 
@@ -496,15 +512,16 @@ public sealed class CaptureGroupingPostgresTests
     }
 
     private static async Task<string> TextAsync(ShutterSpoolDbContext database, string sql, Guid assetId, CancellationToken cancellationToken) =>
-        (string)(await ScalarObjectAsync(database, sql, cancellationToken, ("asset", assetId)))!;
+        (string)(await ScalarObjectAsync(database, sql, [("asset", assetId)], cancellationToken))!;
 
     private static async Task<DateTimeOffset> ReadDateTimeOffsetAsync(ShutterSpoolDbContext database, string sql, Guid captureId, CancellationToken cancellationToken)
     {
-        object value = (await ScalarObjectAsync(database, sql, cancellationToken, ("capture", captureId)))!;
+        object value = (await ScalarObjectAsync(database, sql, [("capture", captureId)], cancellationToken))!;
         return value is DateTimeOffset offset ? offset : new DateTimeOffset(DateTime.SpecifyKind((DateTime)value, DateTimeKind.Utc));
     }
 
-    private static async Task<object?> ScalarObjectAsync(ShutterSpoolDbContext database, string sql, CancellationToken cancellationToken, params (string Name, Guid Value)[] parameters)
+    private static async Task<object?> ScalarObjectAsync(ShutterSpoolDbContext database, string sql, (string Name, Guid Value)[] parameters,
+        CancellationToken cancellationToken)
     {
         await database.Database.OpenConnectionAsync(cancellationToken);
         await using var command = database.Database.GetDbConnection().CreateCommand();

@@ -33,7 +33,7 @@ public sealed class CaptureRoutingPostgresTests
         await new DestinationRoutingAdminService(database).SetAsync(new(destinationId, true,
             [new("event", "Event", 0, true, [], "{collectionPath}", "{suppliedName}")]), token);
         await new DestinationRoutingAdminService(database).SetAsync(new(unmatchedId, true, []), token);
-        await AddReleasedAssetAsync(database, sourceId, captureId, rawId, "frame.raw", token, collectionId);
+        await AddReleasedAssetAsync(database, sourceId, captureId, rawId, "frame.raw", collectionId, token);
         await database.Database.ExecuteSqlInterpolatedAsync($"""
             UPDATE collections SET "Name" = 'Renamed', "Path" = 'Events/Renamed', "Identity" = 'EVENTS/RENAMED', "Revision" = "Revision" + 1 WHERE "Id" = {collectionId}
             """, token);
@@ -125,7 +125,7 @@ public sealed class CaptureRoutingPostgresTests
         await database.SaveChangesAsync(token);
         await new DestinationRoutingAdminService(database).SetAsync(new(destinationId, true,
             [new("legacy", "Legacy", 0, true, [], "original", "{suppliedName}")]), token);
-        await AddReleasedAssetAsync(database, sourceId, captureId, rawId, "legacy.raw", token);
+        await AddReleasedAssetAsync(database, sourceId, captureId, rawId, "legacy.raw", token: token);
         await database.Database.ExecuteSqlInterpolatedAsync($"""
             UPDATE captures SET "ReleasedCollectionId" = NULL, "ReleasedCollectionName" = NULL, "ReleasedCollectionPath" = NULL WHERE "Id" = {captureId}
             """, token);
@@ -226,7 +226,7 @@ public sealed class CaptureRoutingPostgresTests
                 Directory.CreateDirectory(Path.Combine(spoolRoot, "spool"));
                 await File.WriteAllBytesAsync(Path.Combine(spoolRoot, "spool", replayId.ToString("N")), replayBytes, token);
                 var actions = CreateActions(database, new FileSystemSpool(new FileSystemSpoolOptions { RootPath = spoolRoot, ReservedBytes = 0 }));
-                Guid rawDeliveryId = await GuidScalarAsync(database, "SELECT \"Id\" FROM deliveries WHERE \"AssetId\" = @asset", rawId, token);
+                Guid rawDeliveryId = await GuidScalarAsync(database, "SELECT \"Id\" FROM deliveries WHERE \"AssetId\" = @asset", rawId, [], token);
                 Assert.Equal("Pending", await TextAsync(database, "SELECT \"State\" FROM deliveries WHERE \"Id\" = @capture", rawDeliveryId, token));
                 await CompleteConfirmedAsync(options, rawDeliveryId, token);
                 database.ChangeTracker.Clear();
@@ -243,9 +243,9 @@ public sealed class CaptureRoutingPostgresTests
                 await database.Database.ExecuteSqlInterpolatedAsync($"UPDATE routing_actions SET \"CreatedAt\" = {DateTimeOffset.UtcNow.AddMinutes(-16)} WHERE \"Id\" = {previewId}", token);
                 database.ChangeTracker.Clear();
                 Assert.Equal(RoutingActionStatus.StalePreview, (await actions.ResendAsync(rawDeliveryId, expiredPreview.ConfirmationToken, token)).Status);
-                Assert.Equal(2, await ScalarAsync(database, "SELECT count(*) FROM deliveries WHERE \"AssetId\" = @asset", rawId, token, ("asset", rawId)));
+                Assert.Equal(2, await ScalarAsync(database, "SELECT count(*) FROM deliveries WHERE \"AssetId\" = @asset", rawId, [("asset", rawId)], token));
                 Directory.Delete(spoolRoot, recursive: true);
-                Guid jpegDeliveryId = await GuidScalarAsync(database, "SELECT \"Id\" FROM deliveries WHERE \"AssetId\" = @asset", jpegId, token);
+                Guid jpegDeliveryId = await GuidScalarAsync(database, "SELECT \"Id\" FROM deliveries WHERE \"AssetId\" = @asset", jpegId, [], token);
                 await CompleteAfterReconciliationAsync(options, jpegDeliveryId, token);
                 database.ChangeTracker.Clear();
                 Assert.Equal("COMPLETE", await TextAsync(database, "SELECT \"State\" FROM captures WHERE \"Id\" = @capture", captureId, token));
@@ -262,7 +262,8 @@ public sealed class CaptureRoutingPostgresTests
                 Assert.True((await new CaptureCurationService(new EfCaptureCurationStore(database, TimeProvider.System)).ReleaseNowAsync(zeroCaptureId, 0, token)).Succeeded);
                 Assert.True(await new EfCaptureRoutingProcessor(database).ProcessOneAsync(DateTimeOffset.UtcNow, token));
                 Assert.Equal("RELEASED", await TextAsync(database, "SELECT \"State\" FROM captures WHERE \"Id\" = @capture", zeroCaptureId, token));
-                Assert.Equal(0, await ScalarAsync(database, "SELECT count(*) FROM deliveries d JOIN routing_decisions r ON r.\"Id\" = d.\"DecisionId\" WHERE r.\"CaptureId\" = @capture", zeroCaptureId, token));
+                Assert.Equal(0, await ScalarAsync(database, "SELECT count(*) FROM deliveries d JOIN routing_decisions r ON r.\"Id\" = d.\"DecisionId\" WHERE r.\"CaptureId\" = @capture", zeroCaptureId,
+                    [], token));
             }
 
             await using var verify = new ShutterSpoolDbContext(options);
@@ -272,14 +273,20 @@ public sealed class CaptureRoutingPostgresTests
             DestinationRouting[] snapshot = RoutingRuleJson.ReadSnapshot(snapshotJson);
             Assert.Equal("raw", snapshot.Single(item => item.DestinationId == destinationId).Rules[0].Id);
             Assert.Equal(RoutingConditionMode.Or, snapshot.Single(item => item.DestinationId == destinationId).Rules[0].ConditionMode);
-            Assert.Equal(7, await ScalarAsync(verify, "SELECT count(*) FROM routing_decisions WHERE \"CaptureId\" = @capture", captureId, token));
-            Assert.Equal(1, await ScalarAsync(verify, "SELECT count(*) FROM routing_decisions WHERE \"CaptureId\" = @capture AND \"AssetId\" = @asset AND \"DestinationId\" = @destination AND \"Kind\" = 'Matched' AND \"RuleId\" = 'raw' AND \"IsCurrent\" AND NOT \"Required\" AND \"TargetPath\" = 'raw/frame.CR3'", captureId, token, ("asset", rawId), ("destination", destinationId)));
-            Assert.Equal(1, await ScalarAsync(verify, "SELECT count(*) FROM routing_decisions WHERE \"CaptureId\" = @capture AND \"AssetId\" = @asset AND \"DestinationId\" = @destination AND \"Kind\" = 'Matched' AND \"RuleId\" = 'fallback' AND \"Required\" AND \"TargetPath\" = 'all/frame.jpg'", captureId, token, ("asset", jpegId), ("destination", destinationId)));
-            Assert.Equal(3, await ScalarAsync(verify, "SELECT count(*) FROM deliveries d JOIN routing_decisions r ON r.\"Id\" = d.\"DecisionId\" WHERE r.\"CaptureId\" = @capture", captureId, token));
-            Assert.Equal(1, await ScalarAsync(verify, "SELECT count(*) FROM routing_actions WHERE \"AssetId\" = @asset AND \"Kind\" = 'Resend' AND \"Result\" = 'queued' AND \"DeliveryId\" IS NOT NULL", rawId, token, ("asset", rawId)));
-            Assert.Equal(3, await ScalarAsync(verify, "SELECT count(*) FROM routed_assets routed JOIN capture_assets ca ON ca.\"AssetId\" = routed.\"AssetId\" WHERE ca.\"CaptureId\" = @capture", captureId, token));
-            Assert.Equal(3, await ScalarAsync(verify, "SELECT count(*) FROM routing_decisions WHERE \"CaptureId\" = @capture AND \"DestinationId\" = @destination AND \"Kind\" = 'NoMatch'", captureId, token, ("destination", noMatchDestinationId)));
-            Assert.Equal(0, await ScalarAsync(verify, "SELECT count(*) FROM routed_assets WHERE \"AssetId\" = @capture", replayId, token));
+            Assert.Equal(7, await ScalarAsync(verify, "SELECT count(*) FROM routing_decisions WHERE \"CaptureId\" = @capture", captureId, [], token));
+            Assert.Equal(1, await ScalarAsync(verify, "SELECT count(*) FROM routing_decisions WHERE \"CaptureId\" = @capture AND \"AssetId\" = @asset AND \"DestinationId\" = @destination AND \"Kind\" = 'Matched' AND \"RuleId\" = 'raw' AND \"IsCurrent\" AND NOT \"Required\" AND \"TargetPath\" = 'raw/frame.CR3'", captureId,
+                [("asset", rawId), ("destination", destinationId)], token));
+            Assert.Equal(1, await ScalarAsync(verify, "SELECT count(*) FROM routing_decisions WHERE \"CaptureId\" = @capture AND \"AssetId\" = @asset AND \"DestinationId\" = @destination AND \"Kind\" = 'Matched' AND \"RuleId\" = 'fallback' AND \"Required\" AND \"TargetPath\" = 'all/frame.jpg'", captureId,
+                [("asset", jpegId), ("destination", destinationId)], token));
+            Assert.Equal(3, await ScalarAsync(verify, "SELECT count(*) FROM deliveries d JOIN routing_decisions r ON r.\"Id\" = d.\"DecisionId\" WHERE r.\"CaptureId\" = @capture", captureId,
+                [], token));
+            Assert.Equal(1, await ScalarAsync(verify, "SELECT count(*) FROM routing_actions WHERE \"AssetId\" = @asset AND \"Kind\" = 'Resend' AND \"Result\" = 'queued' AND \"DeliveryId\" IS NOT NULL", rawId,
+                [("asset", rawId)], token));
+            Assert.Equal(3, await ScalarAsync(verify, "SELECT count(*) FROM routed_assets routed JOIN capture_assets ca ON ca.\"AssetId\" = routed.\"AssetId\" WHERE ca.\"CaptureId\" = @capture", captureId,
+                [], token));
+            Assert.Equal(3, await ScalarAsync(verify, "SELECT count(*) FROM routing_decisions WHERE \"CaptureId\" = @capture AND \"DestinationId\" = @destination AND \"Kind\" = 'NoMatch'", captureId,
+                [("destination", noMatchDestinationId)], token));
+            Assert.Equal(0, await ScalarAsync(verify, "SELECT count(*) FROM routed_assets WHERE \"AssetId\" = @capture", replayId, [], token));
         }
         finally
         {
@@ -311,19 +318,22 @@ public sealed class CaptureRoutingPostgresTests
         var routing = new DestinationRoutingAdminService(database);
         await routing.SetAsync(new(activeDestinationId, true, rules), token);
         await routing.SetAsync(new(disabledDestinationId, false, rules), token);
-        await AddReleasedAssetAsync(database, sourceId, firstCaptureId, firstAssetId, "Frame.CR3", token);
-        await AddReleasedAssetAsync(database, sourceId, secondCaptureId, secondAssetId, "frame.cr3", token);
+        await AddReleasedAssetAsync(database, sourceId, firstCaptureId, firstAssetId, "Frame.CR3", token: token);
+        await AddReleasedAssetAsync(database, sourceId, secondCaptureId, secondAssetId, "frame.cr3", token: token);
 
         var processor = new EfCaptureRoutingProcessor(database);
         Assert.True(await processor.ProcessOneAsync(DateTimeOffset.UtcNow, token));
         Assert.True(await processor.ProcessOneAsync(DateTimeOffset.UtcNow, token));
-        Assert.Equal(1, await ScalarAsync(database, "SELECT count(*) FROM routing_decisions WHERE \"CaptureId\" = @capture AND \"DestinationId\" = @destination AND \"Kind\" = 'Matched'", firstCaptureId, token, ("destination", activeDestinationId)));
-        Assert.Equal(1, await ScalarAsync(database, "SELECT count(*) FROM routing_decisions WHERE \"CaptureId\" = @capture AND \"DestinationId\" = @destination AND \"Kind\" = 'InvalidTarget'", secondCaptureId, token, ("destination", activeDestinationId)));
-        Assert.Equal(2, await ScalarAsync(database, "SELECT count(*) FROM routing_decisions WHERE \"DestinationId\" = @destination AND \"Kind\" = 'DestinationDisabled'", Guid.Empty, token, ("destination", disabledDestinationId)));
+        Assert.Equal(1, await ScalarAsync(database, "SELECT count(*) FROM routing_decisions WHERE \"CaptureId\" = @capture AND \"DestinationId\" = @destination AND \"Kind\" = 'Matched'", firstCaptureId,
+            [("destination", activeDestinationId)], token));
+        Assert.Equal(1, await ScalarAsync(database, "SELECT count(*) FROM routing_decisions WHERE \"CaptureId\" = @capture AND \"DestinationId\" = @destination AND \"Kind\" = 'InvalidTarget'", secondCaptureId,
+            [("destination", activeDestinationId)], token));
+        Assert.Equal(2, await ScalarAsync(database, "SELECT count(*) FROM routing_decisions WHERE \"DestinationId\" = @destination AND \"Kind\" = 'DestinationDisabled'", Guid.Empty,
+            [("destination", disabledDestinationId)], token));
 
         await routing.SetAsync(new(activeDestinationId, false, rules), token);
         Assert.Equal("Disabled", await TextAsync(database, "SELECT \"State\" FROM deliveries WHERE \"AssetId\" = @capture", firstAssetId, token));
-        Guid pausedDeliveryId = await GuidScalarAsync(database, "SELECT \"Id\" FROM deliveries WHERE \"AssetId\" = @asset", firstAssetId, token);
+        Guid pausedDeliveryId = await GuidScalarAsync(database, "SELECT \"Id\" FROM deliveries WHERE \"AssetId\" = @asset", firstAssetId, [], token);
         Assert.Null(await CreateDeliveryStore(testDatabase.IngestOptions).ClaimAsync(token));
         Assert.Equal("Disabled", await TextAsync(database, "SELECT \"State\" FROM deliveries WHERE \"Id\" = @capture", pausedDeliveryId, token));
         await routing.SetAsync(new(activeDestinationId, true, rules), token);
@@ -351,11 +361,11 @@ public sealed class CaptureRoutingPostgresTests
         await using var database = new ShutterSpoolDbContext(testDatabase.IngestOptions);
         await new DestinationRoutingAdminService(database).SetAsync(new(destinationId, true,
             [new("initial", "Initial", 0, true, [], "first", "file.raw")]), token);
-        await AddReleasedAssetAsync(database, sourceId, captureId, assetId, "file.raw", token);
+        await AddReleasedAssetAsync(database, sourceId, captureId, assetId, "file.raw", token: token);
         await database.Database.ExecuteSqlInterpolatedAsync($"UPDATE assets SET \"Size\" = {original.Length}, \"Sha256\" = {originalHash} WHERE \"Id\" = {assetId}", token);
         var processor = new EfCaptureRoutingProcessor(database);
         Assert.True(await processor.ProcessOneAsync(DateTimeOffset.UtcNow, token));
-        Guid initialDeliveryId = await GuidScalarAsync(database, "SELECT \"Id\" FROM deliveries WHERE \"AssetId\" = @asset", assetId, token);
+        Guid initialDeliveryId = await GuidScalarAsync(database, "SELECT \"Id\" FROM deliveries WHERE \"AssetId\" = @asset", assetId, [], token);
         var work = CreateActions(database, new MemoryOriginalReader(original));
         ClaimedDelivery initialClaim = await CompleteConfirmedAsync(testDatabase.IngestOptions, initialDeliveryId, token);
         database.ChangeTracker.Clear();
@@ -375,20 +385,22 @@ public sealed class CaptureRoutingPostgresTests
         Assert.Equal(RoutingActionStatus.Recorded, (await work.ReevaluateAsync(assetId, destinationId, secondPreview.ConfirmationToken, token)).Status);
         Assert.Equal("Delivered", await TextAsync(database, "SELECT \"State\" FROM deliveries WHERE \"Id\" = @capture", initialDeliveryId, token));
 
-        Guid secondDeliveryId = await GuidScalarAsync(database, "SELECT \"Id\" FROM deliveries WHERE \"AssetId\" = @asset AND \"Id\" <> @prior ORDER BY \"CreatedAt\" DESC LIMIT 1", assetId, token, ("prior", initialDeliveryId));
+        Guid secondDeliveryId = await GuidScalarAsync(database, "SELECT \"Id\" FROM deliveries WHERE \"AssetId\" = @asset AND \"Id\" <> @prior ORDER BY \"CreatedAt\" DESC LIMIT 1", assetId,
+            [("prior", initialDeliveryId)], token);
         await CompleteConfirmedAsync(testDatabase.IngestOptions, secondDeliveryId, token);
         database.ChangeTracker.Clear();
         var withoutBytes = CreateActions(database, new MissingOriginalReader());
         RoutingActionPreview resendPreview = await withoutBytes.PreviewResendAsync(secondDeliveryId, token);
         Assert.Equal(RoutingActionStatus.BlockedOriginalUnavailable, (await withoutBytes.ResendAsync(secondDeliveryId, resendPreview.ConfirmationToken, token)).Status);
-        Assert.Equal(2, await ScalarAsync(database, "SELECT count(*) FROM deliveries WHERE \"AssetId\" = @asset", assetId, token, ("asset", assetId)));
+        Assert.Equal(2, await ScalarAsync(database, "SELECT count(*) FROM deliveries WHERE \"AssetId\" = @asset", assetId, [("asset", assetId)], token));
         await new DestinationRoutingAdminService(database).SetAsync(new(destinationId, true,
             [new("third", "Third", 0, true, [], "third", "file.raw")]), token);
         RoutingActionPreview successfulPreview = await work.PreviewReevaluateAsync(assetId, destinationId, token);
         Assert.Equal("third/file.raw", successfulPreview.ProposedTarget);
         Assert.Equal(RoutingActionStatus.Recorded, (await work.ReevaluateAsync(assetId, destinationId, successfulPreview.ConfirmationToken, token)).Status);
         Assert.Equal("Delivered", await TextAsync(database, "SELECT \"State\" FROM deliveries WHERE \"Id\" = @capture", secondDeliveryId, token));
-        Guid supersededDeliveryId = await GuidScalarAsync(database, "SELECT \"Id\" FROM deliveries WHERE \"AssetId\" = @asset ORDER BY \"CreatedAt\" DESC LIMIT 1", assetId, token);
+        Guid supersededDeliveryId = await GuidScalarAsync(database, "SELECT \"Id\" FROM deliveries WHERE \"AssetId\" = @asset ORDER BY \"CreatedAt\" DESC LIMIT 1", assetId,
+            [], token);
         await new DestinationRoutingAdminService(database).SetAsync(new(destinationId, true,
             [new("fourth", "Fourth", 0, true, [], "fourth", "file.raw")]), token);
         RoutingActionPreview fourthPreview = await work.PreviewReevaluateAsync(assetId, destinationId, token);
@@ -397,7 +409,8 @@ public sealed class CaptureRoutingPostgresTests
         await CreateDeliveryStore(testDatabase.IngestOptions).FinishAsync(initialClaim with { DeliveryId = supersededDeliveryId },
             new(DeliveryResultKind.Confirmed, DeliveryConfirmationEvidenceLevel.AcknowledgedCompleteWrite), token);
         Assert.Equal("Superseded", await TextAsync(database, "SELECT \"State\" FROM deliveries WHERE \"Id\" = @capture", supersededDeliveryId, token));
-        Guid retryDeliveryId = await GuidScalarAsync(database, "SELECT \"Id\" FROM deliveries WHERE \"AssetId\" = @asset ORDER BY \"CreatedAt\" DESC LIMIT 1", assetId, token);
+        Guid retryDeliveryId = await GuidScalarAsync(database, "SELECT \"Id\" FROM deliveries WHERE \"AssetId\" = @asset ORDER BY \"CreatedAt\" DESC LIMIT 1", assetId,
+            [], token);
         await database.Database.ExecuteSqlInterpolatedAsync($"UPDATE deliveries SET \"State\" = 'Failed' WHERE \"Id\" = {retryDeliveryId}", token);
         database.ChangeTracker.Clear();
         Assert.Equal(RoutingActionStatus.Queued, (await work.RetryAsync(retryDeliveryId, token)).Status);
@@ -406,15 +419,17 @@ public sealed class CaptureRoutingPostgresTests
         database.ChangeTracker.Clear();
         RoutingActionPreview ambiguousPreview = await work.PreviewReevaluateAsync(assetId, destinationId, token);
         Assert.Equal(RoutingActionStatus.BlockedReconciliation, (await work.ReevaluateAsync(assetId, destinationId, ambiguousPreview.ConfirmationToken, token)).Status);
-        Assert.Equal(4, await ScalarAsync(database, "SELECT count(*) FROM routing_decisions WHERE \"AssetId\" = @asset", assetId, token, ("asset", assetId)));
-        Assert.Equal(1, await ScalarAsync(database, "SELECT count(*) FROM routing_actions WHERE \"AssetId\" = @asset AND \"Kind\" = 'Retry' AND \"Result\" = 'queued'", assetId, token, ("asset", assetId)));
+        Assert.Equal(4, await ScalarAsync(database, "SELECT count(*) FROM routing_decisions WHERE \"AssetId\" = @asset", assetId, [("asset", assetId)], token));
+        Assert.Equal(1, await ScalarAsync(database, "SELECT count(*) FROM routing_actions WHERE \"AssetId\" = @asset AND \"Kind\" = 'Retry' AND \"Result\" = 'queued'", assetId,
+            [("asset", assetId)], token));
 
         Guid laterCaptureId = Guid.NewGuid(), laterAssetId = Guid.NewGuid();
         await new DestinationRoutingAdminService(database).SetAsync(new(destinationId, true,
             [new("old-path", "Old successful path", 0, true, [], "FIRST", "file.raw")]), token);
-        await AddReleasedAssetAsync(database, sourceId, laterCaptureId, laterAssetId, "other.raw", token);
+        await AddReleasedAssetAsync(database, sourceId, laterCaptureId, laterAssetId, "other.raw", token: token);
         Assert.True(await processor.ProcessOneAsync(DateTimeOffset.UtcNow, token));
-        Assert.Equal(1, await ScalarAsync(database, "SELECT count(*) FROM routing_decisions WHERE \"AssetId\" = @asset AND \"Kind\" = 'InvalidTarget' AND \"TargetPath\" = 'FIRST/file.raw'", laterAssetId, token, ("asset", laterAssetId)));
+        Assert.Equal(1, await ScalarAsync(database, "SELECT count(*) FROM routing_decisions WHERE \"AssetId\" = @asset AND \"Kind\" = 'InvalidTarget' AND \"TargetPath\" = 'FIRST/file.raw'", laterAssetId,
+            [("asset", laterAssetId)], token));
     }
 
     [Fact]
@@ -491,9 +506,9 @@ public sealed class CaptureRoutingPostgresTests
         RoutingActionPreview preview = await work.PreviewReevaluateAsync(assetId, destinationId, token);
         Assert.Equal(RoutingActionStatus.BlockedNotReleased, preview.Status);
         Assert.Equal(RoutingActionStatus.BlockedNotReleased, (await work.ReevaluateAsync(assetId, destinationId, preview.ConfirmationToken, token)).Status);
-        Assert.Equal(0, await ScalarAsync(database, "SELECT count(*) FROM routing_decisions WHERE \"CaptureId\" = @capture", captureId, token));
-        Assert.Equal(0, await ScalarAsync(database, "SELECT count(*) FROM deliveries WHERE \"AssetId\" = @asset", assetId, token, ("asset", assetId)));
-        Assert.Equal(0, await ScalarAsync(database, "SELECT count(*) FROM routing_actions WHERE \"AssetId\" = @asset", assetId, token, ("asset", assetId)));
+        Assert.Equal(0, await ScalarAsync(database, "SELECT count(*) FROM routing_decisions WHERE \"CaptureId\" = @capture", captureId, [], token));
+        Assert.Equal(0, await ScalarAsync(database, "SELECT count(*) FROM deliveries WHERE \"AssetId\" = @asset", assetId, [("asset", assetId)], token));
+        Assert.Equal(0, await ScalarAsync(database, "SELECT count(*) FROM routing_actions WHERE \"AssetId\" = @asset", assetId, [("asset", assetId)], token));
     }
 
     private static Task<int> InsertAssetAsync(ShutterSpoolDbContext database, Guid id, Guid sourceId, string name, string role, CancellationToken token) => database.Database.ExecuteSqlInterpolatedAsync($"""
@@ -501,8 +516,8 @@ public sealed class CaptureRoutingPostgresTests
         VALUES ({id}, {sourceId}, {name}, {"spool/" + id.ToString("N")}, 17, {new string('a', 64)}, {DateTimeOffset.UtcNow}, {Guid.NewGuid()}, 'Spooled', 'Complete', {role}, 'image/jpeg')
         """, token);
 
-    private static async Task AddReleasedAssetAsync(ShutterSpoolDbContext database, Guid sourceId, Guid captureId, Guid assetId, string name, CancellationToken token,
-        Guid? collectionId = null)
+    private static async Task AddReleasedAssetAsync(ShutterSpoolDbContext database, Guid sourceId, Guid captureId, Guid assetId, string name,
+        Guid? collectionId = null, CancellationToken token = default)
     {
         await InsertAssetAsync(database, assetId, sourceId, name, "RAW", token);
         DateTimeOffset anchor = DateTimeOffset.UtcNow;
@@ -513,7 +528,8 @@ public sealed class CaptureRoutingPostgresTests
         Assert.True((await new CaptureCurationService(new EfCaptureCurationStore(database, TimeProvider.System)).ReleaseNowAsync(captureId, 0, token)).Succeeded);
     }
 
-    private static async Task<int> ScalarAsync(ShutterSpoolDbContext database, string sql, Guid captureId, CancellationToken token, params (string Name, Guid Value)[] parameters)
+    private static async Task<int> ScalarAsync(ShutterSpoolDbContext database, string sql, Guid captureId, (string Name, Guid Value)[] parameters,
+        CancellationToken token)
     {
         await using var command = database.Database.GetDbConnection().CreateCommand();
         command.CommandText = sql;
@@ -532,8 +548,8 @@ public sealed class CaptureRoutingPostgresTests
         return (string)(await command.ExecuteScalarAsync(token))!;
     }
 
-    private static async Task<Guid> GuidScalarAsync(ShutterSpoolDbContext database, string sql, Guid assetId, CancellationToken token,
-        params (string Name, Guid Value)[] parameters)
+    private static async Task<Guid> GuidScalarAsync(ShutterSpoolDbContext database, string sql, Guid assetId, (string Name, Guid Value)[] parameters,
+        CancellationToken token)
     {
         await using var command = database.Database.GetDbConnection().CreateCommand();
         command.CommandText = sql;

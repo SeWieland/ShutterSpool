@@ -27,7 +27,7 @@ internal sealed class CaptureRoutingWorkService(ShutterSpoolDbContext database, 
 
     public async Task<RoutingSupplierRequest?> ReevaluateSupplierRequestAsync(Guid assetId, Guid destinationId, CancellationToken cancellationToken)
     {
-        CurrentEvaluation? evaluation = await LoadCurrentEvaluationAsync(assetId, destinationId, cancellationToken, lockCapture: false);
+        CurrentEvaluation? evaluation = await LoadCurrentEvaluationAsync(assetId, destinationId, lockCapture: false, cancellationToken);
         if (evaluation is not { IsReleased: true } || !evaluation.Destination.Enabled) return null;
         RoutingDecision decision = RoutingRuleEvaluator.Evaluate(evaluation.Config is null ? [] : RoutingRuleJson.ReadRules(evaluation.Config.RulesJson),
             EfCaptureRoutingProcessor.Facts(evaluation.Capture, evaluation.Asset, evaluation.Role, releasedCuration: false, currentCollection: evaluation.Collection));
@@ -169,7 +169,7 @@ internal sealed class CaptureRoutingWorkService(ShutterSpoolDbContext database, 
 
     public async Task<RoutingActionPreview> ReevaluateAsync(Guid assetId, Guid destinationId, string? confirmationToken, Guid? verifiedSupplierId, CancellationToken cancellationToken)
     {
-        CurrentEvaluation? before = await LoadCurrentEvaluationAsync(assetId, destinationId, cancellationToken, lockCapture: false);
+        CurrentEvaluation? before = await LoadCurrentEvaluationAsync(assetId, destinationId, lockCapture: false, cancellationToken);
         RoutingDecision? beforeDecision = before is { IsReleased: true } && before.Destination.Enabled
             ? RoutingRuleEvaluator.Evaluate(before.Config is null ? [] : RoutingRuleJson.ReadRules(before.Config.RulesJson),
                 EfCaptureRoutingProcessor.Facts(before.Capture, before.Asset, before.Role, releasedCuration: false, currentCollection: before.Collection)) : null;
@@ -178,7 +178,7 @@ internal sealed class CaptureRoutingWorkService(ShutterSpoolDbContext database, 
         database.ChangeTracker.Clear();
         await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await LockRoutingAsync(cancellationToken);
-        CurrentEvaluation? evaluation = await LoadCurrentEvaluationAsync(assetId, destinationId, cancellationToken, lockCapture: true);
+        CurrentEvaluation? evaluation = await LoadCurrentEvaluationAsync(assetId, destinationId, lockCapture: true, cancellationToken);
         if (evaluation is null) return new(RoutingActionStatus.NotFound, assetId, destinationId, null, null, false, "Asset or current Capture decision was not found.");
         if (!evaluation.IsReleased) return new(RoutingActionStatus.BlockedNotReleased, assetId, destinationId, evaluation.Current?.TargetPath, null, false,
             "Reevaluate is available after this Capture has been released.");
@@ -267,7 +267,7 @@ internal sealed class CaptureRoutingWorkService(ShutterSpoolDbContext database, 
 
     private async Task<RoutingActionPreview> EvaluateCurrentAsync(Guid assetId, Guid destinationId, CancellationToken cancellationToken)
     {
-        CurrentEvaluation? evaluation = await LoadCurrentEvaluationAsync(assetId, destinationId, cancellationToken, lockCapture: false);
+        CurrentEvaluation? evaluation = await LoadCurrentEvaluationAsync(assetId, destinationId, lockCapture: false, cancellationToken);
         if (evaluation is null) return new(RoutingActionStatus.NotFound, assetId, destinationId, null, null, false, "Asset or current Capture decision was not found.");
         if (!evaluation.IsReleased) return new(RoutingActionStatus.BlockedNotReleased, assetId, destinationId, evaluation.Current?.TargetPath, null, false,
             "Reevaluate is available after this Capture has been released.");
@@ -290,7 +290,7 @@ internal sealed class CaptureRoutingWorkService(ShutterSpoolDbContext database, 
             decision.Required, decision.Explanation, action.Id.ToString("N"));
     }
 
-    private async Task<CurrentEvaluation?> LoadCurrentEvaluationAsync(Guid assetId, Guid destinationId, CancellationToken cancellationToken, bool lockCapture)
+    private async Task<CurrentEvaluation?> LoadCurrentEvaluationAsync(Guid assetId, Guid destinationId, bool lockCapture, CancellationToken cancellationToken)
     {
         await using IDbContextTransaction? readTransaction = lockCapture ? null
             : await database.Database.BeginTransactionAsync(cancellationToken);

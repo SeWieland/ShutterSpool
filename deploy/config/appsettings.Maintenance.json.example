@@ -1,0 +1,17 @@
+{
+  "ShutterSpool": {
+    "Security": {
+      "EncryptionKey": "REPLACE_WITH_BASE64_32_BYTE_DEPLOYMENT_KEY"
+    }
+  },
+  "ConnectionStrings": {
+    "shutterspool-control": "Host=postgres;Database=shutterspool_control;Username=shutterspool_control_runtime;Password=REPLACE_WITH_CONTROL_RUNTIME_PASSWORD",
+    "Workspaces": {
+      "studio": {
+        "Runtime": "Host=postgres;Database=shutterspool_studio;Username=shutterspool_studio_runtime;Password=REPLACE_WITH_STUDIO_RUNTIME_PASSWORD",
+        "Migration": "Host=postgres;Database=shutterspool_studio;Username=shutterspool_migration;Password=REPLACE_WITH_MIGRATION_PASSWORD"
+      }
+    },
+    "shutterspool-control-migration": "Host=postgres;Database=shutterspool_control;Username=shutterspool_migration;Password=REPLACE_WITH_MIGRATION_PASSWORD"
+  }
+}

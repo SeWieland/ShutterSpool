@@ -1,0 +1,18 @@
+{
+  "ShutterSpool": {
+    "Security": {
+      "EncryptionKey": "REPLACE_WITH_BASE64_32_BYTE_DEPLOYMENT_KEY"
+    },
+    "CameraIngress": {
+      "CallbackKey": "REPLACE_WITH_THE_SAME_CAMERA_CALLBACK_KEY_AS_THE_EDGE_SECRET"
+    }
+  },
+  "ConnectionStrings": {
+    "shutterspool-control": "Host=postgres;Database=shutterspool_control;Username=shutterspool_control_runtime;Password=REPLACE_WITH_CONTROL_RUNTIME_PASSWORD",
+    "Workspaces": {
+      "studio": {
+        "Runtime": "Host=postgres;Database=shutterspool_studio;Username=shutterspool_studio_runtime;Password=REPLACE_WITH_STUDIO_RUNTIME_PASSWORD"
+      }
+    }
+  }
+}
