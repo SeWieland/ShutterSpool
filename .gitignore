@@ -11,6 +11,8 @@ src/ShutterSpool.Server/wwwroot/
 **/__pycache__/
 *.pyc
 .vs/
+.sonarqube/
+.scannerwork/
 
 # Local secrets and runtime media; never commit original photographs
 .env

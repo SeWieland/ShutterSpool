@@ -1,0 +1,84 @@
+name: SonarQube
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: SonarQube analysis
+    # Fork and Dependabot pull requests do not receive the analysis credential.
+    if: >-
+      vars.SONAR_ORGANIZATION != '' && vars.SONAR_PROJECT_KEY != '' &&
+      github.actor != 'dependabot[bot]' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+      SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+      NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
+    steps:
+      - name: Check analysis credential
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [ -z "$SONAR_TOKEN" ]; then
+            echo '::error::Set the SONAR_TOKEN Actions secret before enabling SonarQube analysis.'
+            exit 1
+          fi
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages*.lock.json'
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: src/ShutterSpool.Web/package.json
+          cache: npm
+          cache-dependency-path: src/ShutterSpool.Web/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci --ignore-scripts
+        working-directory: src/ShutterSpool.Web
+      - name: Prepare frontend types
+        run: npm run typecheck
+        working-directory: src/ShutterSpool.Web
+      - name: Install SonarScanner
+        run: dotnet tool install dotnet-sonarscanner --version 12.1.0 --tool-path "$RUNNER_TEMP/sonar"
+      - name: Restore solution
+        run: dotnet restore ShutterSpool.slnx --locked-mode
+      - name: Begin analysis
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          "$RUNNER_TEMP/sonar/dotnet-sonarscanner" begin \
+            /k:"$SONAR_PROJECT_KEY" \
+            /o:"$SONAR_ORGANIZATION" \
+            /d:sonar.token="$SONAR_TOKEN" \
+            /d:sonar.host.url="https://sonarcloud.io" \
+            /d:sonar.projectBaseDir="$GITHUB_WORKSPACE" \
+            /d:sonar.scanner.scanAll=true \
+            /d:sonar.exclusions="**/bin/**,**/obj/**,**/node_modules/**,**/.nuxt/**,**/.output/**,**/dist/**,.nuget/**,artifacts/**,**/TestResults/**,**/coverage/**,src/ShutterSpool.Web/app/api/**,src/ShutterSpool.Server/openapi/**,src/ShutterSpool.Server/wwwroot/**"
+      - name: Build for analysis
+        run: dotnet build ShutterSpool.slnx --no-restore --no-incremental --disable-build-servers
+      - name: Upload analysis
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: '"$RUNNER_TEMP/sonar/dotnet-sonarscanner" end /d:sonar.token="$SONAR_TOKEN"'
