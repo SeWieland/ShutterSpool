@@ -7,8 +7,6 @@ namespace ShutterSpool.Server.Security;
 
 public static class SecurityExtensions
 {
-    public const string ManagementAccessPolicy = "management-access";
-
     public static IServiceCollection AddShutterSpoolSecurity(this IServiceCollection services, IConfiguration configuration)
     {
         SecurityOptions options = configuration.GetSection(SecurityOptions.SectionName).Get<SecurityOptions>() ?? new SecurityOptions();
@@ -84,11 +82,18 @@ public static class SecurityExtensions
                 }
             });
         services.AddScoped<IAuthorizationHandler, LocalGrantAuthorizationHandler>();
-        services.AddAuthorizationBuilder().AddPolicy(ManagementAccessPolicy, policy =>
+        services.AddHttpContextAccessor();
+        services.AddSingleton<IAuthorizationMiddlewareResultHandler, WorkspaceAuthorizationResultHandler>();
+        var authorization = services.AddAuthorizationBuilder();
+        foreach (string permission in new[] { WorkspacePolicies.Member, WorkspacePolicies.Curate,
+            WorkspacePolicies.Administer, WorkspacePolicies.ManageOwners, WorkspacePolicies.Unclassified })
         {
-            policy.RequireAuthenticatedUser();
-            policy.AddRequirements(new LocalGrantRequirement());
-        });
+            authorization.AddPolicy(permission, policy =>
+            {
+                policy.RequireAuthenticatedUser();
+                policy.AddRequirements(new LocalGrantRequirement(permission));
+            });
+        }
         services.AddCors(cors => cors.AddPolicy("live-hub", policy =>
         {
             if (options.AllowedOrigins.Length > 0)

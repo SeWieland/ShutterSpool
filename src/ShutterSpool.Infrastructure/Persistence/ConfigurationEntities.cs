@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using ShutterSpool.Application.Ingress;
 using ShutterSpool.Domain.Sources;
 using ShutterSpool.Domain.Collections;
+using ShutterSpool.Domain.Security;
 
 namespace ShutterSpool.Infrastructure.Persistence;
 
@@ -114,6 +115,30 @@ internal sealed class AuthorizationGrant
     public required string Subject { get; init; }
     public bool IsActive { get; set; }
     public bool IsBootstrap { get; set; }
+    public required WorkspaceRole Role { get; set; }
+    public string? DisplayName { get; set; }
+    public long Revision { get; set; }
+}
+
+internal sealed class WorkspaceViewerPolicyEntity
+{
+    public int Id { get; set; } = 1;
+    public bool IncludeUnreleased { get; set; }
+    public long Revision { get; set; }
+}
+
+internal sealed class WorkspaceAccessOperationEntity
+{
+    public Guid Id { get; set; }
+    public required string Request { get; set; }
+    public required string Result { get; set; }
+    public required string ActorIssuer { get; set; }
+    public required string ActorSubject { get; set; }
+    public required string Kind { get; set; }
+    public Guid TargetId { get; set; }
+    public DateTimeOffset RecordedAt { get; set; }
+    public string? BeforeState { get; set; }
+    public string? AfterState { get; set; }
 }
 
 internal sealed partial class ShutterSpoolDbContext
@@ -237,6 +262,22 @@ internal sealed partial class ShutterSpoolDbContext
             entity.Property(grant => grant.Issuer).HasMaxLength(2_048);
             entity.Property(grant => grant.Subject).HasMaxLength(512);
             entity.HasIndex(grant => new { grant.Issuer, grant.Subject }).IsUnique();
+            entity.Property(grant => grant.Role).HasConversion<string>().HasMaxLength(32);
+            entity.Property(grant => grant.DisplayName).HasMaxLength(256);
+        });
+        modelBuilder.Entity<WorkspaceViewerPolicyEntity>(entity =>
+        {
+            entity.ToTable("workspace_viewer_policy");
+            entity.HasKey(item => item.Id);
+            entity.HasData(new WorkspaceViewerPolicyEntity());
+        });
+        modelBuilder.Entity<WorkspaceAccessOperationEntity>(entity =>
+        {
+            entity.ToTable("workspace_access_operations");
+            entity.HasKey(item => item.Id);
+            entity.Property(item => item.ActorIssuer).HasMaxLength(2048);
+            entity.Property(item => item.ActorSubject).HasMaxLength(512);
+            entity.Property(item => item.Kind).HasMaxLength(32);
         });
     }
 }

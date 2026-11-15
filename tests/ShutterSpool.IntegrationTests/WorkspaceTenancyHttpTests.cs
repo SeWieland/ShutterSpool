@@ -1,3 +1,4 @@
+using ShutterSpool.Domain.Security;
 using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using System.Net.Http.Json;
@@ -30,7 +31,7 @@ namespace ShutterSpool.IntegrationTests;
 public sealed class WorkspaceHttpEnvironmentCollection;
 
 [Collection("Workspace HTTP environment")]
-public sealed class WorkspaceTenancyHttpTests
+public sealed partial class WorkspaceTenancyHttpTests
 {
     private const string Issuer = "https://identity.example";
     private static readonly byte[] SigningKey = "synthetic-tenant-http-signing-key-at-least-32-bytes"u8.ToArray();
@@ -75,7 +76,7 @@ public sealed class WorkspaceTenancyHttpTests
             Assert.Equal(first.Id, Assert.Single(unavailable.Items).Id);
             Assert.True(unavailable.Incomplete);
             using HttpResponseMessage denied = await SendAsync(client, HttpMethod.Get, "/management/captures", second.Id);
-            Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, denied.StatusCode);
         }
         finally { await fixture.Storage.SetDatabaseAvailableAsync(2, true); }
 
@@ -411,7 +412,7 @@ public sealed class WorkspaceTenancyHttpTests
             await using var scope = Storage.Scope(Server.Services, workspace);
             var database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
             AuthorizationGrant? grant = await database.AuthorizationGrants.SingleOrDefaultAsync(item => item.Issuer == Issuer && item.Subject == subject, Token);
-            if (grant is null) database.AuthorizationGrants.Add(new() { Issuer = Issuer, Subject = subject, IsActive = active });
+            if (grant is null) database.AuthorizationGrants.Add(new() { Issuer = Issuer, Subject = subject, IsActive = active, Role = WorkspaceRole.Owner });
             else grant.IsActive = active;
             await database.SaveChangesAsync(Token);
         }

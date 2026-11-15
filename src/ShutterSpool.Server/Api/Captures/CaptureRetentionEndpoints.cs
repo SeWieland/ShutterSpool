@@ -1,3 +1,4 @@
+using ShutterSpool.Server.Security;
 using ShutterSpool.Application.Retention;
 using ShutterSpool.Server.Api.Live;
 
@@ -46,22 +47,22 @@ public static class CaptureRetentionEndpoints
 {
     public static RouteGroupBuilder MapCaptureRetentionEndpoints(this RouteGroupBuilder management)
     {
-        management.MapGet("/trash", GetTrashAsync).WithSummary("List recoverable Trash")
+        management.MapGet("/trash", GetTrashAsync).RequireAuthorization(WorkspacePolicies.Curate).WithSummary("List recoverable Trash")
             .Produces<TrashPageResponse>().ProducesValidationProblem();
-        management.MapGet("/retention/capacity", GetCapacityAsync).WithSummary("Read current retention and spool capacity")
+        management.MapGet("/retention/capacity", GetCapacityAsync).RequireAuthorization(WorkspacePolicies.Administer).WithSummary("Read current retention and spool capacity")
             .Produces<RetentionCapacityResponse>();
-        management.MapGet("/retention/history", GetHistoryAsync).WithSummary("Read retention pressure history")
+        management.MapGet("/retention/history", GetHistoryAsync).RequireAuthorization(WorkspacePolicies.Administer).WithSummary("Read retention pressure history")
             .Produces<RetentionHistoryPageResponse>().ProducesValidationProblem();
-        management.MapPost("/captures/{id:guid}/trash", TrashAsync).WithSummary("Move a Capture into recoverable Trash")
+        management.MapPost("/captures/{id:guid}/trash", TrashAsync).RequireAuthorization(WorkspacePolicies.Curate).WithSummary("Move a Capture into recoverable Trash")
             .Produces<RetentionActionResponse>().ProducesValidationProblem().ProducesProblem(StatusCodes.Status409Conflict);
-        management.MapPost("/trash/{id:guid}/restore", RestoreAsync).WithSummary("Restore a Capture from Trash")
+        management.MapPost("/trash/{id:guid}/restore", RestoreAsync).RequireAuthorization(WorkspacePolicies.Curate).WithSummary("Restore a Capture from Trash")
             .Produces<RetentionActionResponse>().ProducesValidationProblem().ProducesProblem(StatusCodes.Status409Conflict);
-        management.MapPost("/trash/{id:guid}/purge", PurgeAsync).WithSummary("Permanently delete a Capture from Trash")
+        management.MapPost("/trash/{id:guid}/purge", PurgeAsync).RequireAuthorization(WorkspacePolicies.Administer).WithSummary("Permanently delete a Capture from Trash")
             .Produces<RetentionActionResponse>().ProducesValidationProblem().ProducesProblem(StatusCodes.Status409Conflict)
             .Produces(StatusCodes.Status202Accepted);
-        management.MapPost("/captures/{id:guid}/resume", ResumeAsync).WithSummary("Resume existing unfinished Capture work")
+        management.MapPost("/captures/{id:guid}/resume", ResumeAsync).RequireAuthorization(WorkspacePolicies.Administer).WithSummary("Resume existing unfinished Capture work")
             .Produces<RetentionActionResponse>().ProducesValidationProblem().ProducesProblem(StatusCodes.Status409Conflict);
-        management.MapPost("/captures/{id:guid}/no-delivery-intent", RecordNoDeliveryIntentAsync)
+        management.MapPost("/captures/{id:guid}/no-delivery-intent", RecordNoDeliveryIntentAsync).RequireAuthorization(WorkspacePolicies.Administer)
             .WithSummary("Record that an unmatched Capture has no intended delivery")
             .Produces<RetentionActionResponse>().ProducesValidationProblem().ProducesProblem(StatusCodes.Status409Conflict);
         return management;

@@ -12,6 +12,7 @@ let manager: UserManager | undefined;
 let initialization: Promise<UserManager> | undefined;
 let renewal: Promise<User> | undefined;
 let generation = 0;
+let authenticationGeneration = 0;
 const cleared = new Set<() => void>();
 
 async function clearTransactions() {
@@ -38,17 +39,23 @@ export function onAccessLost(callback: () => void) {
 export function clearAccess(
     message = "Your session ended. Sign in again to continue.",
 ) {
-    generation++;
+    authenticationGeneration++;
     session.value = null;
     accessMessage.value = message;
     manager?.stopSilentRenew();
+    clearPrivateAccess();
+    void manager?.removeUser();
+    void clearTransactions();
+}
+
+// Workspace revocation clears private state without ending the shared issuer session.
+export function clearPrivateAccess() {
+    generation++;
     clearNuxtState(
         (key) =>
             key.startsWith("capture-draft-") ||
             key.startsWith("capture-conflict-"),
     );
-    void manager?.removeUser();
-    void clearTransactions();
     for (const callback of cleared) callback();
 }
 
@@ -119,19 +126,19 @@ export async function signOut() {
 
 async function renew() {
     if (renewal) return renewal;
-    const current = generation;
+    const current = authenticationGeneration;
     renewal = (async () => {
         try {
             const active = await getManager();
-            if (current !== generation) throw new Error("Access ended.");
+            if (current !== authenticationGeneration) throw new Error("Access ended.");
             return await recoverUser(active, current);
         } catch (error) {
             await clearTransactions();
             const code = (error as { error?: string })?.error;
-            if (current === generation &&
+            if (current === authenticationGeneration &&
                 ["invalid_grant", "login_required", "interaction_required", "consent_required", "access_denied"].includes(code ?? ""))
                 clearAccess();
-            else if (current === generation && session.value && !session.value.expired)
+            else if (current === authenticationGeneration && session.value && !session.value.expired)
                 return session.value;
             throw error;
         }
@@ -140,9 +147,9 @@ async function renew() {
 }
 
 async function recoverUser(active: UserManager, current: number) {
-    if (current !== generation) throw new Error("Access ended.");
+    if (current !== authenticationGeneration) throw new Error("Access ended.");
     const user = await active.signinSilent();
-    if (current !== generation) {
+    if (current !== authenticationGeneration) {
         await active.removeUser();
         throw new Error("Access ended.");
     }
@@ -153,7 +160,7 @@ async function recoverUser(active: UserManager, current: number) {
 
 export async function restoreSession(returnTo: string) {
     restoring.value = true;
-    const current = generation;
+    const current = authenticationGeneration;
     try {
         const active = await getManager();
         try {
@@ -161,7 +168,7 @@ export async function restoreSession(returnTo: string) {
         } catch {
             await clearTransactions();
             // Third-party cookie restrictions can block iframe SSO; try the issuer once at top level.
-            if (current === generation)
+            if (current === authenticationGeneration)
                 await active.signinRedirect({ prompt: "none", state: { returnTo: localReturnTarget(returnTo) } });
         }
     } catch {

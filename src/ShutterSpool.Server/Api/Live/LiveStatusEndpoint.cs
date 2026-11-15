@@ -9,12 +9,12 @@ public static class LiveStatusEndpoint
     public static async Task StreamAsync(HttpContext context, IAuthorizationService authorization, CancellationToken cancellationToken)
     {
         context.Response.ContentType = "text/event-stream";
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(60));
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30));
 
         do
         {
             if (!HasUnexpiredToken(context.User, DateTimeOffset.UtcNow)) return;
-            AuthorizationResult access = await authorization.AuthorizeAsync(context.User, null, SecurityExtensions.ManagementAccessPolicy);
+            AuthorizationResult access = await authorization.AuthorizeAsync(context.User, null, WorkspacePolicies.Member);
             if (!access.Succeeded) return;
 
             await context.Response.WriteAsync("event: status\ndata: {}\n\n", cancellationToken);

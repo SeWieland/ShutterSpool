@@ -28,6 +28,7 @@ See the [destination boundary reference](../ShutterSpool.Infrastructure/README.m
 
 | Responsibility | Starting point |
 | --- | --- |
+| Workspace membership, Viewer policy and access changes | Access contracts and stores; Domain owns pure permission rules |
 | Acceptance and source correlation | `IngestService`, `CameraIngressService` |
 | Bounded Capture reads and revisioned curation | `CaptureReadService`, Capture read/curation ports |
 | Collection management and versioned single/bulk Capture moves | `CollectionManagementService`, `CaptureCollectionAssignmentService` and their stores |

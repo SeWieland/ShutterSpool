@@ -8,16 +8,12 @@ Choose the guide for the task you are doing. These pages describe the implemente
 - [Collections](collections.md): prepare an event, choose incoming defaults, move photographs and use Collection names in delivery folders.
 - [Gallery slideshow](gallery.md): play filtered photographs and resume after interruptions.
 - [Retention and recovery](retention.md): understand lifetimes, Favorites and Trash before removing photographs.
+- [Workspaces and access](workspaces.md): choose a workspace, understand roles, manage members and control Viewer visibility.
 
 ### Choose a workspace
 
-On a shared installation, sign in, choose a workspace assigned to your account and select **Open workspace**.
-Use the header's **Workspace** selector to switch. Resolve or explicitly abandon unsaved edits when prompted; switching reloads the page.
-Each tab keeps its selected workspace in its URL, so you can use different workspaces in separate tabs. A shared URL grants no access.
-
-If some memberships could not be checked, you can explicitly open a listed, confirmed workspace or choose **Retry** to check again.
-An unavailable or unconfirmed URL selection never opens another workspace automatically.
-If **No workspace access** appears after a complete check, contact the operator if you expected access.
+On a shared installation, choose a confirmed workspace after signing in. Each tab retains its own selection.
+See [Workspaces and access](workspaces.md#choose-a-workspace) for switching, incomplete discovery and access recovery.
 
 ## Operating ShutterSpool
 

@@ -22,7 +22,8 @@
           "StorageRoot": "/srv/shutterspool/studio",
           "AllocatedBytes": 107374182400,
           "OwnerIssuer": "https://identity.example.invalid/realms/shutterspool",
-          "OwnerSubject": "REPLACE_WITH_VERIFIED_IDENTITY_SUBJECT"
+          "OwnerSubject": "REPLACE_WITH_VERIFIED_IDENTITY_SUBJECT",
+          "SetupOperatorIdentity": "REPLACE_WITH_OPERATOR_IDENTITY"
         }
       }
     },

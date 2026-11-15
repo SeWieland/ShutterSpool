@@ -62,7 +62,8 @@ internal static class CaptureRetentionSummaryBuilder
             && evidence.Facts.Any(delivery => delivery.AssetId == decision.AssetId
                 && delivery.DestinationId == decision.DestinationId && IsConfirmedDelivery(delivery)
                 && string.Equals(delivery.TargetPath, decision.TargetPath, StringComparison.OrdinalIgnoreCase));
-        return RetentionQualification.IsConfirmedIntent(decision.Kind, hasDeliveries, allDeliveriesConfirmed, sameTargetConfirmed);
+        return RetentionIntentPolicy.IsConfirmedIntent(decision.Kind == RoutingDecisionKindValue.Matched, hasDeliveries,
+            allDeliveriesConfirmed, sameTargetConfirmed);
     }
 
     private static bool IsConfirmedDelivery(RetentionDeliveryFact delivery) =>

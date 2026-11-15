@@ -1,3 +1,4 @@
+using ShutterSpool.Domain.Security;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -389,7 +390,7 @@ public sealed class LiveChangesHubTests(WorkspaceWebApplicationFactory factory)
         ShutterSpoolDbContext database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
         AuthorizationGrant? grant = await database.AuthorizationGrants.SingleOrDefaultAsync(
             item => item.Issuer == Issuer && item.Subject == "operator", TestContext.Current.CancellationToken);
-        if (grant is null) database.AuthorizationGrants.Add(new AuthorizationGrant { Issuer = Issuer, Subject = "operator", IsActive = true });
+        if (grant is null) database.AuthorizationGrants.Add(new AuthorizationGrant { Issuer = Issuer, Subject = "operator", IsActive = true, Role = WorkspaceRole.Owner });
         else grant.IsActive = true;
         await database.SaveChangesAsync(TestContext.Current.CancellationToken);
         return server;
@@ -544,6 +545,13 @@ public sealed class LiveChangesHubTests(WorkspaceWebApplicationFactory factory)
         public bool Unavailable { get; set; }
         public Task<bool> IsActiveAsync(string issuer, string subject, CancellationToken cancellationToken) =>
             Unavailable ? throw new InvalidOperationException("synthetic authority store outage") : Task.FromResult(true);
+        public Task<WorkspaceMembership?> GetAsync(string issuer, string subject, CancellationToken cancellationToken) =>
+            Unavailable ? throw new InvalidOperationException("synthetic authority store outage")
+                : Task.FromResult<WorkspaceMembership?>(new(Guid.Empty, issuer, subject, WorkspaceRole.Owner, 0, true));
+        public Task<WorkspaceMembership[]> ListAsync(CancellationToken token) => throw new NotSupportedException();
+        public Task UpdateDisplayNameAsync(string issuer, string subject, string? displayName, CancellationToken token) => Task.CompletedTask;
+        public Task<WorkspaceViewerPolicy> GetViewerPolicyAsync(CancellationToken token) => Task.FromResult(new WorkspaceViewerPolicy(false, 0));
+        public Task<AccessChangeResult> ChangeAsync(AccessChange change, CancellationToken token) => throw new NotSupportedException();
     }
 
     private sealed class CapturedActivityExporter : BaseExporter<Activity>

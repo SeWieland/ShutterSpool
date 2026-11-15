@@ -1,5 +1,6 @@
 using Microsoft.OpenApi;
 using ShutterSpool.Application.Preview;
+using ShutterSpool.Application.Security;
 using ShutterSpool.Server.Api.Live;
 using ShutterSpool.Server.Security;
 using System.Security.Cryptography;
@@ -19,15 +20,17 @@ public static class PreviewEndpoint
     public static IEndpointRouteBuilder MapPreviewEndpoints(this IEndpointRouteBuilder endpoints)
     {
         Describe(endpoints.MapGet("/media/previews/{id}",
-            (string id, PreviewService previews, LiveChangeNotifier changes, HttpContext context) => GetAsync(id, "grid", previews, changes, context)));
+            (string id, PreviewService previews, LiveChangeNotifier changes, HttpContext context,
+                WorkspaceAccessContext access, IWorkspaceMediaScope media) => GetAsync(id, "grid", previews, changes, context, access, media)));
         Describe(endpoints.MapGet("/media/previews/{id}/{profile}",
-            (string id, string profile, int? maximumDimension, PreviewService previews, LiveChangeNotifier changes, HttpContext context) =>
-                GetAsync(id, profile, previews, changes, context, maximumDimension)));
+            (string id, string profile, int? maximumDimension, PreviewService previews, LiveChangeNotifier changes, HttpContext context,
+                WorkspaceAccessContext access, IWorkspaceMediaScope media) =>
+                GetAsync(id, profile, previews, changes, context, access, media, maximumDimension)));
         return endpoints;
     }
 
     private static void Describe(RouteHandlerBuilder route) => route
-        .RequireAuthorization(SecurityExtensions.ManagementAccessPolicy)
+        .RequireAuthorization(WorkspacePolicies.Member)
         .Produces<byte[]>(StatusCodes.Status200OK, contentType: "image/webp", additionalContentTypes: ["image/svg+xml"])
         .Produces(StatusCodes.Status304NotModified)
         .ProducesProblem(StatusCodes.Status404NotFound)
@@ -40,7 +43,8 @@ public static class PreviewEndpoint
         });
 
     public static async Task<IResult> GetAsync(string id, string profile, PreviewService previews,
-        LiveChangeNotifier changes, HttpContext context, int? maximumDimension = null)
+        LiveChangeNotifier changes, HttpContext context, WorkspaceAccessContext access, IWorkspaceMediaScope media,
+        int? maximumDimension = null)
     {
         context.Response.Headers.CacheControl = "private, no-store";
         context.Response.Headers.XContentTypeOptions = "nosniff";
@@ -51,6 +55,9 @@ public static class PreviewEndpoint
             _ => null,
         };
         if (!Guid.TryParse(id, out Guid captureId) || selectedProfile is null)
+            return Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Preview not found");
+
+        if (access.IsViewer && !await media.CanReadCaptureAsync(captureId, context.RequestAborted))
             return Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Preview not found");
 
         if (maximumDimension is < 64 or > 4096)

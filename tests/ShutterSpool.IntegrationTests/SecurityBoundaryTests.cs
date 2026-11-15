@@ -1,3 +1,4 @@
+using ShutterSpool.Domain.Security;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -78,7 +79,7 @@ public sealed class SecurityBoundaryTests(WorkspaceWebApplicationFactory factory
             ShutterSpoolDbContext database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
             AuthorizationGrant? grant = await database.AuthorizationGrants.SingleOrDefaultAsync(
                 item => item.Issuer == "https://issuer.test" && item.Subject == "operator", TestContext.Current.CancellationToken);
-            if (grant is null) database.AuthorizationGrants.Add(new AuthorizationGrant { Issuer = "https://issuer.test", Subject = "operator", IsActive = true });
+            if (grant is null) database.AuthorizationGrants.Add(new AuthorizationGrant { Issuer = "https://issuer.test", Subject = "operator", IsActive = true, Role = WorkspaceRole.Owner });
             else grant.IsActive = true;
             await database.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
@@ -226,7 +227,7 @@ public sealed class SecurityBoundaryTests(WorkspaceWebApplicationFactory factory
             ShutterSpoolDbContext database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
             AuthorizationGrant? grant = await database.AuthorizationGrants.SingleOrDefaultAsync(
                 item => item.Issuer == "https://issuer.test" && item.Subject == "operator", TestContext.Current.CancellationToken);
-            if (grant is null) database.AuthorizationGrants.Add(new AuthorizationGrant { Issuer = "https://issuer.test", Subject = "operator", IsActive = true });
+            if (grant is null) database.AuthorizationGrants.Add(new AuthorizationGrant { Issuer = "https://issuer.test", Subject = "operator", IsActive = true, Role = WorkspaceRole.Owner });
             else grant.IsActive = true;
             await database.SaveChangesAsync(TestContext.Current.CancellationToken);
         }

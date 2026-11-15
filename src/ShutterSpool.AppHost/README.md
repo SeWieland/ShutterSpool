@@ -55,7 +55,7 @@ Preview tuning parameters are `Parameters:preview-max-concurrent-generations` (d
 
 AppHost uses the same control/workspace architecture as packaged installations.
 Server's checked-in `appsettings.Development.json` defines a `studio` workspace with a 10 GiB allocation.
-AppHost creates its storage directory at `.data/workspaces-dev/studio` and supplies its absolute path and the current Keycloak Owner issuer and subject through environment configuration.
+AppHost creates its storage directory at `.data/workspaces-dev/studio` and supplies its absolute path, the current Keycloak Owner issuer and subject, and the setup operator identity through environment configuration.
 Ordinary development directories exercise application accounting but do not establish native filesystem quota enforcement.
 
 A PostgreSQL setup job creates separate `shutterspool_control` and `shutterspool_studio` databases with restricted runtime roles.

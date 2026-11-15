@@ -1,14 +1,10 @@
 using Microsoft.EntityFrameworkCore;
+using ShutterSpool.Domain.Retention;
 
 namespace ShutterSpool.Infrastructure.Persistence;
 
 internal static class RetentionQualification
 {
-    public static bool IsConfirmedIntent(RoutingDecisionKindValue kind, bool hasDeliveries,
-        bool allDeliveriesConfirmed, bool sameTargetConfirmed) =>
-        kind == RoutingDecisionKindValue.Matched
-        && (hasDeliveries ? allDeliveriesConfirmed : sameTargetConfirmed);
-
     public static async Task RecordNewIntentAsync(ShutterSpoolDbContext database, CaptureEntity capture,
         DateTimeOffset createdAt, CancellationToken cancellationToken)
     {
@@ -60,7 +56,8 @@ internal static class RetentionQualification
             bool allDeliveriesConfirmed = routeDeliveries.Length > 0
                 && routeDeliveries.All(delivery => delivery.State == ShutterSpool.Domain.Delivery.DeliveryState.Delivered
                     && delivery.ConfirmedAt is not null);
-            if (!IsConfirmedIntent(intent.Kind, routeDeliveries.Length > 0, allDeliveriesConfirmed, sameTargetWasConfirmed)) return;
+            if (!RetentionIntentPolicy.IsConfirmedIntent(intent.Kind == RoutingDecisionKindValue.Matched,
+                routeDeliveries.Length > 0, allDeliveriesConfirmed, sameTargetWasConfirmed)) return;
         }
 
         if (intents.Length > 0)

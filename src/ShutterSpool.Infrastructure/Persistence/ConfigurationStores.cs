@@ -8,8 +8,8 @@ using ShutterSpool.Domain.Delivery;
 using ShutterSpool.Domain.Sources;
 using ShutterSpool.Domain.Collections;
 using ShutterSpool.Infrastructure.Destinations.WebDav;
-using System.Text.Json;
 using ShutterSpool.Application.Workspaces;
+using System.Text.Json;
 
 namespace ShutterSpool.Infrastructure.Persistence;
 
@@ -455,12 +455,4 @@ internal sealed class EfWebDavDestinationConfiguration(ShutterSpoolDbContext dat
         catch (Exception exception) when (exception is HttpRequestException or UriFormatException or System.Security.Cryptography.CryptographicException or IOException)
         { return (false, "CONNECTION_TEST_FAILED", config.ConfigurationRevision); }
     }
-}
-
-internal sealed class EfAccessGrantStore(ShutterSpoolDbContext database) : IAccessGrantStore
-{
-    public Task<bool> IsActiveAsync(string issuer, string subject, CancellationToken cancellationToken) =>
-        database.AuthorizationGrants.AsNoTracking().AnyAsync(grant => grant.IsActive && grant.Issuer == issuer && grant.Subject == subject, cancellationToken);
-
-
 }

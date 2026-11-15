@@ -5,6 +5,8 @@ import { clearAccess, token, onAccessLost } from "./session";
 import { withPreviewSlot } from "./preview-queue";
 import type { SourceActivity } from './source-activity';
 import { pageWorkspaceId, workspaceRequestHeaders } from './workspace-context';
+import { authorizationFailure } from './workspace-permissions';
+import { closeWorkspaceAccess } from './workspace-access';
 
 const requests = new Set<AbortController>();
 onAccessLost(() => {
@@ -25,8 +27,10 @@ const http = new HttpClient(undefined, {
                 headers: workspaceRequestHeaders(url, init.headers, pageWorkspaceId),
                 signal: AbortSignal.any([controller.signal, ...(init.signal ? [init.signal] : []), ...(signal ? [signal] : [])]),
             });
-            if (response.status === 401 || response.status === 403)
-                handleFailure({ status: response.status });
+            if (response.status === 401 || response.status === 403 || response.status === 503) {
+                const problem = await response.clone().json().catch(() => ({}));
+                handleFailure({ status: response.status, errorCode: problem.errorCode });
+            }
             return response;
         } finally {
             requests.delete(controller);
@@ -95,12 +99,10 @@ export function handleFailure(error: unknown) {
     const status =
         (error as { status?: number; responseStatusCode?: number })?.status ??
         (error as { responseStatusCode?: number })?.responseStatusCode;
-    if (status === 401 || status === 403)
-        clearAccess(
-            status === 403
-                ? "Access is forbidden or your local grant was revoked. Contact the operator before signing in again."
-                : "Your session ended. Sign in again to continue.",
-        );
+    const code = (error as { errorCode?: string })?.errorCode;
+    const failure = authorizationFailure(status, code);
+    if (failure === 'session') clearAccess();
+    else if (failure === 'workspace') closeWorkspaceAccess(code === 'membership-revoked');
     return status;
 }
 
@@ -124,9 +126,10 @@ export async function derivative(
             `/media/previews/${encodeURIComponent(captureId)}/${profile === "thumbnail" ? "grid" : "detail"}${maximumDimension ? `?maximumDimension=${maximumDimension}` : ''}`,
             { headers, signal },
         );
-        if (response.status === 401 || response.status === 403) {
-            handleFailure({ status: response.status });
-            throw new Error("Access ended.");
+        if (response.status === 401 || response.status === 403 || response.status === 503) {
+            const problem = await response.clone().json().catch(() => ({}));
+            handleFailure({ status: response.status, errorCode: problem.errorCode });
+            return { response, blob: undefined };
         }
         const blob = response.ok ? await response.blob() : undefined;
         return { response, blob };

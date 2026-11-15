@@ -1,3 +1,4 @@
+using ShutterSpool.Server.Security;
 using ShutterSpool.Application.Retention;
 using ShutterSpool.Server.Api.Live;
 
@@ -70,34 +71,34 @@ public static class PrivacyErasureEndpoints
     public static RouteGroupBuilder MapPrivacyErasureEndpoints(this RouteGroupBuilder management)
     {
         var routes = management.MapGroup("/retention/erasures");
-        routes.MapPost("/preview", PreviewAsync).WithSummary("Preview a finite privacy-erasure selection")
+        routes.MapPost("/preview", PreviewAsync).RequireAuthorization(WorkspacePolicies.Administer).WithSummary("Preview a finite privacy-erasure selection")
             .Produces<PrivacyErasurePreviewResponse>().ProducesValidationProblem()
             .ProducesProblem(StatusCodes.Status409Conflict);
-        routes.MapPost("", BeginAsync).WithSummary("Confirm and begin privacy erasure")
+        routes.MapPost("", BeginAsync).RequireAuthorization(WorkspacePolicies.Administer).WithSummary("Confirm and begin privacy erasure")
             .Produces<PrivacyErasureResponse>(StatusCodes.Status202Accepted)
             .Produces<PrivacyErasureResponse>().ProducesValidationProblem()
             .ProducesProblem(StatusCodes.Status409Conflict);
-        routes.MapGet("", ListAsync).WithSummary("List recent privacy-erasure operations")
+        routes.MapGet("", ListAsync).RequireAuthorization(WorkspacePolicies.Administer).WithSummary("List recent privacy-erasure operations")
             .Produces<PrivacyErasureOperationListResponse>();
-        routes.MapGet("/{operationId:guid}", GetAsync).WithSummary("Read privacy-erasure surface progress")
+        routes.MapGet("/{operationId:guid}", GetAsync).RequireAuthorization(WorkspacePolicies.Administer).WithSummary("Read privacy-erasure surface progress")
             .Produces<PrivacyErasureResponse>().ProducesProblem(StatusCodes.Status404NotFound);
-        routes.MapPost("/{operationId:guid}/continue", ContinueAsync)
+        routes.MapPost("/{operationId:guid}/continue", ContinueAsync).RequireAuthorization(WorkspacePolicies.Administer)
             .WithSummary("Continue a pending privacy erasure after its blocker is resolved")
             .Produces<PrivacyErasureResponse>(StatusCodes.Status202Accepted)
             .Produces<PrivacyErasureResponse>().ProducesValidationProblem();
 
-        routes.MapPost("/suppressions/exports", CreateExportAsync)
+        routes.MapPost("/suppressions/exports", CreateExportAsync).RequireAuthorization(WorkspacePolicies.Unclassified)
             .WithSummary("Create a bounded protected snapshot of current erasure suppression evidence")
             .Produces<SuppressionManifestResponse>().ProducesProblem(StatusCodes.Status413PayloadTooLarge);
-        routes.MapGet("/suppressions/exports/{snapshotId:guid}/manifest", GetExportManifestAsync)
+        routes.MapGet("/suppressions/exports/{snapshotId:guid}/manifest", GetExportManifestAsync).RequireAuthorization(WorkspacePolicies.Unclassified)
             .Produces<SuppressionManifestResponse>().ProducesProblem(StatusCodes.Status404NotFound);
-        routes.MapGet("/suppressions/exports/{snapshotId:guid}/pages/{pageIndex:int}", GetExportPageAsync)
+        routes.MapGet("/suppressions/exports/{snapshotId:guid}/pages/{pageIndex:int}", GetExportPageAsync).RequireAuthorization(WorkspacePolicies.Unclassified)
             .Produces<SuppressionPageResponse>().ProducesProblem(StatusCodes.Status404NotFound);
-        routes.MapPost("/suppressions/reconciliation", BeginReconciliationAsync)
+        routes.MapPost("/suppressions/reconciliation", BeginReconciliationAsync).RequireAuthorization(WorkspacePolicies.Unclassified)
             .Produces<SuppressionImportResponse>().ProducesValidationProblem();
-        routes.MapPost("/suppressions/reconciliation/pages", ReconcilePageAsync)
+        routes.MapPost("/suppressions/reconciliation/pages", ReconcilePageAsync).RequireAuthorization(WorkspacePolicies.Unclassified)
             .Produces<SuppressionImportResponse>().ProducesValidationProblem();
-        routes.MapPost("/suppressions/reconciliation/{snapshotId:guid}/complete", CompleteReconciliationAsync)
+        routes.MapPost("/suppressions/reconciliation/{snapshotId:guid}/complete", CompleteReconciliationAsync).RequireAuthorization(WorkspacePolicies.Unclassified)
             .Produces<SuppressionImportResponse>().ProducesProblem(StatusCodes.Status409Conflict);
         return management;
     }

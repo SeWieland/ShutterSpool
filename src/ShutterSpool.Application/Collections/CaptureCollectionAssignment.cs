@@ -2,7 +2,7 @@ using ShutterSpool.Application.Captures;
 
 namespace ShutterSpool.Application.Collections;
 
-public enum CollectionMoveStatus { Applied, Conflict, NotFound, NotMovable, TargetMissing }
+public enum CollectionMoveStatus { Applied, Conflict, NotFound, NotMovable, TargetMissing, Forbidden }
 public sealed record CollectionMoveRequest(Guid CaptureId, int ExpectedRevision);
 public sealed record CollectionMoveResult(Guid CaptureId, CollectionMoveStatus Status, int? CurrentRevision,
     Guid? CurrentCollectionId, CaptureRead? Current = null);

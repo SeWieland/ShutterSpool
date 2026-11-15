@@ -9,6 +9,7 @@ import {
 } from "./lib/session";
 import { onAccessLost } from './lib/session';
 import { pageWorkspaceId, workspaceSelection, withWorkspace, type WorkspaceMembership } from './lib/workspace-context';
+import { workspaceAccess, workspaceAccessVersion, workspaceAccessError, workspaceRevoked, refreshWorkspaceAccess, discardWorkspacePrivateState } from './lib/workspace-access';
 const route = useRoute();
 const { sftpgo } = useAppConfig();
 const workspace = ref<{ requestDeparture: () => boolean } | null>(null);
@@ -25,8 +26,9 @@ const activeWorkspaceSelection = computed(() => hasDiscovery.value ? workspaceSe
     workspaceIncomplete.value,
     pageWorkspaceId,
 ) : { state: 'loading' } as const);
-const canMountOperationalWorkspace = computed(() => !!pageWorkspaceId &&
+const hasSelectedWorkspace = computed(() => !!pageWorkspaceId &&
     activeWorkspaceSelection.value.state === 'selected');
+const canMountOperationalWorkspace = computed(() => hasSelectedWorkspace.value && !!workspaceAccess.value);
 const activeWorkspace = computed(() => activeWorkspaceSelection.value.state === 'selected'
     ? activeWorkspaceSelection.value.workspace
     : undefined);
@@ -74,6 +76,7 @@ async function loadMemberships() {
         workspaceIncomplete.value = result.incomplete;
         hasDiscovery.value = true;
         selectedWorkspaceId.value = items.some(item => item.id === pageWorkspaceId) ? pageWorkspaceId! : '';
+        if (hasSelectedWorkspace.value) await refreshWorkspaceAccess();
     } catch (error) {
         if (current !== discoverySequence || controller.signal.aborted) return;
         const { handleFailure } = await import('./lib/api');
@@ -116,21 +119,33 @@ const stopWatchingSession = watch([session, () => route.path], ([value]) => {
     }
 });
 const unsubscribeAccessLost = onAccessLost(() => {
+    if (session.value) return;
     discoveryController?.abort();
     discoverySequence++;
     memberships.value = [];
     workspaceIncomplete.value = false;
     hasDiscovery.value = false;
 });
-function updateSignInVisibility() { signInVisible.value = !document.hidden; }
+watch(workspaceRevoked, revoked => { if (revoked && session.value) void loadMemberships(); });
+let accessTimer: ReturnType<typeof setInterval> | undefined;
+function updateSignInVisibility() {
+    signInVisible.value = !document.hidden;
+    if (document.hidden && workspaceAccess.value?.role === 'Viewer') discardWorkspacePrivateState();
+}
 onMounted(() => {
+    // Check hidden views too: cached permission may not keep private media open indefinitely.
+    accessTimer = setInterval(() => {
+        if (!session.value || !hasSelectedWorkspace.value) return;
+        if (document.hidden && workspaceAccess.value?.role === 'Viewer') discardWorkspacePrivateState();
+        void refreshWorkspaceAccess();
+    }, 40_000);
     updateSignInVisibility();
     document.addEventListener('visibilitychange', updateSignInVisibility);
     if (!route.path.startsWith("/auth/"))
         void restoreSession(route.fullPath);
 });
 onUnmounted(() => document.removeEventListener('visibilitychange', updateSignInVisibility));
-onUnmounted(() => { discoveryController?.abort(); stopWatchingSession(); unsubscribeAccessLost(); });
+onUnmounted(() => { clearInterval(accessTimer); discoveryController?.abort(); stopWatchingSession(); unsubscribeAccessLost(); });
 </script>
 <template>
     <UApp
@@ -171,6 +186,7 @@ onUnmounted(() => { discoveryController?.abort(); stopWatchingSession(); unsubsc
             <p v-if="session && canMountOperationalWorkspace && (workspaceIncomplete || discoveryError)" class="workspace-incomplete" :role="discoveryError ? 'alert' : 'status'"><template v-if="discoveryError">Workspace memberships could not be refreshed. Access to {{ activeWorkspace?.name ?? 'this workspace' }} remains confirmed.</template><template v-else>Some workspace memberships could not be checked. Access to {{ activeWorkspace?.name ?? 'this workspace' }} is confirmed.</template><button type="button" :disabled="discoveryBusy" @click="loadMemberships">{{ discoveryBusy ? 'Checking…' : 'Retry' }}</button></p>
             <Suspense v-if="session && canMountOperationalWorkspace">
                 <LazyOperationalWorkspace
+                    :key="workspaceAccessVersion"
                     ref="workspace"
                     :capture-id="route.params.id ? String(route.params.id) : undefined"
                 />
@@ -180,6 +196,16 @@ onUnmounted(() => { discoveryController?.abort(); stopWatchingSession(); unsubsc
                     </main>
                 </template>
             </Suspense>
+            <main v-else-if="session && hasSelectedWorkspace && workspaceAccessError" class="empty" role="alert">
+                <h1>Workspace access needs checking</h1>
+                <p>{{ workspaceAccessError }}</p>
+                <UButton :disabled="discoveryBusy" @click="loadMemberships">Retry access check</UButton>
+                <form v-if="memberships.length" class="workspace-choice" @submit.prevent="chooseWorkspace">
+                    <label for="workspace-access-choice">Choose an available workspace</label>
+                    <select id="workspace-access-choice" v-model="selectedWorkspaceId"><option value="">Choose a workspace</option><option v-for="item in memberships" :key="item.id" :value="item.id">{{ item.name }}</option></select>
+                    <UButton type="submit" :disabled="!memberships.some(item => item.id === selectedWorkspaceId)">Open workspace</UButton>
+                </form>
+            </main>
             <main v-else-if="session && discoveryBusy && !hasDiscovery" class="empty" aria-busy="true" role="status">
                 <h1>Checking workspace access…</h1>
                 <p>Only workspaces assigned to your sign-in can be opened.</p>

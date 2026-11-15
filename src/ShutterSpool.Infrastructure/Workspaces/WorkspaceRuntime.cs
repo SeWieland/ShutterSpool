@@ -51,11 +51,22 @@ internal static class WorkspaceRuntime
         return marker;
     }
 
+    internal static async Task ValidateIdentityAsync(ShutterSpoolDbContext database, WorkspaceDefinition workspace, CancellationToken token)
+    {
+        string[] applied = [.. await database.Database.GetAppliedMigrationsAsync(token)];
+        if (!database.Database.GetMigrations().SequenceEqual(applied, StringComparer.Ordinal))
+            throw new WorkspaceOperator.RefusedException("The workspace schema is incompatible; run explicit stopped-writer maintenance.");
+        WorkspaceIdentityEntity identity = await database.WorkspaceIdentities.AsNoTracking().SingleAsync(token);
+        StorageMarker marker = ValidateRoot(workspace);
+        if (identity.Id != workspace.Id || identity.StorageIdentity != workspace.StorageIdentity
+            || identity.OperationId != marker.ProvisionOperation || !identity.BootstrapComplete)
+            throw new WorkspaceOperator.RefusedException("The tenant database identity does not match its selected storage.");
+    }
+
     internal static async Task ValidateDatabaseAsync(ShutterSpoolDbContext database, WorkspaceDefinition? workspace = null, CancellationToken token = default)
     {
-        string[] known = [.. database.Database.GetMigrations()];
-        string[] applied = [.. await database.Database.GetAppliedMigrationsAsync(token)];
-        if (!known.SequenceEqual(applied, StringComparer.Ordinal))
+        if (workspace is not null) await ValidateIdentityAsync(database, workspace, token);
+        else if (!database.Database.GetMigrations().SequenceEqual(await database.Database.GetAppliedMigrationsAsync(token), StringComparer.Ordinal))
             throw new WorkspaceOperator.RefusedException("The workspace schema is incompatible; run explicit stopped-writer maintenance.");
         bool privileged = await database.Database.SqlQuery<bool>($"""
             SELECT (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls
@@ -70,14 +81,6 @@ internal static class WorkspaceRuntime
         if (schemaOwner) throw new WorkspaceOperator.RefusedException("Workspace runtime credentials cannot own the application schema.");
         bool databaseOwner = await database.Database.SqlQuery<bool>($"SELECT pg_get_userbyid(datdba)=current_user AS \"Value\" FROM pg_database WHERE datname=current_database()").SingleAsync(token);
         if (databaseOwner) throw new WorkspaceOperator.RefusedException("Workspace runtime credentials cannot own the application database.");
-        if (workspace is not null)
-        {
-            WorkspaceIdentityEntity identity = await database.WorkspaceIdentities.AsNoTracking().SingleAsync(token);
-            StorageMarker marker = ValidateRoot(workspace);
-            if (identity.Id != workspace.Id || identity.StorageIdentity != workspace.StorageIdentity
-                || identity.OperationId != marker.ProvisionOperation || !identity.BootstrapComplete)
-                throw new WorkspaceOperator.RefusedException("The tenant database identity does not match its selected storage.");
-        }
         bool canCreate = await database.Database.SqlQuery<bool>($"SELECT has_schema_privilege(current_user,'public','CREATE') AS \"Value\"").SingleAsync(token);
         if (canCreate) throw new WorkspaceOperator.RefusedException("Workspace runtime credentials cannot create schema objects.");
         bool canRewriteIdentity = await database.Database.SqlQuery<bool>($"""

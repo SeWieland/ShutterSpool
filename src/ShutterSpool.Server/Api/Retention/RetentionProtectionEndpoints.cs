@@ -1,3 +1,4 @@
+using ShutterSpool.Server.Security;
 using ShutterSpool.Application.Retention;
 using System.Security.Claims;
 
@@ -34,7 +35,8 @@ public static class RetentionProtectionEndpoints
 {
     public static RouteGroupBuilder MapRetentionProtectionEndpoints(this RouteGroupBuilder management)
     {
-        RouteGroupBuilder gallery = management.MapGroup("/retention/gallery-protections");
+        RouteGroupBuilder authorized = management.MapGroup("").RequireAuthorization(WorkspacePolicies.Administer);
+        RouteGroupBuilder gallery = authorized.MapGroup("/retention/gallery-protections");
         gallery.MapGet("/{id:guid}", GetGalleryAsync).WithSummary("Read a gallery retention promise")
             .Produces<GalleryProtectionResponse>().ProducesProblem(StatusCodes.Status404NotFound);
         gallery.MapPost("/", CreateGalleryAsync).WithSummary("Promise retention for exact available originals")
@@ -48,7 +50,7 @@ public static class RetentionProtectionEndpoints
             .Produces<GalleryProtectionActionResponse>().ProducesValidationProblem()
             .ProducesProblem(StatusCodes.Status409Conflict);
 
-        RouteGroupBuilder preservation = management.MapGroup("/retention/preservation-holds");
+        RouteGroupBuilder preservation = authorized.MapGroup("/retention/preservation-holds");
         preservation.MapGet("/{id:guid}", GetPreservationAsync).WithSummary("Read a preservation hold")
             .Produces<PreservationHoldResponse>().ProducesProblem(StatusCodes.Status404NotFound);
         preservation.MapPost("/", CreatePreservationAsync).WithSummary("Protect exact available originals under preservation")

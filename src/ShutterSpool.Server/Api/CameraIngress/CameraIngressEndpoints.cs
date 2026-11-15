@@ -74,7 +74,7 @@ internal static class CameraIngressEndpoints
         app.MapGet("/management/ingress/transfers", async (CameraIngressService ingress, CancellationToken token) =>
                 Results.Ok((await ingress.GetStatusAsync(null, token)).Select(item =>
                     new CameraTransferStatusResponse(item.Id, item.State.ToString(), item.AssetId, item.FailureReason))))
-            .RequireAuthorization(Security.SecurityExtensions.ManagementAccessPolicy)
+            .RequireAuthorization(Security.WorkspacePolicies.Administer)
             .WithSummary("Read redacted camera ingress transfer status");
     }
 

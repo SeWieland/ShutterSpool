@@ -1,3 +1,4 @@
+using ShutterSpool.Server.Security;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.AspNetCore.Mvc;
 using ShutterSpool.Application.Collections;
@@ -25,16 +26,16 @@ public static class CollectionEndpoints
 {
     public static RouteGroupBuilder MapCollectionEndpoints(this RouteGroupBuilder management)
     {
-        management.MapGet("/collections", ListAsync).WithSummary("Search and page Collections")
+        management.MapGet("/collections", ListAsync).RequireAuthorization(WorkspacePolicies.Member).WithSummary("Search and page Collections")
             .Produces<CollectionPageResponse>().ProducesValidationProblem();
-        management.MapGet("/collections/{id:guid}", GetAsync).WithSummary("Read a Collection")
+        management.MapGet("/collections/{id:guid}", GetAsync).RequireAuthorization(WorkspacePolicies.Member).WithSummary("Read a Collection")
             .Produces<CollectionResponse>().ProducesProblem(404);
-        management.MapPost("/collections", CreateAsync).WithSummary("Create a Collection")
+        management.MapPost("/collections", CreateAsync).RequireAuthorization(WorkspacePolicies.Administer).WithSummary("Create a Collection")
             .Produces<CollectionResponse>(201).ProducesValidationProblem().ProducesProblem(409);
-        management.MapPut("/collections/{id:guid}", RenameAsync).WithSummary("Rename a Collection")
+        management.MapPut("/collections/{id:guid}", RenameAsync).RequireAuthorization(WorkspacePolicies.Administer).WithSummary("Rename a Collection")
             .Produces<CollectionResponse>().ProducesValidationProblem().ProducesProblem(404)
             .Produces<CollectionConflictProblemDetails>(409, "application/problem+json");
-        management.MapDelete("/collections/{id:guid}", DeleteAsync).WithSummary("Delete an unreferenced Collection")
+        management.MapDelete("/collections/{id:guid}", DeleteAsync).RequireAuthorization(WorkspacePolicies.Administer).WithSummary("Delete an unreferenced Collection")
             .ProducesProblem(404).Produces<CollectionConflictProblemDetails>(409, "application/problem+json");
         return management;
     }

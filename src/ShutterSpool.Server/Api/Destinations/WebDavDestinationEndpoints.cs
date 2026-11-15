@@ -1,3 +1,4 @@
+using ShutterSpool.Server.Security;
 using Microsoft.AspNetCore.Mvc;
 using ShutterSpool.Application.Delivery;
 using ShutterSpool.Application.Destinations;
@@ -17,12 +18,13 @@ public static class WebDavDestinationEndpoints
 {
     public static RouteGroupBuilder MapWebDavDestinationEndpoints(this RouteGroupBuilder management)
     {
-        management.MapGet("/destinations/{id:guid}/webdav", GetAsync).WithSummary("Get WebDAV destination settings")
+        RouteGroupBuilder authorized = management.MapGroup("").RequireAuthorization(WorkspacePolicies.Administer);
+        authorized.MapGet("/destinations/{id:guid}/webdav", GetAsync).WithSummary("Get WebDAV destination settings")
             .Produces<WebDavDestinationResponse>().ProducesProblem(StatusCodes.Status404NotFound);
-        management.MapPut("/destinations/{id:guid}/webdav", UpdateAsync).WithSummary("Configure WebDAV destination")
+        authorized.MapPut("/destinations/{id:guid}/webdav", UpdateAsync).WithSummary("Configure WebDAV destination")
             .Produces<WebDavDestinationResponse>().ProducesValidationProblem().ProducesProblem(StatusCodes.Status404NotFound)
             .Produces<WebDavDestinationConflictProblemDetails>(StatusCodes.Status409Conflict, "application/problem+json");
-        management.MapPost("/destinations/{id:guid}/webdav/test", TestAsync).WithSummary("Test WebDAV destination")
+        authorized.MapPost("/destinations/{id:guid}/webdav/test", TestAsync).WithSummary("Test WebDAV destination")
             .Produces<WebDavDestinationTestResponse>().ProducesProblem(StatusCodes.Status404NotFound);
         return management;
     }

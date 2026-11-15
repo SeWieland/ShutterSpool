@@ -1,3 +1,4 @@
+using ShutterSpool.Server.Security;
 using Microsoft.AspNetCore.WebUtilities;
 using ShutterSpool.Application.Captures;
 using ShutterSpool.Application.Retention;
@@ -11,10 +12,11 @@ namespace ShutterSpool.Server.Api.Captures;
 public sealed record CaptureInboxAssetResponse(Guid Id, string DisplayName, string Variant, bool IsPrimary,
     Guid? RelatedAssetId, string? CameraMake = null, string? CameraModel = null);
 public sealed record CaptureSourceResponse(Guid Id, string Name, bool Enabled, string CurationMode, int? DelaySeconds,
-    Guid CollectionId, string CollectionName)
+    Guid? CollectionId, string? CollectionName)
 {
-    internal static CaptureSourceResponse From(CaptureSourceRead source) =>
-        new(source.Id, source.Name, source.Enabled, source.CurationMode, source.DelaySeconds, source.CollectionId, source.CollectionName);
+    internal static CaptureSourceResponse From(CaptureSourceRead source, bool includeConfiguration) =>
+        new(source.Id, source.Name, source.Enabled, source.CurationMode, source.DelaySeconds,
+            includeConfiguration ? source.CollectionId : null, includeConfiguration ? source.CollectionName : null);
 }
 public sealed record CaptureCollectionResponse(Guid Id, string Name, string Path);
 public sealed record CaptureDeliverySummaryResponse(int WaitingForRouting, int NoRoute, int Queued, int Running,
@@ -50,13 +52,13 @@ public sealed record CaptureInboxItemResponse(Guid Id, string DisplayName, DateT
     CaptureRetentionSummaryResponse? Retention, CaptureCollectionResponse? CurrentCollection,
     CaptureCollectionResponse? ReleasedCollection)
 {
-    internal static CaptureInboxItemResponse From(CaptureRead item, CaptureRetentionSummary? retention) => new(item.Id, item.DisplayName,
+    internal static CaptureInboxItemResponse From(CaptureRead item, CaptureRetentionSummary? retention, bool includeSourceConfiguration) => new(item.Id, item.DisplayName,
         item.AcceptedAt, CaptureCurationResponse.From(item.Curation), [.. item.Assets.Select(asset =>
             new CaptureInboxAssetResponse(asset.Id, asset.OriginalName, asset.Variant, asset.IsPrimary,
                 asset.RelatedAssetId, asset.Metadata.CameraMake, asset.Metadata.CameraModel))], new(item.DeliverySummary.WaitingForRouting, item.DeliverySummary.NoRoute,
             item.DeliverySummary.Queued, item.DeliverySummary.Running, item.DeliverySummary.RetryScheduled,
             item.DeliverySummary.Confirmed, item.DeliverySummary.Attention), item.SourceId,
-        CaptureSourceResponse.From(item.Source),
+        CaptureSourceResponse.From(item.Source, includeSourceConfiguration),
         item.AssetsAvailable, item.AssetsTruncated, item.IsFavorite,
         retention is null ? null : CaptureRetentionSummaryResponse.From(retention),
         item.CurrentCollection is null ? null : new(item.CurrentCollection.Id, item.CurrentCollection.Name, item.CurrentCollection.Path),
@@ -77,7 +79,7 @@ public sealed record CaptureDetailResponse(Guid Id, string DisplayName, DateTime
     bool IsFavorite, CaptureRetentionSummaryResponse? Retention, CaptureCollectionResponse? CurrentCollection,
     CaptureCollectionResponse? ReleasedCollection)
 {
-    internal static CaptureDetailResponse From(CaptureRead capture, CaptureRetentionSummary? retention) => new(
+    internal static CaptureDetailResponse From(CaptureRead capture, CaptureRetentionSummary? retention, bool includeSourceConfiguration) => new(
         capture.Id, capture.DisplayName, capture.AcceptedAt, CaptureCurationResponse.From(capture.Curation),
         [.. capture.Assets.Select(asset => new CaptureDetailAssetResponse(asset.Id, asset.OriginalName,
             asset.Variant, asset.IsPrimary, asset.RelatedAssetId, asset.Metadata.MetadataState, asset.Metadata.CaptureTime,
@@ -90,7 +92,7 @@ public sealed record CaptureDetailResponse(Guid Id, string DisplayName, DateTime
         new(capture.DeliverySummary.WaitingForRouting, capture.DeliverySummary.NoRoute,
             capture.DeliverySummary.Queued, capture.DeliverySummary.Running, capture.DeliverySummary.RetryScheduled,
             capture.DeliverySummary.Confirmed, capture.DeliverySummary.Attention),
-        capture.SourceId, CaptureSourceResponse.From(capture.Source), capture.AssetsAvailable, capture.IsFavorite,
+        capture.SourceId, CaptureSourceResponse.From(capture.Source, includeSourceConfiguration), capture.AssetsAvailable, capture.IsFavorite,
         retention is null ? null : CaptureRetentionSummaryResponse.From(retention),
         capture.CurrentCollection is null ? null : new(capture.CurrentCollection.Id, capture.CurrentCollection.Name, capture.CurrentCollection.Path),
         capture.ReleasedCollection is null ? null : new(capture.ReleasedCollection.Id, capture.ReleasedCollection.Name, capture.ReleasedCollection.Path));
@@ -100,12 +102,12 @@ public static class CaptureReadEndpoints
 {
     public static RouteGroupBuilder MapCaptureReadEndpoints(this RouteGroupBuilder management)
     {
-        management.MapGet("/tags", GetTagsAsync).WithSummary("Suggest existing Capture tags")
+        management.MapGet("/tags", GetTagsAsync).RequireAuthorization(WorkspacePolicies.Member).WithSummary("Suggest existing Capture tags")
             .Produces<TagSuggestionsResponse>().ProducesValidationProblem();
         RouteGroupBuilder captures = management.MapGroup("/captures");
-        captures.MapGet("", GetInboxAsync).WithSummary("Browse accepted Captures")
+        captures.MapGet("", GetInboxAsync).RequireAuthorization(WorkspacePolicies.Member).WithSummary("Browse accepted Captures")
             .Produces<CaptureInboxResponse>().ProducesValidationProblem();
-        captures.MapGet("/{id:guid}", GetAsync).WithSummary("Read a Capture and its delivery history")
+        captures.MapGet("/{id:guid}", GetAsync).RequireAuthorization(WorkspacePolicies.Member).WithSummary("Read a Capture and its delivery history")
             .Produces<CaptureDetailResponse>().ProducesProblem(StatusCodes.Status404NotFound);
         return management;
     }
@@ -114,6 +116,7 @@ public static class CaptureReadEndpoints
         int? ratingMaximum, string? selection, string? tag, string? label, string[]? labels, bool? released, bool? held,
         bool? attention, Guid[]? sourceIds, Guid[]? collectionIds, string[]? workflows, bool? oldestFirst, bool? favoritesOnly, CaptureReadService reads,
         ICaptureRetentionReadStore retention,
+        ShutterSpool.Application.Security.WorkspaceAccessContext access,
         CancellationToken cancellationToken)
     {
         int pageSize = limit ?? 30;
@@ -168,7 +171,7 @@ public static class CaptureReadEndpoints
         DateTimeOffset asOf = DateTimeOffset.UtcNow;
         IReadOnlyDictionary<Guid, CaptureRetentionSummary> summaries = await retention.GetCaptureSummariesAsync(
             page.Items.Select(capture => capture.Id).ToArray(), asOf, cancellationToken);
-        return Results.Ok(new CaptureInboxResponse([.. page.Items.Select(item => CaptureInboxItemResponse.From(item, summaries.GetValueOrDefault(item.Id)))], next,
+        return Results.Ok(new CaptureInboxResponse([.. page.Items.Select(item => CaptureInboxItemResponse.From(item, summaries.GetValueOrDefault(item.Id), access.IsAdministrator))], next,
             page.AnySourceUsesCuration, page.AnyCaptureNeedsCuration));
     }
 
@@ -179,12 +182,12 @@ public static class CaptureReadEndpoints
     }
 
     private static async Task<IResult> GetAsync(Guid id, CaptureReadService reads, ICaptureRetentionReadStore retention,
-        CancellationToken cancellationToken)
+        ShutterSpool.Application.Security.WorkspaceAccessContext access, CancellationToken cancellationToken)
     {
         CaptureRead? capture = await reads.GetAsync(id, cancellationToken);
         if (capture is null) return Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Capture not found");
         CaptureRetentionSummary? summary = await retention.GetCaptureSummaryAsync(id, DateTimeOffset.UtcNow, cancellationToken);
-        return Results.Ok(CaptureDetailResponse.From(capture, summary));
+        return Results.Ok(CaptureDetailResponse.From(capture, summary, access.IsAdministrator));
     }
 
     private static IResult Invalid(string field, string error) => Results.ValidationProblem(
