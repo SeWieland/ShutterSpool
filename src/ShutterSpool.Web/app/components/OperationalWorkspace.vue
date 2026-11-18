@@ -16,7 +16,7 @@ import { useCaptureCurationActions } from '../composables/useCaptureCurationActi
 import { useWorkspacePreferences } from '../composables/useWorkspacePreferences';
 import { useCaptureBrowser } from '../composables/useCaptureBrowser';
 import { effectiveMotion, reconcileCaptures, curationTiming } from '../lib/workspace-interactions';
-import { pageWorkspaceId, readWorkspaceId, withWorkspace } from '../lib/workspace-context';
+import { getPageWorkspaceId, readWorkspaceId, withWorkspace } from '../lib/workspace-context';
 import { mayCurate, mayAdminister, refreshWorkspaceAccess, closeWorkspaceAccess } from '../lib/workspace-access';
 import type { CaptureInboxItemResponse as Capture, CaptureInboxResponse, CaptureDetailResponse, CaptureCurationResponse, SourceConfigurationPageResponse, SourceConfigurationResponse } from '../api/models';
 const props = defineProps<{
@@ -25,7 +25,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ navigate: [] }>();
 const router = useRouter();
-const workspaceRoute = (path: string) => withWorkspace(path, pageWorkspaceId);
+const workspaceRoute = (path: string) => withWorkspace(path, getPageWorkspaceId());
 type View = 'Sources' | 'Curation' | 'Gallery' | 'Delivery' | 'Settings';
 const view = ref<View>('Gallery');
 const settingsDirty = ref(false);
@@ -894,7 +894,7 @@ function requestDeparture() {
 defineExpose({ requestDeparture });
 const removeRouteGuard = router.beforeEach(to => {
     const targetWorkspaceId = readWorkspaceId(to.query.workspace === undefined ? '' : `?workspace=${encodeURIComponent(String(to.query.workspace ?? ''))}`);
-    if (targetWorkspaceId !== pageWorkspaceId) {
+    if (targetWorkspaceId !== getPageWorkspaceId()) {
         if (!requestDeparture()) return false;
         window.location.assign(to.fullPath);
         return false;

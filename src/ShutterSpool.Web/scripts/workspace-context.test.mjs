@@ -28,11 +28,11 @@ test('auth callback initializes page scope once from its local return target, no
     const source = readFileSync(new URL('../app/lib/workspace-context.ts', import.meta.url), 'utf8');
     vm.runInContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
     const workspace = context.exports;
-    assert.equal(workspace.pageWorkspaceId, null, 'callback URL parameters cannot choose scope');
+    assert.equal(workspace.getPageWorkspaceId(), null, 'callback URL parameters cannot choose scope');
     assert.equal(workspace.initializePageWorkspaceFromReturnTarget(`/?workspace=${first}`), true);
-    assert.equal(workspace.pageWorkspaceId, first);
+    assert.equal(workspace.getPageWorkspaceId(), first);
     assert.equal(workspace.initializePageWorkspaceFromReturnTarget(`/?workspace=${second}`), false);
-    assert.equal(workspace.pageWorkspaceId, first, 'later routes cannot retarget this page context');
+    assert.equal(workspace.getPageWorkspaceId(), first, 'later routes cannot retarget this page context');
 });
 
 test('initial scope binding requires complete sole membership and cannot retarget an initialized workspace', () => {
@@ -47,7 +47,7 @@ test('initial scope binding requires complete sole membership and cannot retarge
         assert.equal(scope.bindInitialWorkspace([], false), false);
         assert.equal(scope.bindInitialWorkspace([...memberships, { id: second, name: 'Location' }], false), false);
         assert.equal(scope.bindInitialWorkspace(memberships, false), search === '');
-        assert.equal(scope.pageWorkspaceId, search === '' ? first : search.includes('invalid') ? '' : second);
+        assert.equal(scope.getPageWorkspaceId(), search === '' ? first : search.includes('invalid') ? '' : second);
         assert.equal(scope.bindInitialWorkspace([{ id: second, name: 'Location' }], false), false);
     }
 });
@@ -148,7 +148,7 @@ test('initial workspace binding updates Vue Router before access and survives or
     assert.equal(app.router.currentRoute.value.query.workspace, first);
     await travel(1);
     assert.equal(app.router.currentRoute.value.query.workspace, first);
-    assert.equal(app.scope.pageWorkspaceId, first);
+    assert.equal(app.scope.getPageWorkspaceId(), first);
     assert.deepEqual(app.assignments, [], 'within-workspace navigation and history do not restart the document');
 });
 

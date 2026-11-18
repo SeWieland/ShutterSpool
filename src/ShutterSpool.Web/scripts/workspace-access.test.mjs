@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { accessFingerprint, validateWorkspaceAccess, authorizationFailure, workspaceChangeError } from '../app/lib/workspace-permissions.ts';
+import { workspaceRequestHeaders } from '../app/lib/workspace-context.ts';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
@@ -49,25 +50,54 @@ test('membership conflict feedback distinguishes the last Owner safeguard from r
     assert.equal(workspaceChangeError({ status: 503 }), undefined, 'an unknown outcome must remain uncertain');
 });
 
-test('API transport distinguishes denied commands, revoked membership and expired authentication from response machine codes', async () => {
+function apiTransport(fetch, { getPageWorkspaceId = () => null, withPreviewSlot = action => action() } = {}) {
     let transport, ended = 0;
-    const closed = [], responses = [new Response(JSON.stringify({ errorCode: 'permission-denied' }), { status: 403 }), new Response(JSON.stringify({ errorCode: 'membership-revoked' }), { status: 403 }), new Response('{}', { status: 401 })];
-    const context = vm.createContext({ exports: {}, AbortController, AbortSignal, location: { origin: 'https://synthetic.example' }, fetch: async () => responses.shift(),
+    const closed = [];
+    const context = vm.createContext({ exports: {}, AbortController, AbortSignal, location: { origin: 'https://synthetic.example' }, fetch,
         require: name => name.includes('kiota-bundle') ? { DefaultRequestAdapter: class {} }
             : name.includes('kiota-http-fetchlibrary') ? { HttpClient: class { constructor(_client, middleware) { transport = middleware; } } }
                 : name.endsWith('/shutterSpoolClient') ? { createShutterSpoolClient: () => ({}) }
                     : name.endsWith('/workspace-permissions') ? { authorizationFailure }
                         : name.endsWith('/workspace-access') ? { closeWorkspaceAccess: revoked => closed.push(revoked) }
-                            : name.endsWith('/workspace-context') ? { pageWorkspaceId: 'workspace', workspaceRequestHeaders: () => new Headers() }
-                                : name.endsWith('/session') ? { clearAccess: () => ended++, token: async () => '', onAccessLost: () => () => {} } : { withPreviewSlot: callback => callback() },
+                            : name.endsWith('/workspace-context') ? { getPageWorkspaceId, workspaceRequestHeaders }
+                                : name.endsWith('/session') ? { clearAccess: () => ended++, token: async () => '', onAccessLost: () => () => {} } : { withPreviewSlot },
     });
     vm.runInContext(ts.transpileModule(readFileSync(new URL('../app/lib/api.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
+    return { transport, derivative: context.exports.derivative, closed, ended: () => ended };
+}
+
+test('API transport distinguishes denied commands, revoked membership and expired authentication from response machine codes', async () => {
+    const responses = [new Response(JSON.stringify({ errorCode: 'permission-denied' }), { status: 403 }), new Response(JSON.stringify({ errorCode: 'membership-revoked' }), { status: 403 }), new Response('{}', { status: 401 })];
+    const { transport, ended, closed } = apiTransport(async () => responses.shift());
     await transport.execute('/management/captures/a/curation', {}, {});
-    assert.equal(ended, 0); assert.deepEqual(closed, []);
+    assert.equal(ended(), 0); assert.deepEqual(closed, []);
     await transport.execute('/management/access', {}, {});
-    assert.equal(ended, 0); assert.deepEqual(closed, [true]);
+    assert.equal(ended(), 0); assert.deepEqual(closed, [true]);
     await transport.execute('/management/access', {}, {});
-    assert.equal(ended, 1);
+    assert.equal(ended(), 1);
+});
+
+test('management and queued previews use the scope at dispatch while workspace discovery and offers stay unscoped', async () => {
+    const requests = [];
+    let selectedId = null;
+    const slot = Promise.withResolvers();
+    const { transport, derivative } = apiTransport(async (url, { headers }) => {
+        requests.push([url, headers.get('X-ShutterSpool-Workspace')]);
+        return new Response();
+    }, { getPageWorkspaceId: () => selectedId, withPreviewSlot: action => slot.promise.then(action) });
+    const preview = derivative('capture', 'thumbnail', new AbortController().signal);
+    selectedId = '2f2ed010-2a51-468a-a38a-a2372fba8211';
+    await transport.execute('/management/access', {}, {});
+    await transport.execute('/workspaces', {}, {});
+    await transport.execute('/workspace-offers', {}, {});
+    slot.resolve();
+    await preview;
+    assert.deepEqual(requests, [
+        ['/management/access', selectedId],
+        ['/workspaces', null],
+        ['/workspace-offers', null],
+        ['/media/previews/capture/grid', selectedId],
+    ]);
 });
 
 function accessClient() {

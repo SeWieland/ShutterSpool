@@ -4,7 +4,7 @@ import { createShutterSpoolClient } from "../api/shutterSpoolClient";
 import { clearAccess, token, onAccessLost } from "./session";
 import { withPreviewSlot } from "./preview-queue";
 import type { SourceActivity } from './source-activity';
-import { pageWorkspaceId, workspaceRequestHeaders } from './workspace-context';
+import { getPageWorkspaceId, workspaceRequestHeaders } from './workspace-context';
 import { authorizationFailure } from './workspace-permissions';
 import { closeWorkspaceAccess } from './workspace-access';
 
@@ -24,7 +24,7 @@ const http = new HttpClient(undefined, {
         try {
             const response = await fetch(url, {
                 ...init,
-                headers: workspaceRequestHeaders(url, init.headers, pageWorkspaceId),
+                headers: workspaceRequestHeaders(url, init.headers, getPageWorkspaceId()),
                 signal: AbortSignal.any([controller.signal, ...(init.signal ? [init.signal] : []), ...(signal ? [signal] : [])]),
             });
             if (response.status === 401 || response.status === 403 || response.status === 503) {
@@ -118,7 +118,7 @@ export async function derivative(
         const headers = workspaceRequestHeaders(
             `/media/previews/${encodeURIComponent(captureId)}/${profile === "thumbnail" ? "grid" : "detail"}`,
             undefined,
-            pageWorkspaceId,
+            getPageWorkspaceId(),
         );
         headers.set('Authorization', `Bearer ${await token()}`);
         if (etag) headers.set("If-None-Match", etag);

@@ -4,15 +4,17 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 import { ref } from 'vue';
+import { withWorkspace } from '../app/lib/workspace-context.ts';
 
-function reconciliation(refresh) {
+function reconciliation(refresh, selectedId = null) {
     const handlers = new Map(), timers = new Map(), listeners = new Map();
     const navigator = { onLine: true }, document = { hidden: false };
-    let next = 0, lost, reconnect;
+    let next = 0, lost, reconnect, hubUrl;
+    let workspaceId = null;
     const hub = { state: 'Disconnected', on: (name, callback) => handlers.set(name, callback),
         onreconnecting() {}, onreconnected(callback) { reconnect = callback; }, onclose() {},
         async start() { this.state = 'Connected'; }, async stop() { this.state = 'Disconnected'; } };
-    class Builder { withUrl() { return this; } configureLogging() { return this; } withAutomaticReconnect() { return this; } build() { return hub; } }
+    class Builder { withUrl(url) { hubUrl = url; return this; } configureLogging() { return this; } withAutomaticReconnect() { return this; } build() { return hub; } }
     Object.assign(document, { addEventListener: (name, callback) => listeners.set(`document:${name}`, callback), removeEventListener: name => listeners.delete(`document:${name}`) });
     const context = vm.createContext({ exports: {}, ref, navigator,
         document,
@@ -20,16 +22,23 @@ function reconciliation(refresh) {
         setTimeout: callback => { timers.set(++next, callback); return next; }, clearTimeout: id => timers.delete(id),
         setInterval: callback => { handlers.set('safety', callback); return 1; }, clearInterval() {},
         require: name => name === '@microsoft/signalr' ? { HubConnectionBuilder: Builder, LogLevel: { None: 0 } }
-            : name.endsWith('/workspace-context') ? { pageWorkspaceId: null, withWorkspace: path => path }
+            : name.endsWith('/workspace-context') ? { getPageWorkspaceId: () => workspaceId, withWorkspace }
                 : { token: async () => '', onAccessLost: callback => { lost = callback; return () => {}; } },
     });
     vm.runInContext(ts.transpileModule(readFileSync(new URL('../app/lib/reconcile.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
+    workspaceId = selectedId;
     const live = context.exports.useReconciliation(refresh);
-    return { live, emit: (event, hint) => handlers.get(event)(hint), reconnect: () => reconnect(), lose: () => lost(), listeners,
+    return { live, hubUrl, emit: (event, hint) => handlers.get(event)(hint), reconnect: () => reconnect(), lose: () => lost(), listeners,
         setOnline: value => { navigator.onLine = value; }, setHidden: value => { document.hidden = value; },
         foreground: () => listeners.get('window:focus')(),
         async flush() { const pending = [...timers.values()]; timers.clear(); pending.forEach(callback => callback()); await new Promise(resolve => setImmediate(resolve)); } };
 }
+
+test('hub setup uses the workspace selected after the reconciliation module loads', () => {
+    const workspaceId = '2f2ed010-2a51-468a-a38a-a2372fba8211';
+    const client = reconciliation(async () => {}, workspaceId);
+    assert.equal(client.hubUrl, `/live/changes?workspace=${workspaceId}`);
+});
 
 test('subscription precedes snapshot and a racing hint triggers one follow-up read', async () => {
     let release, reads = 0;

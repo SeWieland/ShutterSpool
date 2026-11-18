@@ -125,7 +125,7 @@ test('top-level callback keeps its token and initializes workspace scope before 
     window: { location: { replace: () => { reloads++ } } },
     onMounted: action => { mounted = action },
     navigateTo: async (target, options) => {
-      assert.equal(workspaceContext.exports.pageWorkspaceId, workspaceId, 'scope is initialized before the app route changes')
+      assert.equal(workspaceContext.exports.getPageWorkspaceId(), workspaceId, 'scope is initialized before the app route changes')
       assert.equal(c.api.session.value, callbackUser, 'the OIDC token remains in the in-memory session')
       navigations.push({ target, options })
     },
@@ -137,11 +137,28 @@ test('top-level callback keeps its token and initializes workspace scope before 
   assert.equal(c.calls.callbacks, 1)
   assert.equal(c.calls.redirects.length, 0, 'return navigation does not start another top-level prompt:none flow')
   assert.equal(c.api.session.value.access_token, 'callback-token')
-  assert.equal(workspaceContext.exports.pageWorkspaceId, workspaceId)
+  assert.equal(workspaceContext.exports.getPageWorkspaceId(), workspaceId)
   assert.equal(navigations.length, 1)
   assert.equal(navigations[0].target, `/?workspace=${workspaceId}`)
   assert.equal(navigations[0].options.replace, true)
   assert.equal(reloads, 0, 'callback must not discard the in-memory OIDC session with a document reload')
+})
+
+test('missing or expired silent renewal requires login and clears the still-valid old session', async () => {
+  for (const result of [null, { expired: true }]) {
+    const c = client(async () => result)
+    c.api.session.value = { access_token: 'still-valid', expires_in: 10, expired: false }
+    let cleared = 0
+    c.api.onAccessLost(() => cleared++)
+    await assert.rejects(c.api.token(), error => {
+      assert.ok(Error.isError(error))
+      assert.equal(error.error, 'login_required')
+      return true
+    })
+    assert.equal(c.api.session.value, null)
+    assert.equal(cleared, 1)
+    assert.equal(c.calls.removed, 1)
+  }
 })
 
 test('offline renewal retains the active session; issuer revocation ends it', async () => {

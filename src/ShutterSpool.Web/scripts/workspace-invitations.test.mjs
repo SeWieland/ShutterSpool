@@ -317,7 +317,7 @@ test('browsing invitations preserves same-workspace drafts while Sign out still 
         window: { location: { assign: path => navigations.push(path), replace: path => navigations.push(path) } },
         require: name => name.endsWith('/session') ? { session: ref({}), onAccessLost: () => () => {} }
             : name.endsWith('/workspace-access') ? { workspaceAccess: ref({}), workspaceRevoked: ref(false) }
-                : { pageWorkspaceId: workspaceId, workspaceSelection, withWorkspace },
+                : { getPageWorkspaceId: () => workspaceId, workspaceSelection, withWorkspace },
     });
     const source = parse(readFileSync(new URL('../app/app.vue', import.meta.url), 'utf8')).descriptor.scriptSetup.content;
     vm.runInContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
