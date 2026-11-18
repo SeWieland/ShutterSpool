@@ -39,51 +39,91 @@ async function load(next = false) {
         cursor.value = page.nextCursor; loaded.value = true; stale.value = false;
     } catch (failure) {
         if (!controller.signal.aborted && !disposed && access === accessGeneration() && request === sequence) { handleFailure(failure); stale.value = true; feedback.value = 'Trash could not be loaded. The last checked photographs are still shown. Refresh to try again.'; }
-    } finally { if (loadController === controller) loadController = undefined; if (!disposed && access === accessGeneration() && request === sequence) busy.value = false; }
+    } finally {
+        if (loadController === controller) loadController = undefined;
+        if (!disposed && access === accessGeneration() && request === sequence) busy.value = false;
+    }
+}
+function freshRemovalScope(item: TrashItem) {
+    if (retentionTiming(item.retention, now.value, true).stale) return undefined;
+    return originalRemovalScope(item.retention);
+}
+function confirmPurge(item: TrashItem) {
+    const scope = freshRemovalScope(item);
+    if (!scope) {
+        feedback.value = 'We could not check the originals recently. Refresh Trash before confirming permanent deletion.';
+        return false;
+    }
+    const favorite = item.retention?.isFavorite ? 'yes' : 'no';
+    return window.confirm(`Permanently delete this photograph (${item.displayName ?? 'Photograph'})?\n\nOriginal variants: ${scope}.\n\nFavorite: ${favorite}.\n\nYou cannot restore it afterward. If these are your only copies, they will be lost; other copies are unknown unless confirmed. Gallery access protections or holds that protect files from deletion can prevent removal. Backups and delivered or downloaded copies are separate and will not be removed by this action.`);
+}
+function restoreMessage(protectedUntil?: Date | null) {
+    const protection = protectedUntil ? ` · protected until ${protectedUntil.toLocaleString()}` : '';
+    const resume = mayAdminister.value ? 'Resume it separately when you are ready.' : 'Ask an administrator to resume it.';
+    return `Photograph restored${protection}. Delivery stays paused. ${resume}`;
 }
 async function act(item: TrashItem, permanent: boolean) {
     if (permanent && !mayAdminister.value) return;
     if (busy.value || !props.online || stale.value || !item.captureId || item.captureRevision == null) return;
-    if (permanent) {
-        const scope = originalRemovalScope(item.retention);
-        if (!scope || retentionTiming(item.retention, now.value, true).stale) { feedback.value = 'We could not check the originals recently. Refresh Trash before confirming permanent deletion.'; return; }
-        if (!window.confirm(`Permanently delete this photograph (${item.displayName ?? 'Photograph'})?\n\nOriginal variants: ${scope}.\n\nFavorite: ${item.retention?.isFavorite ? 'yes' : 'no'}.\n\nYou cannot restore it afterward. If these are your only copies, they will be lost; other copies are unknown unless confirmed. Gallery access protections or holds that protect files from deletion can prevent removal. Backups and delivered or downloaded copies are separate and will not be removed by this action.`)) return;
-    }
+    if (permanent && !confirmPurge(item)) return;
     const access = accessGeneration(); busy.value = true; feedback.value = '';
     try {
         const target = api.management.trash.byId(String(item.captureId));
         const result = permanent ? await target.purge.post({ expectedRevision: item.captureRevision, confirm: true }) : await target.restore.post({ expectedRevision: item.captureRevision });
-        if (access === accessGeneration() && !disposed) { feedback.value = permanent ? 'Deletion requested. Check each original below to see whether removal has finished.' : `Photograph restored${result?.current?.protectedUntil ? ` · protected until ${result.current.protectedUntil.toLocaleString()}` : ''}. Delivery stays paused. ${mayAdminister.value ? 'Resume it separately when you are ready.' : 'Ask an administrator to resume it.'}`; await load(); emit('refresh'); }
+        if (disposed || access !== accessGeneration()) return;
+        feedback.value = permanent
+            ? 'Deletion requested. Check each original below to see whether removal has finished.'
+            : restoreMessage(result?.current?.protectedUntil);
+        await load();
+        emit('refresh');
     } catch (failure) {
-        if (access === accessGeneration() && !disposed) { const status = handleFailure(failure); feedback.value = status === 409 ? 'This photograph changed or has protection in place. Review the refreshed details before trying again.' : 'We could not check whether the change saved. Review the refreshed details before trying again.'; await load(); }
+        if (disposed || access !== accessGeneration()) return;
+        const status = handleFailure(failure);
+        feedback.value = status === 409
+            ? 'This photograph changed or has protection in place. Review the refreshed details before trying again.'
+            : 'We could not check whether the change saved. Review the refreshed details before trying again.';
+        await load();
     } finally { if (!disposed && access === accessGeneration()) busy.value = false; }
 }
+function confirmLoadedPurge(scope: TrashItem[]) {
+    if (!scope.length) return false;
+    const variants: string[] = [];
+    for (const item of scope) {
+        const originals = freshRemovalScope(item);
+        if (!originals) {
+            feedback.value = 'Some originals could not be checked recently. Refresh Trash before confirming deletion.';
+            return false;
+        }
+        variants.push(`${item.displayName ?? 'Photograph'}: ${originals}`);
+    }
+    const favorites = scope.filter(item => item.retention?.isFavorite).length;
+    return window.confirm(`Permanently delete ${scope.length} loaded photographs from Trash, including ${favorites} Favorites?\n\nOriginal variants:\n${variants.join('\n')}\nYou cannot restore them afterward. These may be your only copies; other copies are unknown unless confirmed. Gallery access protections and holds that protect files from deletion can prevent removal. Backups and delivered or downloaded copies are separate. Older unloaded Trash items are excluded.`);
+}
+async function purgeLoaded(scope: TrashItem[], access: ReturnType<typeof accessGeneration>) {
+    for (const item of scope) {
+        if (disposed || access !== accessGeneration()) return;
+        try {
+            if (!item.captureId || item.captureRevision == null) throw new Error('Revision unavailable');
+            await api.management.trash.byId(String(item.captureId)).purge.post({ expectedRevision: item.captureRevision, confirm: true });
+        } catch (failure) {
+            if (disposed || access !== accessGeneration()) return;
+            const status = handleFailure(failure);
+            return `${item.displayName ?? 'Photograph'}: ${status === 409 ? 'changed or protected' : 'change not confirmed'}`;
+        }
+    }
+}
 async function emptyLoaded() {
-    if (!mayAdminister.value) return;
-    if (busy.value || stale.value || !props.online) return;
+    if (!mayAdminister.value || busy.value || stale.value || !props.online) return;
     const scope = [...purgeItems.value];
-    if (scope.some(item => !originalRemovalScope(item.retention) || retentionTiming(item.retention, now.value, true).stale)) { feedback.value = 'Some originals could not be checked recently. Refresh Trash before confirming deletion.'; return; }
-    const variants = scope.map(item => `${item.displayName ?? 'Photograph'}: ${originalRemovalScope(item.retention)}`).join('\n');
-    if (!scope.length || !window.confirm(`Permanently delete ${scope.length} loaded photographs from Trash, including ${scope.filter(item => item.retention?.isFavorite).length} Favorites?\n\nOriginal variants:\n${variants}\nYou cannot restore them afterward. These may be your only copies; other copies are unknown unless confirmed. Gallery access protections and holds that protect files from deletion can prevent removal. Backups and delivered or downloaded copies are separate. Older unloaded Trash items are excluded.`)) return;
-    const access = accessGeneration(), outcomes: string[] = [];
+    if (!confirmLoadedPurge(scope)) return;
+    const access = accessGeneration();
     busy.value = true;
     try {
-        for (const item of scope) {
-            if (disposed || access !== accessGeneration()) return;
-            try {
-                if (!item.captureId || item.captureRevision == null) throw new Error('Revision unavailable');
-                await api.management.trash.byId(String(item.captureId)).purge.post({ expectedRevision: item.captureRevision, confirm: true });
-            } catch (failure) {
-                if (disposed || access !== accessGeneration()) return;
-                const status = handleFailure(failure);
-                outcomes.push(`${item.displayName ?? 'Photograph'}: ${status === 409 ? 'changed or protected' : 'change not confirmed'}`);
-                break;
-            }
-        }
-        if (access === accessGeneration() && !disposed) {
-            feedback.value = outcomes.join(' · ') || `Deletion requested for ${scope.length} loaded photographs. Check each original to see whether removal has finished.`;
-            await load(); emit('refresh');
-        }
+        const problem = await purgeLoaded(scope, access);
+        if (disposed || access !== accessGeneration()) return;
+        feedback.value = problem ?? `Deletion requested for ${scope.length} loaded photographs. Check each original to see whether removal has finished.`;
+        await load();
+        emit('refresh');
     } finally { if (!disposed && access === accessGeneration()) busy.value = false; }
 }
 onMounted(() => { void load(); clock = setInterval(() => { if (!document.hidden) now.value = Date.now(); }, 1000); });

@@ -68,15 +68,20 @@ test('stale evidence freezes at observation; unknown and unscheduled state get n
 
 function component(name, props, management, confirm = () => true, role = 'Owner') {
     let generation = 0, accessLost; const unmount = [], events = [];
+    const lose = () => { generation++; accessLost?.(); };
+    function handleFailure(failure) {
+        if (failure.status === 401) lose();
+        return failure.status;
+    }
     const scope = vm.createContext({ exports: {}, ref, computed, reactive, nextTick, AbortController, AbortSignal, useId: () => 'synthetic-dialog', watch: (target, callback) => watch(target, callback, { flush: 'sync' }),
         defineProps: () => props, defineEmits: () => (...event) => events.push(event), onMounted() {}, onUnmounted(callback) { unmount.push(callback); },
         window: { confirm, scrollY: 0, scrollTo() {} }, document: { activeElement: undefined }, clearInterval, setInterval,
         crypto: { randomUUID: () => '00000000-0000-0000-0000-000000000001' },
-        require: source => source.endsWith('/workspace-access') ? { mayCurate: ref(role !== 'Viewer'), mayAdminister: ref(['Owner', 'Administrator'].includes(role)) } : source.endsWith('/storage-presentation') ? presentation.exports : source.endsWith('/workspace-interactions') ? interactions.exports : source.endsWith('/retention') ? context.exports : source.endsWith('/session') ? { accessGeneration: () => generation, onAccessLost(callback) { accessLost = callback; return () => { if (accessLost === callback) accessLost = undefined; }; } } : { api: { management }, cancellable: signal => ({ signal }), handleFailure: failure => failure.status },
+        require: source => source.endsWith('/workspace-access') ? { mayCurate: ref(role !== 'Viewer'), mayAdminister: ref(['Owner', 'Administrator'].includes(role)) } : source.endsWith('/storage-presentation') ? presentation.exports : source.endsWith('/workspace-interactions') ? interactions.exports : source.endsWith('/retention') ? context.exports : source.endsWith('/session') ? { accessGeneration: () => generation, onAccessLost(callback) { accessLost = callback; return () => { if (accessLost === callback) accessLost = undefined; }; } } : { api: { management }, cancellable: signal => ({ signal }), handleFailure },
     });
     const script = parse(readFileSync(new URL(`../app/components/${name}.vue`, import.meta.url), 'utf8')).descriptor.scriptSetup.content;
     vm.runInContext(ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, scope);
-    return { run: expression => vm.runInContext(expression, scope), events, lose: () => { generation++; accessLost?.(); }, dispose: () => unmount.forEach(callback => callback()), render() {
+    return { run: expression => vm.runInContext(expression, scope), events, lose, dispose: () => unmount.forEach(callback => callback()), render() {
         const descriptor = parse(readFileSync(new URL(`../app/components/${name}.vue`, import.meta.url), 'utf8')).descriptor;
         const compiled = compileScript(descriptor, { id: 'retention-control', inlineTemplate: true });
         const renderScope = vm.createContext({ ...scope, exports: {}, require: source => source === 'vue' ? Vue : scope.require(source) });
@@ -247,9 +252,18 @@ test('Empty loaded Trash confirms only its frozen loaded scope and reports per-i
         get: async () => ({ items: [], nextCursor: 'older' }),
         byId: id => ({ purge: { post: async body => { commands.push([id, body.expectedRevision]); if (id === 'protected') throw { status: 409 }; } } }),
     } }, message => { prompts.push(message); return true; });
-    fixture.run("items.value = [{captureId:'allowed',captureRevision:2,displayName:'Allowed',retention:{asOf:new Date(),availableOriginals:[{variant:'RAW',byteLength:2048,state:'available'}],isFavorite:true,disposition:'trash'}},{captureId:'protected',captureRevision:3,displayName:'Protected',retention:{asOf:new Date(),availableOriginals:[{variant:'JPEG',byteLength:1024,state:'available'}],isFavorite:false,disposition:'trash'}}]; cursor.value = 'unseen'");
+    fixture.run(`
+        items.value = [
+            {captureId:'allowed',captureRevision:2,displayName:'Allowed',retention:{asOf:new Date(),availableOriginals:[{variant:'RAW',byteLength:2048,state:'available'}],isFavorite:true,disposition:'trash'}},
+            {captureId:'protected',captureRevision:3,displayName:'Protected',retention:{asOf:new Date(),availableOriginals:[{variant:'JPEG',byteLength:1024,state:'available'}],isFavorite:false,disposition:'trash'}},
+            {captureId:'later',captureRevision:4,displayName:'Later',retention:{asOf:new Date(),availableOriginals:[{variant:'JPEG',byteLength:1024,state:'available'}],isFavorite:false,disposition:'trash'}},
+        ];
+        cursor.value = 'unseen';
+    `);
     await fixture.run('emptyLoaded()');
-    assert.equal(commands.length, 2); assert.equal(prompts.length, 1); assert.match(prompts[0], /2 loaded/); assert.match(prompts[0], /1 Favorites/); assert.match(prompts[0], /unloaded.*excluded/); assert.match(fixture.run('feedback.value'), /Protected: changed or protected/);
+    assert.deepEqual(commands, [['allowed', 2], ['protected', 3]], 'the first conflict stops further deletions');
+    assert.equal(prompts.length, 1); assert.match(prompts[0], /3 loaded/); assert.match(prompts[0], /1 Favorites/); assert.match(prompts[0], /unloaded.*excluded/);
+    assert.equal(fixture.run('feedback.value'), 'Protected: changed or protected');
     assert.match(prompts[0], /RAW \(2,048 bytes/); assert.match(prompts[0], /JPEG \(1,024 bytes/);
     assert.match(prompts[0], /only copies/); assert.match(prompts[0], /Backups and delivered or downloaded copies/); assert.match(prompts[0], /protect files from deletion/);
     fixture.run("items.value = [{captureId:'unknown',captureRevision:1,retention:{asOf:new Date(),isFavorite:false}}]");
@@ -360,6 +374,45 @@ test('late refresh results after access loss cannot restore capacity or settings
     fixture.lose(); finishSettings({ settings: { revision: 1 }, quota: {} }); finishCapacity({ observedAt: new Date(now), usedBytes: 50 });
     await pending;
     assert.equal(fixture.run('capacity.value'), undefined); assert.equal(fixture.run('settings.value'), undefined);
+});
+test('access loss during settings hydration leaves refresh feedback cleared and skips history', async () => {
+    let historyReads = 0;
+    const fixture = component('RetentionSettings', { online: true, generation: 0 }, { retention: {
+        settings: { get: async () => storageDocument() },
+        capacity: { get: async () => { throw { status: 503 }; } },
+        history: { get: async () => { historyReads++; return { items: [] }; } },
+    } });
+    const hydrated = new Promise(resolve => {
+        fixture.run('ready => watch(baseline, value => { if (value) ready() })')(resolve);
+    });
+    const pending = fixture.run('load(true)');
+    await hydrated;
+    fixture.lose();
+    await pending;
+    assert.equal(historyReads, 0);
+    assert.equal(fixture.run('feedback.value'), '');
+    assert.equal(fixture.run('settings.value'), undefined);
+    assert.equal(fixture.run('history.value'), undefined);
+    fixture.dispose();
+});
+test('settings access failure discards capacity from the same refresh and skips history', async () => {
+    let historyReads = 0, signedIn = true;
+    const fixture = component('RetentionSettings', { online: true, generation: 0 }, { retention: {
+        settings: { get: async () => { if (!signedIn) throw { status: 401 }; return storageDocument(); } },
+        capacity: { get: async () => ({ observedAt: new Date(now + (signedIn ? 0 : 1000)), usedBytes: signedIn ? 1024 : 2048, unknownAccounting: false }) },
+        history: { get: async () => { historyReads++; return { items: [] }; } },
+    } });
+    await fixture.run('load(true)');
+    assert.equal(historyReads, 1);
+    assert.equal(fixture.run('capacity.value.usedBytes'), 1024);
+    signedIn = false;
+    await fixture.run('load()');
+    assert.equal(historyReads, 1, 'access loss must prevent another history read');
+    assert.equal(fixture.run('capacity.value'), undefined);
+    assert.equal(fixture.run('settings.value'), undefined);
+    assert.equal(fixture.run('history.value'), undefined);
+    assert.equal(fixture.run('feedback.value'), '');
+    fixture.dispose();
 });
 test('No delivery intended requires positive unmatched evidence and never infers permission from empty delivery', async () => {
     let sent = 0;

@@ -9,6 +9,16 @@ const busy = ref(false), checking = ref(false);
 const reviewed = ref<CaptureDetailResponse[]>([]);
 let sequence = 0;
 const blocked = computed(() => props.disabled || !props.online || busy.value || !props.ids.length || props.ids.length > 100);
+async function readPhotograph(id: string) {
+    try {
+        const item = await api.management.captures.byId(id).get();
+        if (!item || String(item.id) !== id || !Number.isSafeInteger(item.curation?.revision)) throw new Error('Unavailable');
+        return item;
+    } catch (failure) {
+        if (handleFailure(failure) === 404) return undefined;
+        throw failure;
+    }
+}
 async function reconcile() {
     if (blocked.value) return;
     const recovering = checking.value;
@@ -17,13 +27,10 @@ async function reconcile() {
     try {
         const ids = [...props.ids], details: CaptureDetailResponse[] = [], missing: number[] = [];
         for (const [index, id] of ids.entries()) {
-            try {
-                const item = await api.management.captures.byId(id).get();
-                if (String(item?.id) !== id || !Number.isSafeInteger(item?.curation?.revision)) throw new Error('Unavailable');
-                details.push(item!);
-            }
-            catch (failure) { if (handleFailure(failure) !== 404) throw failure; missing.push(index + 1); }
+            const item = await readPhotograph(id);
             if (request !== sequence || access !== accessGeneration()) return;
+            if (item) details.push(item);
+            else missing.push(index + 1);
         }
         if (missing.length) {
             checking.value = true;
@@ -34,8 +41,12 @@ async function reconcile() {
         reviewed.value = details; checking.value = false;
         feedback.value = recovering ? `${details.length} selected photographs checked. Review current membership below before choosing Move.` : 'Selected photographs checked.';
         emit('refresh', [...props.ids]);
-    } catch (failure) { handleFailure(failure); if (request === sequence && access === accessGeneration()) { checking.value = true; feedback.value = 'Unable to check every selected photograph. Retry the check before moving.'; } }
-    finally { if (request === sequence) { busy.value = false; emit('busy', false); } }
+    } catch (failure) {
+        handleFailure(failure);
+        if (request !== sequence || access !== accessGeneration()) return;
+        checking.value = true;
+        feedback.value = 'Unable to check every selected photograph. Retry the check before moving.';
+    } finally { if (request === sequence) { busy.value = false; emit('busy', false); } }
 }
 async function move() {
     if (blocked.value || checking.value || !target.value[0]) return;
@@ -51,7 +62,12 @@ async function move() {
         const committed = outcomes.filter(item => item.status === 'applied').map(item => String(item.captureId));
         const failed = outcomes.filter(item => item.status !== 'applied');
         const unknown = ids.length - outcomes.length;
-        feedback.value = `${committed.length} moved · ${failed.length} failed · ${unknown} unknown.${failed.length ? ' ' + failed.map(item => `${reviewed.value.find(detail => detail.id === item.captureId)?.displayName ?? 'Photograph'}: ${item.status}`).join(' · ') : ''}`;
+        const failureDetails = failed.map(item => {
+            const name = reviewed.value.find(detail => detail.id === item.captureId)?.displayName ?? 'Photograph';
+            return `${name}: ${item.status}`;
+        });
+        const summary = `${committed.length} moved · ${failed.length} failed · ${unknown} unknown.`;
+        feedback.value = failureDetails.length ? `${summary} ${failureDetails.join(' · ')}` : summary;
         checking.value = failed.length > 0 || unknown > 0; reviewed.value = [];
         emit('completed', committed); emit('refresh', ids);
     } catch (failure) {
