@@ -493,11 +493,13 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
                 && database.Deliveries.Any(delivery => delivery.AssetId == member.AssetId
                     && delivery.State == DeliveryState.Running)))
             .Where(capture => !database.CaptureAssets.Any(member => member.CaptureId == capture.Id
-                && database.GalleryProtectionAssets.Any(protectionMember => protectionMember.AssetId == member.AssetId
+                && Queryable.Any(database.GalleryProtectionAssets,
+                    protectionMember => protectionMember.AssetId == member.AssetId
                     && database.GalleryProtections.Any((GalleryProtectionEntity protection) => protection.Id == protectionMember.ProtectionId
                         && protection.ExpiresAt > now))))
             .Where(capture => !database.CaptureAssets.Any(member => member.CaptureId == capture.Id
-                && database.PreservationHoldAssets.Any(holdMember => holdMember.AssetId == member.AssetId
+                && Queryable.Any(database.PreservationHoldAssets,
+                    holdMember => holdMember.AssetId == member.AssetId
                     && database.PreservationHolds.Any((PreservationHoldEntity hold) => hold.Id == holdMember.HoldId && hold.ResolvedAt == null))))
             .OrderBy(capture => capture.RecoverableUntil).ThenBy(capture => capture.Id)
             .Take(maximumCount)
@@ -532,11 +534,13 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
                             || admission.State == ShutterSpool.Application.Ingress.CameraTransferState.Received
                             || admission.State == ShutterSpool.Application.Ingress.CameraTransferState.Handoff)))
                 && !database.CaptureAssets.Any(member => member.CaptureId == capture.Id
-                    && database.GalleryProtectionAssets.Any(protectionMember => protectionMember.AssetId == member.AssetId
+                    && Queryable.Any(database.GalleryProtectionAssets,
+                        protectionMember => protectionMember.AssetId == member.AssetId
                         && database.GalleryProtections.Any((GalleryProtectionEntity protection) => protection.Id == protectionMember.ProtectionId
                             && protection.ExpiresAt > now)))
                 && !database.CaptureAssets.Any(member => member.CaptureId == capture.Id
-                    && database.PreservationHoldAssets.Any(holdMember => holdMember.AssetId == member.AssetId
+                    && Queryable.Any(database.PreservationHoldAssets,
+                        holdMember => holdMember.AssetId == member.AssetId
                         && database.PreservationHolds.Any((PreservationHoldEntity hold) => hold.Id == holdMember.HoldId && hold.ResolvedAt == null)))
             select (long?)((from member in database.CaptureAssets
                 join asset in database.Assets on member.AssetId equals asset.Id

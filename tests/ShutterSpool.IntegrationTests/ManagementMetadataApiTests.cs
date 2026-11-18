@@ -221,6 +221,10 @@ public sealed partial class ConfigurationApiTests
             $"/management/captures?limit=3&rating=0&startAt={ordered[1]}", token));
         Assert.Equal(ordered.Skip(1), equalTimestampStart.RootElement.GetProperty("items").EnumerateArray()
             .Select(item => item.GetProperty("id").GetGuid()));
+        using var equalTimestampOldestStart = JsonDocument.Parse(await fixture.Client.GetStringAsync(
+            $"/management/captures?limit=3&rating=0&oldestFirst=true&startAt={ordered[1]}", token));
+        Assert.Equal(new[] { ordered[1], ordered[0] }, equalTimestampOldestStart.RootElement.GetProperty("items")
+            .EnumerateArray().Select(item => item.GetProperty("id").GetGuid()));
 
         await using (var database = new ShutterSpoolDbContext(fixture.Database.Options))
         {

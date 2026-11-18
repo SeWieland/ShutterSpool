@@ -161,6 +161,7 @@ public sealed partial class ConfigurationApiTests
         Assert.NotNull(revoked["accessRevokedAt"]);
         Assert.Equal(expiresAt.ToUnixTimeMilliseconds(),
             revoked["expiresAt"]!.GetValue<DateTimeOffset>().ToUnixTimeMilliseconds());
+        await AssertTrashReclamationAsync(database, captureId, expectedBytes: 0, token);
 
         using var rejectedPurge = await fixture.Client.PostAsJsonAsync($"/management/trash/{captureId}/purge",
             new { expectedRevision = 1, confirm = true }, token);
@@ -170,6 +171,7 @@ public sealed partial class ConfigurationApiTests
 
         await database.GalleryProtections.Where(item => item.Id == protectionId).ExecuteUpdateAsync(update =>
             update.SetProperty(item => item.ExpiresAt, DateTimeOffset.UtcNow.AddSeconds(-1)), token);
+        await AssertTrashReclamationAsync(database, captureId, expectedBytes: 4, token);
         using var explicitPurge = await fixture.Client.PostAsJsonAsync($"/management/trash/{captureId}/purge",
             new { expectedRevision = 1, confirm = true }, token);
         string purgeBody = await explicitPurge.Content.ReadAsStringAsync(token);
@@ -223,6 +225,7 @@ public sealed partial class ConfigurationApiTests
         trash.EnsureSuccessStatusCode();
         await database.PreservationHolds.Where(item => item.Id == holdId).ExecuteUpdateAsync(update =>
             update.SetProperty(item => item.ReviewAt, DateTimeOffset.UtcNow.AddSeconds(-1)), token);
+        await AssertTrashReclamationAsync(database, captureId, expectedBytes: 0, token);
         using var blockedPurge = await fixture.Client.PostAsJsonAsync($"/management/trash/{captureId}/purge",
             new { expectedRevision = 1, confirm = true }, token);
         Assert.True(blockedPurge.StatusCode is HttpStatusCode.Conflict or (HttpStatusCode)423);
@@ -236,6 +239,7 @@ public sealed partial class ConfigurationApiTests
         Assert.NotNull(resolved["resolvedAt"]);
         Assert.Equal("operator", resolved["resolvedBy"]!.GetValue<string>());
         Assert.Equal("Obligation ended", resolved["resolution"]!.GetValue<string>());
+        await AssertTrashReclamationAsync(database, captureId, expectedBytes: 4, token);
 
         using var purge = await fixture.Client.PostAsJsonAsync($"/management/trash/{captureId}/purge",
             new { expectedRevision = 1, confirm = true }, token);
@@ -262,6 +266,27 @@ public sealed partial class ConfigurationApiTests
         Assert.NotEmpty(removal);
         Assert.All(removal, operation => Assert.Equal("Removed", operation.State));
         Assert.False(originalExists, diagnostic);
+    }
+
+    private static async Task AssertTrashReclamationAsync(ShutterSpoolDbContext database, Guid captureId,
+        long expectedBytes, CancellationToken cancellationToken)
+    {
+        DateTimeOffset dueAt = await database.Captures.Where(capture => capture.Id == captureId)
+            .Select(capture => capture.RecoverableUntil!.Value).SingleAsync(cancellationToken);
+        var store = new EfRetentionRemovalStore(database, new EfCaptureRetentionStore(database, TimeProvider.System),
+            TimeProvider.System);
+        IReadOnlyList<RetentionRemovalCandidate> candidates = await store.GetDueTrashCandidatesAsync(
+            10, dueAt, underPressure: false, cancellationToken);
+        if (expectedBytes == 0)
+        {
+            Assert.Empty(candidates);
+        }
+        else
+        {
+            RetentionRemovalCandidate candidate = Assert.Single(candidates);
+            Assert.Equal((captureId, expectedBytes), (candidate.CaptureId, candidate.OriginalBytes));
+        }
+        Assert.Equal(expectedBytes, await store.GetPendingReclamationBytesAsync(dueAt, cancellationToken));
     }
 
     [Fact]

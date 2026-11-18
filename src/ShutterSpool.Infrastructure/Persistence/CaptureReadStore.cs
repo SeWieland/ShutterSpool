@@ -129,16 +129,7 @@ internal sealed class CaptureReadStore(ShutterSpoolDbContext database, TimeProvi
         CaptureReadFilter filter, DateTimeOffset? before, Guid? beforeId, CancellationToken cancellationToken)
     {
         if (filter.StartAtCaptureId is Guid startAtId)
-        {
-            DateTimeOffset? startAt = await query.Where(capture => capture.Id == startAtId)
-                .Select(capture => (DateTimeOffset?)capture.FirstAcceptedAt).FirstOrDefaultAsync(cancellationToken);
-            if (startAt is DateTimeOffset acceptedAt)
-                query = filter.OldestFirst
-                    ? query.Where(capture => capture.FirstAcceptedAt > acceptedAt
-                        || capture.FirstAcceptedAt == acceptedAt && capture.Id.CompareTo(startAtId) >= 0)
-                    : query.Where(capture => capture.FirstAcceptedAt < acceptedAt
-                        || capture.FirstAcceptedAt == acceptedAt && capture.Id.CompareTo(startAtId) <= 0);
-        }
+            query = await ApplyInclusiveStartAsync(query, startAtId, filter.OldestFirst, cancellationToken);
         if (before is not null && beforeId is not null)
             query = filter.OldestFirst
                 ? query.Where(capture => capture.FirstAcceptedAt > before
@@ -147,6 +138,20 @@ internal sealed class CaptureReadStore(ShutterSpoolDbContext database, TimeProvi
                     || (capture.FirstAcceptedAt == before && capture.Id.CompareTo(beforeId.Value) < 0));
 
         return query;
+    }
+
+    private static async Task<IQueryable<CaptureEntity>> ApplyInclusiveStartAsync(IQueryable<CaptureEntity> query,
+        Guid startAtId, bool oldestFirst, CancellationToken cancellationToken)
+    {
+        DateTimeOffset? startAt = await query.Where(capture => capture.Id == startAtId)
+            .Select(capture => (DateTimeOffset?)capture.FirstAcceptedAt).FirstOrDefaultAsync(cancellationToken);
+        if (startAt is not DateTimeOffset acceptedAt) return query;
+
+        return oldestFirst
+            ? query.Where(capture => capture.FirstAcceptedAt > acceptedAt
+                || capture.FirstAcceptedAt == acceptedAt && capture.Id.CompareTo(startAtId) >= 0)
+            : query.Where(capture => capture.FirstAcceptedAt < acceptedAt
+                || capture.FirstAcceptedAt == acceptedAt && capture.Id.CompareTo(startAtId) <= 0);
     }
 
     private IQueryable<Guid> CapturesRequiringAttention(DateTimeOffset now) => database.Captures.AsNoTracking()
