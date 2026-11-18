@@ -5,6 +5,7 @@ using ShutterSpool.Application.Security;
 using ShutterSpool.Application.Sources;
 using ShutterSpool.Server.Hosting;
 using ShutterSpool.Domain.Sources;
+using System.Net.Mime;
 using System.Text;
 
 namespace ShutterSpool.Server.Api.Sources;
@@ -45,7 +46,7 @@ public static class SourceEndpoints
         management.MapSourceCapabilityEndpoints();
         authorized.MapGet("/sources/{id:guid}", GetAsync).WithSummary("Read Source configuration").Produces<SourceConfigurationResponse>().ProducesProblem(404);
         authorized.MapPut("/sources/{id:guid}", UpdateAsync).WithSummary("Update Source configuration")
-            .Produces<SourceConfigurationResponse>().ProducesValidationProblem().Produces<SourceConfigurationConflictProblemDetails>(409, "application/problem+json");
+            .Produces<SourceConfigurationResponse>().ProducesValidationProblem().Produces<SourceConfigurationConflictProblemDetails>(409, MediaTypeNames.Application.ProblemJson);
         authorized.MapPost("/sources", CreateAsync)
             .WithSummary("Create a camera Source")
             .WithDescription("Source curation defaults to Delay for one hour. Delay accepts 1 to 31,536,000 seconds. The returned secret is shown once.")
@@ -53,18 +54,18 @@ public static class SourceEndpoints
         authorized.MapPost("/sources/{id:guid}/regenerate-secret", RegenerateAsync)
             .WithSummary("Regenerate a Source ingest secret").Produces<RegeneratedSourceSecretResponse>()
             .ProducesValidationProblem()
-            .ProducesProblem(404).Produces<SourceConfigurationConflictProblemDetails>(409, "application/problem+json");
+            .ProducesProblem(404).Produces<SourceConfigurationConflictProblemDetails>(409, MediaTypeNames.Application.ProblemJson);
         authorized.MapPut("/sources/{id:guid}/ingress", SetIngressAsync)
             .WithSummary("Suspend or re-enable Source ingress").Produces<SourceConfigurationResponse>()
-            .ProducesProblem(404).Produces<SourceConfigurationConflictProblemDetails>(409, "application/problem+json");
+            .ProducesProblem(404).Produces<SourceConfigurationConflictProblemDetails>(409, MediaTypeNames.Application.ProblemJson);
         authorized.MapDelete("/sources/{id:guid}", RemoveAsync).WithSummary("Remove or archive a Source")
             .Produces<SourceRemovalResponse>().ProducesProblem(404)
-            .Produces<SourceConfigurationConflictProblemDetails>(409, "application/problem+json");
+            .Produces<SourceConfigurationConflictProblemDetails>(409, MediaTypeNames.Application.ProblemJson);
         authorized.MapPut("/sources/{id:guid}/curation-policy", UpdatePolicyAsync)
             .WithSummary("Change a Source's curation policy")
             .WithDescription("The change applies to Captures first grouped after the update. Existing Captures retain their policy and deadline anchor.")
             .Produces<SourceConfigurationResponse>().ProducesValidationProblem().ProducesProblem(404)
-            .Produces<SourceConfigurationConflictProblemDetails>(409, "application/problem+json");
+            .Produces<SourceConfigurationConflictProblemDetails>(409, MediaTypeNames.Application.ProblemJson);
         return management;
     }
 
@@ -151,8 +152,10 @@ public static class SourceEndpoints
         catch (UnchangedSourceCredentialException) { return Invalid(new ArgumentException("Choose a different username or password.", "password")); }
         catch (SourceUsernameConflictException) { return UsernameConflict(); }
         if (result.Current is null) return Missing();
-        if (result.Applied) await displayCache.InvalidateAsync(id, token);
-        return result.Applied ? Results.Ok(new RegeneratedSourceSecretResponse(request.PasswordMode == "Custom" ? null : result.Secret, SourceConfigurationResponse.From(result.Current))) : Conflict(result.Current);
+        if (!result.Applied) return Conflict(result.Current);
+        await displayCache.InvalidateAsync(id, token);
+        return Results.Ok(new RegeneratedSourceSecretResponse(request.PasswordMode == "Custom" ? null : result.Secret,
+            SourceConfigurationResponse.From(result.Current)));
     }
 
     private static async Task<IResult> SetIngressAsync(Guid id, SetSourceIngressRequest request,
@@ -172,13 +175,17 @@ public static class SourceEndpoints
         return Results.Ok(new SourceRemovalResponse(result.Removed ? "deleted" : "archived"));
     }
 
-    private static IResult WriteResult(SourceConfigurationWrite result) => result.Current is null ? Missing()
-        : result.Applied ? Results.Ok(SourceConfigurationResponse.From(result.Current)) : Conflict(result.Current);
+    private static IResult WriteResult(SourceConfigurationWrite result)
+    {
+        if (result.Current is null) return Missing();
+        if (!result.Applied) return Conflict(result.Current);
+        return Results.Ok(SourceConfigurationResponse.From(result.Current));
+    }
 
     private static IResult Conflict(SourceManagementConfiguration current) => Results.Json(new SourceConfigurationConflictProblemDetails
     {
         Status = 409, Title = "Source configuration revision conflict", Current = SourceConfigurationResponse.From(current),
-    }, statusCode: 409, contentType: "application/problem+json");
+    }, statusCode: 409, contentType: MediaTypeNames.Application.ProblemJson);
 
     private static IResult Missing() => Results.Problem(statusCode: 404, title: "Source not found");
     private static IResult Invalid(string error) => Results.ValidationProblem(new Dictionary<string, string[]> { ["request"] = [error] });

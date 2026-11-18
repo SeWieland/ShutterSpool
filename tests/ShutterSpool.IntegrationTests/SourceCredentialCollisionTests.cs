@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using ShutterSpool.Application.Sources;
 using ShutterSpool.Infrastructure.Persistence;
 using Npgsql;
 using ShutterSpool.Server.Api.Sources;
@@ -9,11 +11,12 @@ namespace ShutterSpool.IntegrationTests;
 public sealed partial class ConfigurationApiTests
 {
     [Theory]
-    [InlineData(1, 201, 2, 1)]
-    [InlineData(4, 201, 5, 1)]
-    [InlineData(99, 409, 5, 0)]
-    public async Task Generated_username_collision_retries_atomically_and_stops_after_five_attempts(
-        int failuresToInject, int expectedStatus, long expectedAttempts, int expectedSourceCount)
+    [InlineData(null, 1, 201, 2, 1)]
+    [InlineData(null, 4, 201, 5, 1)]
+    [InlineData(null, 99, 409, 5, 0)]
+    [InlineData("supplied-camera", 1, 409, 1, 0)]
+    public async Task Username_collision_retries_only_generated_usernames_and_stops_after_five_attempts(
+        string? username, int failuresToInject, int expectedStatus, long expectedAttempts, int expectedSourceCount)
     {
         await using var fixture = await ConfigurationApiFixture.CreateAsync();
         CancellationToken token = TestContext.Current.CancellationToken;
@@ -49,7 +52,8 @@ public sealed partial class ConfigurationApiTests
 
         using HttpResponseMessage response = await fixture.Client.PostAsJsonAsync("/management/sources", new
         {
-            name = "Generated username collision",
+            name = "Camera username collision",
+            username,
             sourceType = "CameraFtpUpload",
             connectionProfile = "ModernFtps",
         }, token);
@@ -60,6 +64,9 @@ public sealed partial class ConfigurationApiTests
             Assert.Matches("^[a-z]{6,8}$", created.Username);
             Assert.Equal(20, created.Secret!.Length);
             Assert.All(created.Secret, character => Assert.Contains(character, "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"));
+            await using var scope = fixture.Scope();
+            var verifier = scope.ServiceProvider.GetRequiredService<SourceCredentialVerifier>();
+            Assert.Equal(created.Id, (await verifier.VerifyAsync(created.Username, created.Secret, cancellationToken: token))?.SourceId);
         }
         else
         {

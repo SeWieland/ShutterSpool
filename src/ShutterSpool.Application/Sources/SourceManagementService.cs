@@ -50,11 +50,11 @@ public interface ISourceConfigurationStore
         Guid collectionId, CancellationToken cancellationToken);
     Task<SourceConfigurationWrite> ReplaceCredentialAsync(Guid id, long expectedRevision, string username, byte[] verifier, CancellationToken cancellationToken);
     Task<SourceConfigurationWrite> SetIngressEnabledAsync(Guid id, long expectedRevision, bool enabled, CancellationToken cancellationToken);
+    Task<SourceIngressState?> SetIngressEnabledAsync(Guid id, bool enabled, CancellationToken cancellationToken);
     Task<SourceRemovalWrite> RemoveAsync(Guid id, long expectedRevision, CancellationToken cancellationToken);
     Task CreateAsync(SourceProvisioning source, CancellationToken cancellationToken);
     Task<SourcePolicy?> UpdatePolicyAsync(Guid id, SourceCurationMode mode, int delaySeconds, CancellationToken cancellationToken);
     Task<bool> RegenerateAsync(Guid id, byte[] verifier, CancellationToken cancellationToken);
-    Task<SourceIngressState?> SetIngressEnabledAsync(Guid id, bool enabled, CancellationToken cancellationToken);
     Task<SourceCredential?> FindCredentialAsync(string username, CancellationToken cancellationToken);
 }
 
@@ -99,32 +99,36 @@ public sealed class SourceManagementService(ISourceConfigurationStore store, ICr
             CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(name) || name.Trim().Length > 256) throw new ArgumentException("Provide a source name of at most 256 characters.");
-        (SourceCurationMode policy, int delay) = ParsePolicy(mode, delaySeconds);
+        (SourceCurationMode curationMode, int delay) = ParsePolicy(mode, delaySeconds);
         Guid id = Guid.NewGuid();
         string username = requestedUsername ?? GenerateUsername();
         ValidateUsername(username);
         string secret = ResolvePassword(passwordMode, requestedPassword);
         string root = $"sources/{Guid.NewGuid():N}";
         ValidateProfile(sourceType, connectionProfile);
-        var provisioning = new SourceProvisioning(id, name.Trim(), policy, delay, username, root,
+        var provisioning = new SourceProvisioning(id, name.Trim(), curationMode, delay, username, root,
             protector.CreateVerifier(secret), sourceType, connectionProfile, collectionId ?? ShutterSpool.Domain.Collections.CollectionName.BuiltInId);
-        for (int attempt = 0; ; attempt++)
+        int maxAttempts = requestedUsername is null ? 5 : 1;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            try { await store.CreateAsync(provisioning, cancellationToken); break; }
-            catch (SourceUsernameConflictException) when (requestedUsername is null && attempt < 4)
+            try
+            {
+                await store.CreateAsync(provisioning, cancellationToken);
+                break;
+            }
+            catch (SourceUsernameConflictException) when (attempt < maxAttempts)
             {
                 if (await store.GetAsync(id, cancellationToken) is not null) throw;
-                username = GenerateUsername();
-                provisioning = provisioning with { Username = username };
+                provisioning = provisioning with { Username = GenerateUsername() };
             }
         }
-        return new(id, username, root, secret);
+        return new(id, provisioning.Username, root, secret);
     }
 
     public Task<SourcePolicy?> UpdatePolicyAsync(Guid id, string mode, int? delaySeconds, CancellationToken cancellationToken)
     {
-        (SourceCurationMode policy, int delay) = ParsePolicy(mode, delaySeconds);
-        return store.UpdatePolicyAsync(id, policy, delay, cancellationToken);
+        (SourceCurationMode curationMode, int delay) = ParsePolicy(mode, delaySeconds);
+        return store.UpdatePolicyAsync(id, curationMode, delay, cancellationToken);
     }
 
     public async Task<SourceConfigurationWrite> UpdateConfigurationAsync(Guid id, long expectedRevision,
@@ -134,9 +138,9 @@ public sealed class SourceManagementService(ISourceConfigurationStore store, ICr
     {
         if (string.IsNullOrWhiteSpace(name) || name.Trim().Length > 256)
             throw new ArgumentException("Provide a source name of at most 256 characters.");
-        (SourceCurationMode policy, int delay) = ParsePolicy(mode, delaySeconds);
+        (SourceCurationMode curationMode, int delay) = ParsePolicy(mode, delaySeconds);
         ValidateProfile(sourceType, connectionProfile);
-        return await store.UpdateConfigurationAsync(id, expectedRevision, name.Trim(), policy, delay, sourceType, connectionProfile,
+        return await store.UpdateConfigurationAsync(id, expectedRevision, name.Trim(), curationMode, delay, sourceType, connectionProfile,
             collectionId ?? (await store.GetAsync(id, token))?.CollectionId ?? ShutterSpool.Domain.Collections.CollectionName.BuiltInId, token);
     }
 
@@ -153,16 +157,16 @@ public sealed class SourceManagementService(ISourceConfigurationStore store, ICr
         return new(result.Applied, result.Current, result.Applied ? secret : null);
     }
 
-    private string ResolvePassword(string? mode, string? password)
+    private string ResolvePassword(string? passwordMode, string? password)
     {
-        if (mode is not (null or "Generated" or "Custom")) throw new ArgumentException("Choose Generated or Custom.", "passwordMode");
-        if (mode == "Custom")
+        if (passwordMode is not (null or "Generated" or "Custom")) throw new ArgumentException("Choose Generated or Custom.", nameof(passwordMode));
+        if (passwordMode == "Custom")
         {
-            if (password is null) throw new ArgumentException("A custom password is required.", "password");
+            if (password is null) throw new ArgumentException("A custom password is required.", nameof(password));
             ValidatePassword(password);
             return password;
         }
-        if (password is not null) throw new ArgumentException("Password is only valid with Custom mode.", "password");
+        if (password is not null) throw new ArgumentException("Password is only valid with Custom mode.", nameof(password));
         return GeneratePassword();
     }
 
@@ -170,7 +174,7 @@ public sealed class SourceManagementService(ISourceConfigurationStore store, ICr
     {
         if (password.Length < policy.MinimumLength || password.Length > CameraCredentialPolicy.MaximumLength
             || password.Any(character => character is < '!' or > '~'))
-            throw new ArgumentException($"Use {policy.MinimumLength} to {CameraCredentialPolicy.MaximumLength} non-space printable ASCII characters.", "password");
+            throw new ArgumentException($"Use {policy.MinimumLength} to {CameraCredentialPolicy.MaximumLength} non-space printable ASCII characters.", nameof(password));
     }
 
     private string GeneratePassword()
@@ -189,7 +193,7 @@ public sealed class SourceManagementService(ISourceConfigurationStore store, ICr
     {
         if (username.Length is < 1 or > 64 || !char.IsAsciiLetterOrDigit(username[0])
             || username.Any(character => !char.IsAsciiLetterOrDigit(character) && character is not ('_' or '-')))
-            throw new ArgumentException("Use 1 to 64 ASCII letters, digits, underscores or hyphens, starting with a letter or digit.", "username");
+            throw new ArgumentException("Use 1 to 64 ASCII letters, digits, underscores or hyphens, starting with a letter or digit.", nameof(username));
     }
 
     public Task<SourceConfigurationWrite> SetIngressEnabledAsync(Guid id, long expectedRevision, bool enabled,

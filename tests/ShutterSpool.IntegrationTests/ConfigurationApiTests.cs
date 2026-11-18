@@ -250,7 +250,13 @@ public sealed partial class ConfigurationApiTests
         using HttpResponseMessage unchanged = await fixture.Client.PostAsJsonAsync($"/management/sources/{source.Id}/regenerate-secret",
             new RegenerateSourceSecretRequest(0, PasswordMode: "Custom", Password: "!A23456789~!"), token);
         Assert.Equal(HttpStatusCode.BadRequest, unchanged.StatusCode);
-        Assert.DoesNotContain("!A23456789~!", await unchanged.Content.ReadAsStringAsync(token), StringComparison.Ordinal);
+        string unchangedBody = await unchanged.Content.ReadAsStringAsync(token);
+        Assert.DoesNotContain("!A23456789~!", unchangedBody, StringComparison.Ordinal);
+        using var problem = JsonDocument.Parse(unchangedBody);
+        JsonProperty error = Assert.Single(problem.RootElement.GetProperty("errors").EnumerateObject());
+        Assert.Equal("password", error.Name);
+        Assert.Equal(new ArgumentException("Choose a different username or password.", error.Name).Message,
+            Assert.Single(error.Value.EnumerateArray()).GetString());
 
         using HttpResponseMessage replaced = await fixture.Client.PostAsJsonAsync($"/management/sources/{source.Id}/regenerate-secret",
             new RegenerateSourceSecretRequest(0, Username: "camera-two", PasswordMode: "Custom", Password: "CustomCamera!43"), token);
