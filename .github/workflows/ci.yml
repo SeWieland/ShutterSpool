@@ -226,6 +226,7 @@ jobs:
           else
             echo '::warning::Frontend coverage report missing. SonarQube coverage will be incomplete.'
           fi
+          # The PostgreSQL bootstrap script uses psql syntax outside Sonar's Oracle PL/SQL dialect.
           "$RUNNER_TEMP/sonar/dotnet-sonarscanner" begin \
             /k:"$SONAR_PROJECT_KEY" \
             /o:"$SONAR_ORGANIZATION" \
@@ -233,7 +234,8 @@ jobs:
             /d:sonar.host.url="https://sonarcloud.io" \
             /d:sonar.projectBaseDir="$GITHUB_WORKSPACE" \
             /d:sonar.scanner.scanAll=true \
-            /d:sonar.exclusions="**/bin/**,**/obj/**,**/node_modules/**,**/.nuxt/**,**/.output/**,**/dist/**,.nuget/**,artifacts/**,**/TestResults/**,**/coverage/**,src/ShutterSpool.Web/app/api/**,src/ShutterSpool.Server/openapi/**,src/ShutterSpool.Server/wwwroot/**" \
+            /d:sonar.python.version=3.10,3.11,3.12 \
+            /d:sonar.exclusions="**/bin/**,**/obj/**,**/node_modules/**,**/.nuxt/**,**/.output/**,**/dist/**,.nuget/**,artifacts/**,**/TestResults/**,**/coverage/**,src/ShutterSpool.Web/app/api/**,src/ShutterSpool.Server/openapi/**,src/ShutterSpool.Server/wwwroot/**,deploy/package/workspace-databases.sql" \
             "${coverage_args[@]}"
       - name: Build for analysis
         run: dotnet build ShutterSpool.slnx --no-restore --no-incremental --disable-build-servers
