@@ -4,7 +4,7 @@ import { api, cancellable, handleFailure } from '../lib/api';
 import { accessGeneration, session } from '../lib/session';
 import { createReadPool } from '../lib/read-pool';
 import { isDestinationKindEnabled } from '../lib/destination-capabilities';
-import type { DestinationResponse, DestinationRoutingResponse, RoutingDeliveryPageResponse, RoutingRuleDto } from '../api/models';
+import type { DestinationResponse, DestinationRoutingResponse, LocalDestinationTestResponse, RoutingDeliveryPageResponse, RoutingRuleDto, WebDavDestinationTestResponse } from '../api/models';
 const props = defineProps<{
     gridMaximumDimension?: number;
     online: boolean;
@@ -68,7 +68,12 @@ async function removeDestination() {
         }
         await list();
         if (!operationCurrent() || selected.value) return;
-        feedback.value = result?.outcome === 'archived' ? `${target.name} archived. Existing delivery history is preserved.` : result?.outcome === 'deleted' ? `${target.name} deleted.` : 'Removal outcome unavailable. Refresh destinations to confirm their state.';
+        if (result?.outcome === 'archived')
+            feedback.value = `${target.name} archived. Existing delivery history is preserved.`;
+        else if (result?.outcome === 'deleted')
+            feedback.value = `${target.name} deleted.`;
+        else
+            feedback.value = 'Removal outcome unavailable. Refresh destinations to confirm their state.';
     } catch (failure) {
         if (!current()) return;
         const status = handleFailure(failure);
@@ -183,7 +188,10 @@ function pathExample(rule: Rule) {
     const render = (template: string) => template.replace(/\{([A-Za-z][A-Za-z0-9]*)\}/g, (_, fact: string) => exampleFacts[fact] ?? `[unknown: ${fact}]`);
     const base = destination.value?.kind === 'local' ? root.value : url.value;
     const relative = [render(rule.folderTemplate ?? ''), render(rule.filenameTemplate ?? '')].filter(Boolean).join('/');
-    return base ? `${base.replace(/[/\\]+$/, '')}/${relative}` : `(root not configured)/${relative}`;
+    if (!base) return `(root not configured)/${relative}`;
+    let end = base.length;
+    while (end > 0 && (base[end - 1] === '/' || base[end - 1] === '\\')) end--;
+    return `${base.slice(0, end)}/${relative}`;
 }
 function loadedStatus(id: string) {
     if (summaryUnavailable.value[id] || props.connected === false) return { icon: 'i-lucide-info', state: 'neutral', text: 'Recent work is unavailable or last known; reconnect or refresh to verify' };
@@ -197,7 +205,18 @@ function loadedStatus(id: string) {
 function destinationKindLabel(kind: string | null | undefined) {
     return kind === 'local' ? 'Local storage' : kind === 'webdav' ? 'WebDAV / Nextcloud' : `${kind ?? 'Unknown'} destination`;
 }
-const operators = (fact: string) => ['rating', 'size', 'captureTime'].includes(fact) ? ['equals', 'gt', 'gte', 'lt', 'lte'] : fact === 'label' ? ['equals', 'present', 'absent'] : fact === 'tags' ? ['contains'] : fact === 'suppliedName' ? ['equals', 'glob'] : ['equals'];
+function operators(fact: string) {
+    switch (fact) {
+        case 'rating':
+        case 'size':
+        case 'captureTime':
+            return ['equals', 'gt', 'gte', 'lt', 'lte'];
+        case 'label': return ['equals', 'present', 'absent'];
+        case 'tags': return ['contains'];
+        case 'suppliedName': return ['equals', 'glob'];
+        default: return ['equals'];
+    }
+}
 let listPending: boolean | undefined;
 let listing: Promise<void> | undefined;
 async function refreshDestinationCapabilities() {
@@ -302,6 +321,42 @@ async function open(id: string) {
 function assignRules(value: DestinationRoutingResponse) {
     rules.value = (value.rules ?? []).map(rule => ({ ...rule, conditions: (rule.conditions ?? []).map(condition => ({ fact: condition.fact ?? 'variant', operator: condition.operator ?? 'equals', value: String(condition.value?.getValue() ?? '') })) }));
 }
+function applyConfiguration(config: DestinationResponse, replaceDraft: boolean) {
+    if (replaceDraft) {
+        dirtySettings.value = false;
+        configConflict.value = false;
+        password.value = '';
+    }
+    selectedConfiguration.value = config;
+    const index = destinations.value.findIndex(d => d.id === config.id);
+    if (index >= 0)
+        destinations.value[index] = config;
+    else
+        destinations.value.push(config);
+    if (dirtySettings.value && settingsRevision.value !== config.configurationRevision)
+        configConflict.value = true;
+    if (!dirtyName.value)
+        name.value = config.name ?? '';
+    if (!dirtyProvider.value) {
+        kind.value = config.kind ?? 'local';
+        root.value = config.localRootPath ?? '';
+        url.value = config.webDavCollectionUrl ?? '';
+        username.value = config.webDavUsername ?? '';
+    }
+    if (!dirtySettings.value)
+        settingsRevision.value = config.configurationRevision;
+}
+function applyRouting(route: DestinationRoutingResponse, replaceDraft: boolean) {
+    if (replaceDraft) {
+        dirtyRules.value = false;
+        ruleConflict.value = false;
+    }
+    if (!dirtyRules.value)
+        assignRules(route);
+    else if (route.configurationRevision !== routing.value?.configurationRevision)
+        ruleConflict.value = true;
+    routing.value = route;
+}
 async function read(replaceDraft: 'settings' | 'rules' | 'all' | 'none' = 'none') {
     if (!selected.value)
         return;
@@ -310,6 +365,7 @@ async function read(replaceDraft: 'settings' | 'rules' | 'all' | 'none' = 'none'
     const access = accessGeneration();
     editorController?.abort();
     const controller = editorController = new AbortController();
+    const isCurrent = () => !disposed && !controller.signal.aborted && request === sequence && access === accessGeneration() && id === selected.value;
     try {
         const endpoint = api.management.destinations.byId(id);
         const options = { options: [cancellable(controller.signal)] };
@@ -317,56 +373,19 @@ async function read(replaceDraft: 'settings' | 'rules' | 'all' | 'none' = 'none'
             metadataReads.run(controller.signal, () => endpoint.get(options)),
             metadataReads.run(controller.signal, () => endpoint.routing.get(options)),
         ]);
-        if (disposed || controller.signal.aborted || request !== sequence || access !== accessGeneration() || id !== selected.value)
+        if (!isCurrent())
             return;
-        if (String(config?.id) !== id || String(route?.destinationId) !== id)
+        if (!config || !route || String(config.id) !== id || String(route.destinationId) !== id)
             throw new Error('Destination identity was not confirmed');
-        const replaceSettings = replaceDraft === 'settings' || replaceDraft === 'all';
-        const replaceRules = replaceDraft === 'rules' || replaceDraft === 'all';
-        if (replaceSettings) {
-            dirtySettings.value = false;
-            configConflict.value = false;
-            password.value = '';
-        }
-        if (replaceRules) {
-            dirtyRules.value = false;
-            ruleConflict.value = false;
-        }
-        if (config) {
-            selectedConfiguration.value = config;
-            const index = destinations.value.findIndex(d => d.id === config.id);
-            if (index >= 0)
-                destinations.value[index] = config;
-            else
-                destinations.value.push(config);
-            if (dirtySettings.value && settingsRevision.value !== config.configurationRevision)
-                configConflict.value = true;
-            if (replaceSettings || !dirtyName.value)
-                name.value = config.name ?? '';
-            if (replaceSettings || !dirtyProvider.value) {
-                kind.value = config.kind ?? 'local';
-                root.value = config.localRootPath ?? '';
-                url.value = config.webDavCollectionUrl ?? '';
-                username.value = config.webDavUsername ?? '';
-            }
-            if (replaceSettings || !dirtySettings.value) {
-                settingsRevision.value = config.configurationRevision;
-            }
-        }
-        if (route) {
-            if (dirtyRules.value && route.configurationRevision !== routing.value?.configurationRevision)
-                ruleConflict.value = true;
-            else if (replaceRules || !dirtyRules.value)
-                assignRules(route);
-            routing.value = route;
-        }
+        applyConfiguration(config, replaceDraft === 'settings' || replaceDraft === 'all');
+        applyRouting(route, replaceDraft === 'rules' || replaceDraft === 'all');
         authoritativeOwner.value = id;
         if (tab.value === 'Work')
             await readWork();
         return true;
     }
     catch (error) {
-        if (disposed || controller.signal.aborted || request !== sequence || access !== accessGeneration() || id !== selected.value) return false;
+        if (!isCurrent()) return false;
         handleFailure(error);
         feedback.value = 'Unable to refresh destination. Displayed state may be stale.';
         return false;
@@ -518,140 +537,164 @@ async function saveRules() {
         if (generation === editorGeneration && id === selected.value && access === accessGeneration()) busy.value = false;
     }
 }
-async function settings(action: 'create' | 'name' | 'provider' | 'toggle' | 'test') {
-    if (busy.value || configConflict.value || !props.online || action !== 'create' && authoritativeOwner.value !== selected.value)
-        return;
-    if (action === 'create' ? !canCreateKind(kind.value) : !selectedKindEnabled.value)
-        return;
-    if ((action === 'toggle' && (dirtyRules.value || ruleConflict.value)) || (setupIncomplete.value && ruleConflict.value && (action === 'provider' || action === 'test')))
-        return;
+type SettingsAction = 'create' | 'name' | 'provider' | 'toggle' | 'test';
+type EditorOwner = ReturnType<typeof editorOwner>;
+function editorOwner() {
+    return { access: accessGeneration(), id: selected.value, generation: editorGeneration };
+}
+function ownsEditor(owner: EditorOwner) {
+    return owner.access === accessGeneration() && owner.id === selected.value && owner.generation === editorGeneration;
+}
+function canChangeSettings(action: SettingsAction) {
+    if (busy.value || configConflict.value || !props.online) return false;
+    if (action === 'create') return canCreateKind(kind.value);
+    if (authoritativeOwner.value !== selected.value || !selectedKindEnabled.value) return false;
+    if (action === 'toggle') return !dirtyRules.value && !ruleConflict.value;
+    if (setupIncomplete.value && ruleConflict.value && (action === 'provider' || action === 'test')) return false;
     if (action === 'test' && localFolderNeedsSave.value) {
         feedback.value = 'Choose a destination folder, then use Save and test folder.';
-        return;
+        return false;
     }
-    const access = accessGeneration();
-    const id = selected.value;
-    const generation = editorGeneration;
-    let ownsEditor = () => access === accessGeneration() && generation === editorGeneration && id === selected.value;
+    return true;
+}
+async function createDestination(owner: EditorOwner) {
+    const value = await api.management.destinations.post({ name: name.value, kind: kind.value });
+    if (owner.access !== accessGeneration()) return;
+    if (value?.id) {
+        const createdId = String(value.id);
+        markSetup(createdId, true);
+        if (!ownsEditor(owner)) {
+            await list();
+            return;
+        }
+        dirtyName.value = dirtyProvider.value = false;
+        await open(createdId);
+        owner.id = createdId;
+        owner.generation = editorGeneration;
+        tab.value = 'Settings';
+        if (routing.value?.enabled) await ensureSetupDisabled();
+        await list();
+    }
+    if (owner.access === accessGeneration() && selected.value === String(value?.id ?? ''))
+        feedback.value = 'Save provider settings and pass their test to complete setup.';
+}
+function providerTestFeedback(result: LocalDestinationTestResponse | WebDavDestinationTestResponse | undefined, currentRevisionTested: boolean) {
+    if (result?.errorCode === 'LOCAL_ROOT_NOT_CONFIGURED')
+        return 'No destination folder is saved. Choose a folder, then use Save and test folder.';
+    if (!result?.writable)
+        return `Saved settings test failed: ${result?.errorCode ?? 'unavailable'}. Check the destination configuration.`;
+    if (!currentRevisionTested)
+        return `Saved revision ${result.testedConfigurationRevision} is writable. Refresh and test the current revision before completing setup.`;
+    return `Saved revision ${result.testedConfigurationRevision} is writable.`;
+}
+async function testSavedSettings(owner: EditorOwner) {
+    const endpoint = api.management.destinations.byId(owner.id);
+    const result = destination.value?.kind === 'local' ? await endpoint.local.test.post() : await endpoint.webdav.test.post();
+    if (!ownsEditor(owner)) return;
+    const refreshed = await read();
+    if (!ownsEditor(owner)) return;
+    const testedRevision = result?.testedConfigurationRevision;
+    const currentRevisionTested = refreshed === true && authoritativeOwner.value === owner.id && testedRevision != null
+        && testedRevision === settingsRevision.value && testedRevision === routing.value?.configurationRevision;
+    if (result?.writable && currentRevisionTested && routing.value?.enabled === false && !dirtySettings.value && !configConflict.value)
+        markSetup(owner.id, false);
+    feedback.value = providerTestFeedback(result, currentRevisionTested);
+}
+async function saveSettings(action: 'name' | 'provider' | 'toggle', owner: EditorOwner) {
+    const endpoint = api.management.destinations.byId(owner.id);
+    const expectedRevision = settingsRevision.value;
+    let value;
+    switch (action) {
+        case 'name':
+            value = await endpoint.put({ name: name.value, expectedRevision });
+            if (!ownsEditor(owner)) return;
+            dirtyName.value = false;
+            break;
+        case 'provider':
+            if (destination.value?.kind === 'local')
+                value = await endpoint.local.put({ rootPath: root.value, expectedRevision });
+            else
+                value = await endpoint.webdav.put({ collectionUrl: url.value, username: username.value, password: password.value || null, expectedRevision });
+            if (!ownsEditor(owner)) return;
+            dirtyProvider.value = false;
+            password.value = '';
+            break;
+        case 'toggle':
+            if (setupIncomplete.value) return;
+            value = await endpoint.routing.put({ expectedRevision: routing.value?.configurationRevision, rules: routing.value?.rules ?? [], enabled: !routing.value?.enabled });
+            if (!ownsEditor(owner)) return;
+            if (value) routing.value = value;
+            break;
+    }
+    if (value?.configurationRevision != null)
+        settingsRevision.value = value.configurationRevision;
+    feedback.value = 'Saved settings updated.';
+    await read();
+}
+function settingsFailed(error: unknown) {
+    const status = handleFailure(error);
+    configConflict.value = status !== 400;
+    password.value = '';
+    const detail = (error as { detail?: string })?.detail;
+    if ((status === 400 || status === 409) && detail)
+        feedback.value = detail;
+    else if (status === 400)
+        feedback.value = 'Settings rejected. Check the supplied values.';
+    else
+        feedback.value = 'Settings outcome requires review. Reload saved settings before retrying.';
+}
+async function settings(action: SettingsAction) {
+    if (!canChangeSettings(action)) return;
+    const owner = editorOwner();
     busy.value = true;
     feedback.value = '';
     try {
         if (action === 'create') {
-            const value = await api.management.destinations.post({ name: name.value, kind: kind.value });
-            if (access !== accessGeneration())
-                return;
-            if (value?.id) {
-                markSetup(String(value.id), true);
-                if (!ownsEditor()) { await list(); return; }
-                dirtyName.value = dirtyProvider.value = false;
-                await open(String(value.id));
-                const createdId = String(value.id);
-                const createdGeneration = editorGeneration;
-                ownsEditor = () => access === accessGeneration() && createdGeneration === editorGeneration && createdId === selected.value;
-                tab.value = 'Settings';
-                if (routing.value?.enabled) await ensureSetupDisabled();
-                await list();
-            }
-            if (access !== accessGeneration() || selected.value !== String(value?.id ?? '')) return;
-            feedback.value = 'Save provider settings and pass their test to complete setup.';
+            await createDestination(owner);
+            return;
         }
-        else {
-            if (setupIncomplete.value) {
-                await ensureSetupDisabled();
-                if (access !== accessGeneration() || generation !== editorGeneration || id !== selected.value) return;
-            }
-            const endpoint = api.management.destinations.byId(id);
-            const expectedRevision = settingsRevision.value;
-            if (action === 'name') {
-                const value = await endpoint.put({ name: name.value, expectedRevision });
-                if (access !== accessGeneration() || generation !== editorGeneration || id !== selected.value) return;
-                if (value?.configurationRevision != null)
-                    settingsRevision.value = value.configurationRevision;
-                dirtyName.value = false;
-            }
-            if (action === 'provider') {
-                let value;
-                if (destination.value?.kind === 'local')
-                    value = await endpoint.local.put({ rootPath: root.value, expectedRevision });
-                else
-                    value = await endpoint.webdav.put({ collectionUrl: url.value, username: username.value, password: password.value || null, expectedRevision });
-                if (access !== accessGeneration() || generation !== editorGeneration || id !== selected.value) return;
-                if (value?.configurationRevision != null)
-                    settingsRevision.value = value.configurationRevision;
-                dirtyProvider.value = false;
-                password.value = '';
-            }
-            if (action === 'toggle') {
-                if (setupIncomplete.value) return;
-                const value = await endpoint.routing.put({ expectedRevision: routing.value?.configurationRevision, rules: routing.value?.rules ?? [], enabled: !routing.value?.enabled });
-                if (access !== accessGeneration() || generation !== editorGeneration || id !== selected.value) return;
-                if (value) routing.value = value;
-                if (value?.configurationRevision != null)
-                    settingsRevision.value = value.configurationRevision;
-            }
-            if (action === 'test') {
-                const result = destination.value?.kind === 'local' ? await endpoint.local.test.post() : await endpoint.webdav.test.post();
-                if (access !== accessGeneration() || generation !== editorGeneration || id !== selected.value)
-                    return;
-                const refreshed = await read();
-                if (access !== accessGeneration() || generation !== editorGeneration || id !== selected.value)
-                    return;
-                const currentRevisionTested = refreshed && authoritativeOwner.value === id
-                    && result?.testedConfigurationRevision != null
-                    && result?.testedConfigurationRevision === settingsRevision.value
-                    && result?.testedConfigurationRevision === routing.value?.configurationRevision;
-                if (result?.writable && currentRevisionTested && routing.value?.enabled === false && !dirtySettings.value && !configConflict.value)
-                    markSetup(id, false);
-                feedback.value = result?.errorCode === 'LOCAL_ROOT_NOT_CONFIGURED' ? 'No destination folder is saved. Choose a folder, then use Save and test folder.'
-                    : !result?.writable ? `Saved settings test failed: ${result?.errorCode ?? 'unavailable'}. Check the destination configuration.`
-                    : !currentRevisionTested ? `Saved revision ${result.testedConfigurationRevision} is writable. Refresh and test the current revision before completing setup.`
-                    : `Saved revision ${result.testedConfigurationRevision} is writable.`;
-            }
-            else {
-                feedback.value = 'Saved settings updated.';
-            }
-            if (action !== 'test' && access === accessGeneration() && generation === editorGeneration && id === selected.value)
-                await read();
+        if (setupIncomplete.value) {
+            await ensureSetupDisabled();
+            if (!ownsEditor(owner)) return;
         }
+        if (action === 'test')
+            await testSavedSettings(owner);
+        else
+            await saveSettings(action, owner);
     }
     catch (error) {
-        if (access !== accessGeneration()) return;
-        if (!ownsEditor()) { if (action === 'create') void list(); return; }
-        const status = handleFailure(error);
-        configConflict.value = status !== 400;
-        password.value = '';
-        const detail = (error as { detail?: string })?.detail;
-        feedback.value = (status === 400 || status === 409) && detail ? detail
-            : status === 400 ? 'Settings rejected. Check the supplied values.' : 'Settings outcome requires review. Reload saved settings before retrying.';
+        if (owner.access !== accessGeneration()) return;
+        if (!ownsEditor(owner)) {
+            if (action === 'create') void list();
+            return;
+        }
+        settingsFailed(error);
     }
     finally {
-        if (ownsEditor()) busy.value = false;
+        if (ownsEditor(owner)) busy.value = false;
     }
 }
 async function ensureSetupDisabled() {
     if (routing.value?.enabled === false) return;
     if (authoritativeOwner.value !== selected.value || !routing.value) throw new Error('Setup destination state is unavailable');
-    const id = selected.value;
-    const access = accessGeneration();
-    const generation = editorGeneration;
-    const value = await api.management.destinations.byId(id).routing.put({ expectedRevision: routing.value.configurationRevision, rules: routing.value.rules ?? [], enabled: false });
-    if (access !== accessGeneration() || generation !== editorGeneration || id !== selected.value) return;
-    if (String(value?.destinationId) !== id || value?.enabled !== false || value.configurationRevision == null) throw new Error('Destination disable was not confirmed');
+    const owner = editorOwner();
+    const value = await api.management.destinations.byId(owner.id).routing.put({ expectedRevision: routing.value.configurationRevision, rules: routing.value.rules ?? [], enabled: false });
+    if (!ownsEditor(owner)) return;
+    if (String(value?.destinationId) !== owner.id || value?.enabled !== false || value.configurationRevision == null) throw new Error('Destination disable was not confirmed');
     routing.value = value;
     settingsRevision.value = value.configurationRevision;
-    const config = destinations.value.find(item => String(item.id) === id);
+    const config = destinations.value.find(item => String(item.id) === owner.id);
     if (config) {
         config.enabled = false;
         config.configurationRevision = value.configurationRevision;
     }
 }
 async function saveAndTest() {
-    const id = selected.value;
-    const access = accessGeneration();
-    const generation = editorGeneration;
+    const owner = editorOwner();
     dirtyProvider.value = true;
     await settings('provider');
-    if (access === accessGeneration() && generation === editorGeneration && id === selected.value && !dirtyProvider.value && !configConflict.value) await settings('test');
+    if (ownsEditor(owner) && !dirtyProvider.value && !configConflict.value)
+        await settings('test');
 }
 async function attention(id: string) {
     await open(id);
@@ -760,7 +803,7 @@ function close() {
                         </select>
                     </label>
                 </div>
-                <button class="primary" :disabled="busy || !canCreateKind(kind)">
+                <button type="submit" class="primary" :disabled="busy || !canCreateKind(kind)">
                     Create destination
                 </button>
             </form>
@@ -1006,7 +1049,7 @@ function close() {
                     Name
                     <input v-model="name" maxlength="200" required :disabled="!selectedKindEnabled" />
                 </label>
-                <button :disabled="busy || configConflict || !selectedKindEnabled">
+                <button type="submit" :disabled="busy || configConflict || !selectedKindEnabled">
                     Save name
                 </button>
             </form>
@@ -1044,7 +1087,7 @@ function close() {
                     </label>
                 </template>
                 <div class="actions">
-                    <button :disabled="busy || configConflict || !selectedKindEnabled">
+                    <button type="submit" :disabled="busy || configConflict || !selectedKindEnabled">
                         {{ destination?.kind === 'local' ? 'Save and test folder' : setupIncomplete ? 'Save and test provider settings' : 'Save provider settings' }}
                     </button>
                     <button type="button" :disabled="busy || configConflict || localFolderNeedsSave || !selectedKindEnabled" @click="settings('test')">

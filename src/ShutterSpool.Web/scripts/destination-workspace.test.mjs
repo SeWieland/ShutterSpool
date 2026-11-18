@@ -392,8 +392,15 @@ test('incomplete setup blocks rules and needs a successful test of the unchanged
     assert.equal(run('setupIncomplete.value'), false);
     assert.equal(stored.get('shutterspool.destinationSetup::'), '[]');
     assert.equal(run("pathExample({ folderTemplate: '{year}/{month}', filenameTemplate: '{suppliedName}' })"), '/photos/2026/10/IMG_0001.jpg');
-    run("root.value = '/'");
-    assert.equal(run("pathExample({ filenameTemplate: '{suppliedName}' })"), '/IMG_0001.jpg');
+    for (const [base, prefix] of [
+        ['', '(root not configured)'], ['/', ''], ['C:\\photos\\', 'C:\\photos'],
+        ['\\\\server\\share/\\', '\\\\server\\share'], ['/photos/a b/ ', '/photos/a b/ '],
+    ]) {
+        run(`root.value = ${JSON.stringify(base)}`);
+        assert.equal(run("pathExample({ filenameTemplate: '{suppliedName}' })"), `${prefix}/IMG_0001.jpg`);
+    }
+    run("selectedConfiguration.value.kind = 'webdav'; url.value = 'https://example.invalid/dav/photos///'");
+    assert.equal(run("pathExample({ filenameTemplate: '{suppliedName}' })"), 'https://example.invalid/dav/photos/IMG_0001.jpg');
 });
 
 test('Source delay controls preserve exact seconds and convert whole weeks', () => {
@@ -413,7 +420,7 @@ test('Source delay controls preserve exact seconds and convert whole weeks', () 
 });
 
 test('destination switches clear every owner-scoped draft before a delayed or failed read and block writes', async () => {
-    let resolveRead; let writes = 0;
+    let resolveRead; let writes = 0; let routingId;
     const context = vm.createContext({
         exports: {}, AbortController, ref, shallowRef, computed, defineProps: () => ({ online: true }), defineEmits: () => () => {}, watch() {}, onMounted() {}, onUnmounted() {}, nextTick: async () => {},
         window: { confirm: () => true },
@@ -421,7 +428,7 @@ test('destination switches clear every owner-scoped draft before a delayed or fa
             cancellable: signal => ({ signal }), handleFailure: () => 503,
             api: { management: { destinations: { byId: id => ({
                 get: () => id === 'a' ? Promise.resolve({ id, name: 'A', configurationRevision: 1, kind: 'local', localRootPath: '/A' }) : new Promise(resolve => { resolveRead = resolve; }),
-                routing: { get: async () => ({ destinationId: id, configurationRevision: 1, rules: [{ name: id, conditions: [] }] }), put: async () => { writes++; } },
+                routing: { get: async () => ({ destinationId: routingId ?? id, configurationRevision: 1, rules: [{ name: id, conditions: [] }] }), put: async () => { writes++; } },
                 local: { put: async () => { writes++; } },
                 work: { get: async () => ({ items: [{ id: 'work-' + id }] }) },
             }) } } },
@@ -443,6 +450,13 @@ test('destination switches clear every owner-scoped draft before a delayed or fa
     assert.equal(writes, 0);
     resolveRead(undefined); await pending;
     assert.equal(run('authoritativeOwner.value'), '');
+    routingId = 'a';
+    const mismatched = run('read()');
+    resolveRead({ id: 'b', name: 'B', kind: 'local', localRootPath: '/B' });
+    assert.equal(await mismatched, false);
+    assert.equal(run('authoritativeOwner.value'), '');
+    assert.equal(run('root.value'), '');
+    assert.equal(run('routing.value'), undefined);
     await run("saveRules(); settings('provider')");
     assert.equal(writes, 0);
 });
@@ -477,19 +491,25 @@ test('a delayed provider save cannot clear a newer destination password or setti
 
 test('destination name, provider and toggle saves preserve unrelated settings drafts', async () => {
     for (const action of ['name', 'provider', 'toggle']) {
-        let finishSave;
+        const saved = { name: 'Saved name', localRootPath: '/saved', enabled: false, configurationRevision: 1 };
+        const writes = [];
+        function commit(field, changes) {
+            writes.push(field);
+            Object.assign(saved, changes);
+            return { configurationRevision: ++saved.configurationRevision };
+        }
         const context = vm.createContext({
             exports: {}, AbortController, ref, shallowRef, computed, defineProps: () => ({ online: true }), defineEmits: () => () => {}, watch() {}, onMounted() {}, onUnmounted() {}, nextTick: async () => {},
             require: name => name.includes('kiota') ? {} : name.endsWith('/destination-capabilities') ? destinationCapabilityModule : name.endsWith('/read-pool') ? readPoolModule : name.endsWith('/session') ? { accessGeneration: () => 0 } : {
                 cancellable: signal => ({ signal }), handleFailure: () => 503,
                 api: { management: { destinations: { byId: id => ({
-                    get: async () => ({ id, name: 'Name draft', configurationRevision: 2, kind: 'local', localRootPath: '/provider draft' }),
+                    get: async () => ({ id, kind: 'local', ...saved }),
                     routing: {
-                        get: async () => ({ destinationId: id, configurationRevision: 2, enabled: false, rules: [] }),
-                        put: () => new Promise(resolve => { finishSave = () => resolve({ destinationId: id, configurationRevision: 2, enabled: true, rules: [] }); }),
+                        get: async () => ({ destinationId: id, configurationRevision: saved.configurationRevision, enabled: saved.enabled, rules: [] }),
+                        put: async body => ({ destinationId: id, ...commit('toggle', { enabled: body.enabled }), enabled: saved.enabled, rules: [] }),
                     },
-                    put: () => new Promise(resolve => { finishSave = () => resolve({ configurationRevision: 2 }); }),
-                    local: { put: () => new Promise(resolve => { finishSave = () => resolve({ configurationRevision: 2 }); }) },
+                    put: async body => commit('name', { name: body.name }),
+                    local: { put: async body => commit('provider', { localRootPath: body.rootPath }) },
                 }) } } },
             },
         });
@@ -498,11 +518,13 @@ test('destination name, provider and toggle saves preserve unrelated settings dr
         const run = expression => vm.runInContext(expression, context);
         await run("open('same')");
         run("name.value = 'Name draft'; root.value = '/provider draft'; dirtyName.value = dirtyProvider.value = true");
-        const pending = run(`settings('${action}')`);
-        finishSave({});
-        await pending;
+        await run(`settings('${action}')`);
+        assert.deepEqual(writes, [action]);
         assert.equal(run('name.value'), 'Name draft');
         assert.equal(run('root.value'), '/provider draft');
+        assert.equal(run('dirtyName.value'), action !== 'name');
+        assert.equal(run('dirtyProvider.value'), action !== 'provider');
+        assert.equal(run('routing.value.enabled'), action === 'toggle');
     }
 });
 

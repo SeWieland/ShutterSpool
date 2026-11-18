@@ -822,7 +822,7 @@ test('Delivery work ignores a late preview after owner change and clears private
     } };
     const view = component('DeliveryWork', reactive({ work: { id: 'work-a', assetId: 'asset-a', destinationId: 'destination-a' }, online: true }), api);
     try {
-        const pending = view.read("command('resend')");
+        const pending = view.read("command('preview-resend')");
         view.props.work = { id: 'work-b', assetId: 'asset-b', destinationId: 'destination-b' };
         await nextTick();
         resolvePreview({ status: 'Previewed', confirmationToken: 'private-token' });
@@ -848,7 +848,7 @@ test('Delivery work never issues an action without confirmed online state', asyn
     };
     const view = component('DeliveryWork', reactive({ work: { id: 'work-a', assetId: 'asset-a', destinationId: 'destination-a' }, online: false }), api);
     try {
-        await view.read("command('resend')");
+        await view.read("command('preview-resend')");
         assert.equal(calls, 0);
     } finally { view.close(); }
 });

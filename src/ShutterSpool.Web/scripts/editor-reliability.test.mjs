@@ -45,6 +45,44 @@ const destinationCapabilityContext = vm.createContext({ exports: {} });
 vm.runInContext(ts.transpileModule(readFileSync(new URL('../app/lib/destination-capabilities.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, destinationCapabilityContext);
 const destinationCapabilityModule = destinationCapabilityContext.exports;
 
+test('Delivery resend previews supply the confirmation token and only a successful resend refreshes work after rejection', async () => {
+    const props = reactive({ work: { id: 'delivery-1' }, online: true, deliveryOnly: true });
+    const events = [];
+    const tokens = [];
+    let previews = 0;
+    const resend = {
+        preview: { post: async () => ({ confirmationToken: `preview-${++previews}` }) },
+        post: async body => {
+            tokens.push(body.confirmationToken);
+            if (tokens.length === 1) throw { status: 400 };
+            return { status: 'Queued' };
+        },
+    };
+    const context = vm.createContext({ exports: {}, ref, computed, watch() {}, onUnmounted() {},
+        defineProps: () => props, defineEmits: () => event => events.push(event),
+        require: name => name.endsWith('/session') ? { accessGeneration: () => 1, onAccessLost: () => () => {} }
+            : { api: { management: { deliveries: { byId: () => ({ resend }) } } }, handleFailure: failure => failure.status },
+    });
+    const run = compile('DeliveryWork', context);
+    await run("command('preview-resend')");
+    await run("command('resend')");
+    assert.equal(previews, 0);
+    assert.deepEqual(tokens, []);
+
+    props.deliveryOnly = false;
+    await run("command('preview-resend')");
+    assert.deepEqual(events, []);
+    await run("command('resend')");
+    assert.deepEqual(tokens, ['preview-1']);
+    assert.equal(run('preview.value'), undefined);
+    assert.deepEqual(events, []);
+    await run("command('preview-resend')");
+    await run("command('resend')");
+    assert.deepEqual(tokens, ['preview-1', 'preview-2']);
+    assert.equal(run('preview.value'), undefined);
+    assert.deepEqual(events, ['refresh']);
+});
+
 test('Delivery command stays locked after a lost response until a new authoritative work row arrives', async () => {
     let rejectRetry;
     let retries = 0;
