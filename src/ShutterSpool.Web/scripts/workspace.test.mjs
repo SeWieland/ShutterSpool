@@ -327,21 +327,24 @@ test('targeted reconciliation fences late success and failure after view, query,
     }
 });
 
-test('initial Immediate Sources snapshot can choose Gallery and still complete its Capture page read', async () => {
-    let inboxReads = 0;
-    const run = workspace(async id => ({ id }), undefined, {
-        watch,
-        sources: async () => ({ items: [{ id: 'source', curationMode: 'Immediate' }] }),
-        page: async request => {
-            if (request.queryParameters.released === false) return { items: [] };
-            inboxReads++;
-            return { items: [{ id: 'gallery-row' }], nextCursor: null };
-        },
-    });
-    await run("refreshData(undefined, undefined, new Set(['sources','capture']))");
-    assert.equal(run('view.value'), 'Gallery');
-    assert.equal(inboxReads, 1, 'changing the initial view inside its own refresh does not abort that refresh');
-    assert.equal(run('rows.value[0].id'), 'gallery-row');
+test('initial Sources snapshot completes the Capture read for its selected photo view', async () => {
+    for (const [curationMode, view, tag] of [['Immediate', 'Gallery', undefined], ['Manual', 'Curation', 'review']]) {
+        const inboxTags = [];
+        const run = workspace(async id => ({ id }), undefined, {
+            watch,
+            sources: async () => ({ items: [{ id: 'source', curationMode }] }),
+            page: async request => {
+                if (request.queryParameters.released === false) return { items: [] };
+                inboxTags.push(request.queryParameters.tag);
+                return { items: [{ id: 'capture-row' }], nextCursor: null };
+            },
+        });
+        run("filters.Curation.tag = 'review'");
+        await run("refreshData(undefined, undefined, new Set(['sources','capture']))");
+        assert.equal(run('view.value'), view);
+        assert.deepEqual(inboxTags, [tag], 'the same refresh reads the selected view with its own query');
+        assert.equal(run('rows.value[0].id'), 'capture-row');
+    }
 });
 
 test('Capture browser retains page cancellation ownership until continuation explicitly finishes', async () => {

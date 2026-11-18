@@ -226,26 +226,11 @@ body:has(.fullscreen-viewer) { overflow:hidden; }
 }
 @media(max-width:350px) { .photo-grid,.density-dense .photo-grid,.density-spacious .photo-grid { grid-template-columns:1fr; }.brand { font-size:18px; }.brand img { width:40px; height:40px; }.app-header { gap:8px; }.inspector .signed-ratings { gap:0; }.color-controls { gap:0; }.photo-actions > span { display:none; } }
 .grid-spacer { grid-column:1 / -1; }
-.delivery-lane { display:flex; flex-direction:column; gap:8px; min-width:80px; }
-.lane-photos { display:flex; gap:5px; min-height:48px; overflow:hidden; }
-.lane-photos .preview { width:64px; height:48px; border-radius:4px; }
 .attention-link { color:var(--yellow); text-decoration:underline; }
-.delivery-lane.running::after {
-    content:"";
-    height:2px;
-    background:var(--accent);
-    animation:work-progress 1600ms ease-out infinite;
-}
-.reduce-effects .delivery-lane.running::after { animation:none; }
-@keyframes work-progress {
-    from { transform:scaleX(.15); transform-origin:left; }
-    to { transform:scaleX(1); transform-origin:left; }
-}
 .rating-interval { touch-action:none; }
 .fullscreen-viewer.reduce-effects *, .operational-workspace.reduce-effects * { animation:none!important; transition:none!important; }
 @media (prefers-reduced-motion: reduce) {
     .tile-detail { transform:none; }
-    .delivery-lane.running:not(.operational-workspace *)::after { animation:none; }
 
     /* Workspace Full overrides the important OS duration reset for these effects. */
     .operational-workspace:not(.reduce-effects) button,
@@ -254,14 +239,13 @@ body:has(.fullscreen-viewer) { overflow:hidden; }
         animation:preview-arrival 180ms ease-out;
         animation-duration:180ms!important;
     }
-    .operational-workspace:not(.reduce-effects) .delivery-lane.running::after { animation-duration:1600ms!important; }
 }
 .rating-star { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linejoin:round; flex-shrink:0; } button[aria-pressed=true] .rating-star { fill:currentColor; }.photo-pane.active .preview { inset:1px; width:calc(100% - 2px); height:calc(100% - 2px); }.photo-pane .preview img { width:100%; height:100%; object-fit:contain; }
 
 .source-stream.paused .source-icon,.source-stream.paused .recent-stream { filter:grayscale(1); opacity:.65; }
 .stream-move,.stream-enter-active,.stream-leave-active { transition:transform var(--motion),opacity var(--motion); }
 .stream-enter-from { opacity:0; transform:translateX(-24px); }.stream-leave-to { opacity:0; }.stream-leave-active { position:absolute; }
-.destination-open { text-align:left; flex-shrink:0; }.delivery-lane:last-child { flex:1; overflow:hidden; }.delivery-lane + .delivery-lane:before { content:'··· →'; color:var(--muted); }
+.destination-open { text-align:left; flex-shrink:0; }
 .viewer-save-state { position:absolute; top:16px; left:16px; right:72px; display:flex; flex-wrap:wrap; align-items:center; gap:8px; background:#111315b0; padding:8px; border-radius:6px; }
 
 .recent-stream-frame { flex:1; min-width:0; overflow:hidden; }.reduce-effects .stream-move,.reduce-effects .stream-enter-active,.reduce-effects .stream-leave-active { transition:none; }

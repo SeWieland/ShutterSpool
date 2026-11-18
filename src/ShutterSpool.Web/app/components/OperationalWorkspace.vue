@@ -552,6 +552,18 @@ function adoptSourcePage(page: SourceConfigurationPageResponse | undefined, owne
     selectingInitialView = false;
     return refreshOwnerKey();
 }
+async function refreshSources(owner: { key: string }, isCurrent: () => boolean, signal: AbortSignal) {
+    try {
+        const page = await api.management.sources.get({ queryParameters: { limit: 100 }, options: [cancellable(signal)] });
+        if (!isCurrent()) return;
+        owner.key = adoptSourcePage(page, owner.key);
+    } catch (failure) {
+        if (!isCurrent()) return;
+        handleFailure(failure);
+        policyStale.value = true;
+        sourcesStale.value = true;
+    }
+}
 function updateScopeState(scopes: Set<RefreshScope>, captureActive: boolean) {
     if (!mayCurate.value && !captureActive) {
         captureBrowser.clear();
@@ -597,6 +609,21 @@ async function refreshTargetedRows(ids: Set<string>, isCurrent: () => boolean, s
         }
     }
 }
+async function refreshCapturePage(ids: Set<string> | undefined, isCurrent: () => boolean, signal: AbortSignal) {
+    if (ids && rows.value.length) {
+        await refreshTargetedRows(ids, isCurrent, signal);
+        if (!isCurrent()) return;
+        for (const row of rows.value) if (unavailableInViewer(row)) invalidateSlide(String(row.id));
+        rows.value = rows.value.filter(matchesFilter);
+        evidenceGeneration.value++;
+    }
+    await loadPage(false, mayCurate.value && rows.value.length > 0, signal);
+    if (!isCurrent()) return;
+    capturesStale.value = false;
+    evidenceGeneration.value++;
+    if (activeId.value && (!ids || ids.has(activeId.value)))
+        await openCapture(activeId.value, false, undefined, false, signal);
+}
 function invalidatePreviews(previews: PreviewInvalidation, fullRefresh: boolean) {
     const ids = previews.all || fullRefresh && !previews.ids.size
         ? new Set([...rows.value.map(row => String(row.id)), activeId.value, secondId.value])
@@ -613,27 +640,17 @@ async function refreshData(ids?: Set<string>, previews?: PreviewInvalidation, sc
     const controller = refreshController = new AbortController();
     const { signal } = controller;
     activeRefreshScopes = scopes;
-    let ownerKey = refreshOwnerKey();
+    const owner = { key: refreshOwnerKey() };
     const requested = ++refreshSequence;
     const isCurrent = () => workspaceActive && !signal.aborted && requested === refreshSequence
-        && access === accessGeneration() && ownerKey === refreshOwnerKey();
+        && access === accessGeneration() && owner.key === refreshOwnerKey();
     const viewerDeadline = !mayCurate.value ? setTimeout(() => {
         if (isCurrent()) closeWorkspaceAccess();
     }, 8_000) : undefined;
     try {
         if (!mayAdminister.value && !initialized.value) initialized.value = true;
-        if (mayAdminister.value && scopes.has('sources')) {
-            try {
-                const page = await api.management.sources.get({ queryParameters: { limit: 100 }, options: [cancellable(signal)] });
-                if (!isCurrent()) return;
-                ownerKey = adoptSourcePage(page, ownerKey);
-            } catch (failure) {
-                if (!isCurrent()) return;
-                handleFailure(failure);
-                policyStale.value = true;
-                sourcesStale.value = true;
-            }
-        }
+        if (mayAdminister.value && scopes.has('sources'))
+            await refreshSources(owner, isCurrent, signal);
         if (!session.value || !isCurrent()) return;
 
         const captureActive = (view.value === 'Gallery' || view.value === 'Curation') && retentionSurface.value === 'photos';
@@ -647,21 +664,8 @@ async function refreshData(ids?: Set<string>, previews?: PreviewInvalidation, sc
         if (scopes.has('capture') && (scopes.has('delivery') || scopes.has('storage') || scopes.has('erasure'))) evidenceGeneration.value++;
 
         if (refreshCaptures) {
-            if (ids && rows.value.length) {
-                await refreshTargetedRows(ids, isCurrent, signal);
-                if (!isCurrent()) return;
-                for (const row of rows.value) if (unavailableInViewer(row)) invalidateSlide(String(row.id));
-                rows.value = rows.value.filter(matchesFilter);
-                evidenceGeneration.value++;
-            }
-            await loadPage(false, mayCurate.value && rows.value.length > 0, signal);
+            await refreshCapturePage(ids, isCurrent, signal);
             if (!isCurrent()) return;
-            capturesStale.value = false;
-            evidenceGeneration.value++;
-            if (activeId.value && (!ids || ids.has(activeId.value))) {
-                await openCapture(activeId.value, false, undefined, false, signal);
-                if (!isCurrent()) return;
-            }
         }
         if (scopes.has('previews') && previews) invalidatePreviews(previews, scopes.size === allRefreshScopes.length);
         if (!isCurrent()) return;
