@@ -24,6 +24,33 @@ public sealed class WorkspaceCameraIngressTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     [Theory]
+    [InlineData(null, 12)]
+    [InlineData("1", 1)]
+    [InlineData("128", 128)]
+    public void Server_registers_the_configured_camera_password_minimum(string? configured, int expected)
+    {
+        var builder = WebApplication.CreateEmptyBuilder(new WebApplicationOptions());
+        builder.Configuration["ShutterSpool:CameraCredentials:MinimumPasswordLength"] = configured;
+        builder.AddShutterSpoolServer();
+        using var services = builder.Services.BuildServiceProvider();
+        Assert.Equal(expected, services.GetRequiredService<CameraCredentialPolicy>().MinimumLength);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("+12")]
+    [InlineData(" 12")]
+    [InlineData("0")]
+    [InlineData("129")]
+    public void Server_rejects_invalid_camera_password_minimums_at_registration(string configured)
+    {
+        var builder = WebApplication.CreateEmptyBuilder(new WebApplicationOptions());
+        builder.Configuration["ShutterSpool:CameraCredentials:MinimumPasswordLength"] = configured;
+        var failure = Assert.Throws<InvalidOperationException>(() => builder.AddShutterSpoolServer());
+        Assert.Contains("Camera credential minimum password length", failure.Message);
+    }
+
+    [Theory]
     [InlineData("/internal/camera/hook")]
     [InlineData("/internal/camera/hook/")]
     [InlineData("/INTERNAL/CAMERA/HOOK/")]

@@ -56,13 +56,14 @@ internal static class ServerComposition
         cameraIngress.Validate();
         builder.Services.AddSingleton(cameraIngress);
         string? configuredMinimum = builder.Configuration["ShutterSpool:CameraCredentials:MinimumPasswordLength"];
-        CameraCredentialPolicy cameraCredentialPolicy = new()
+        var cameraCredentialPolicy = new CameraCredentialPolicy();
+        if (configuredMinimum is not null)
         {
-            MinimumLength = configuredMinimum is null ? 12
-                : int.TryParse(configuredMinimum, System.Globalization.NumberStyles.None,
-                    System.Globalization.CultureInfo.InvariantCulture, out int minimum) ? minimum
-                : throw new InvalidOperationException("Camera credential minimum password length must be an integer from 1 to 128."),
-        };
+            if (!int.TryParse(configuredMinimum, System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out int minimum))
+                throw new InvalidOperationException("Camera credential minimum password length must be an integer from 1 to 128.");
+            cameraCredentialPolicy.MinimumLength = minimum;
+        }
         cameraCredentialPolicy.Validate();
         builder.Services.AddSingleton(cameraCredentialPolicy);
         builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
