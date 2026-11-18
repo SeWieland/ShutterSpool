@@ -276,14 +276,27 @@ Paths are trimmed and accept surrounding double quotes. A child-directory listin
 The response includes the current path, parent path and directory names/paths, never file listings or contents. Browsing is read-only: selecting a folder does not create it, save destination configuration or test writability.
 The web interface uses **Save and test folder** to save the selected root and then test it; **Test saved settings** requires a saved folder with no unsaved folder edits.
 
-For WebDAV, use `kind: "webdav"`. Configure it with `PUT /management/destinations/{id}/webdav` using an absolute HTTPS collection URL, username and write-only password/app password. `GET` returns only the normalized URL and username; `POST /management/destinations/{id}/webdav/test` performs a synthetic staged upload, no-overwrite MOVE, read-back hash and occupied-target preservation probe. URL/account edits lock after delivery work exists; replacing credentials for the same identity is allowed. Provider requests use normal TLS validation and do not follow redirects. Each delivery verifies the configured collection, creates missing target parents, uploads to an attempt-specific staging object, publishes with `Overwrite: F`, and records completed publication acknowledgement. Occupied-target and uncertain outcomes use stored SHA-256/size receipts when usable, falling back to bounded streamed SHA-256 read-back. These evidence levels are distinct. A missing target during reconciliation remains ambiguous; one 404 never authorizes another write. See the [WebDAV profile and limits](../ShutterSpool.Infrastructure/README.md#tested-webdav-profile) for actual compatibility observations.
+For WebDAV, use `kind: "webdav"`. Send `PUT /management/destinations/{id}/webdav` with `expectedRevision`, an absolute HTTPS collection URL, and a username.
+Supply a write-only password or app password when saving the first credential. Omit `password` or set it to `null` to retain the saved credential.
+`GET` and successful `PUT` return the normalized collection URL, username, and `configurationRevision`.
+Once delivery work exists, the collection URL and account are locked. You can still replace the password for the same account.
+
+`POST /management/destinations/{id}/webdav/test` uses a saved configuration snapshot to perform a synthetic staged upload, no-overwrite MOVE, hash read-back, and occupied-target preservation check.
+Compare the returned `testedConfigurationRevision` with the current `configurationRevision` to tell whether the result applies to the current settings.
+
+For a new target, the adapter verifies the configured collection, creates missing target parents, and uploads to an attempt-specific staging object before publishing with `Overwrite: F`.
+Completed publication acknowledgement, a usable stored SHA-256 and size receipt, and bounded streamed SHA-256 read-back provide distinct evidence.
+An occupied target or uncertain outcome uses the stored receipt when usable and falls back to read-back when checksum evidence is unavailable.
+A missing target during reconciliation remains ambiguous and blocks another automatic write.
+See the [evidence and cleanup constraints](../ShutterSpool.Infrastructure/README.md#webdav-evidence-and-cleanup-constraints) and [tested WebDAV profile and limits](../ShutterSpool.Infrastructure/README.md#tested-webdav-profile).
 
 Use a host-managed root with no untrusted concurrent writers and no nested mounts below it. Configuration places a small `.shutterspool-{destinationId}.root` marker in the root; retain it with the mount. If the marker disappears, writes and reconciliation stay ambiguous until the same mounted contents return or an operator resolves the mount. The adapter stages each attempt beside its final target, verifies the original's size and SHA-256, requires a tested no-replace hard link on the target filesystem, and confirms by read-back. It never overwrites an occupied target. A matching occupied file confirms; a different or unverifiable file requires correction and an explicit Retry. Hard-link support is checked on the actual target directory, so a mount that cannot provide it is unsupported. Local read-back proves bytes visible through the mount at verification time, subject to the mount's own power-loss guarantees.
 
 Controlled checks exercised local Windows NTFS, Windows loopback SMB (`\\localhost\C$`), Linux ext4 and a 4 MiB Linux tmpfs. The tmpfs check covered full capacity and moving the mount away and back; a Unix permission check covered an unwritable root. These observations do not establish compatibility with an external NAS. Verify the no-replace and recovery behavior on each deployment mount before using it for originals.
 
 Private WebDAV targets require an explicit operator CIDR exception in `ShutterSpool:Destinations:WebDavEgress:AllowedPrivateNetworks`.
-The default blocks private/local and special-use addresses. DNS is resolved and checked for every new connection; the socket connects to an approved address while TLS validates the original hostname.
+The default blocks private/local and special-use addresses. DNS is resolved and checked for every new connection.
+The socket connects to an approved address while normal TLS validation authenticates the original hostname.
 Connection tests and delivery share these restrictions. HTTP redirects, environment proxies and cookies are disabled.
 For a self-hosted internal Nextcloud server, allow only its required network/address; a tenant cannot add this exception.
 

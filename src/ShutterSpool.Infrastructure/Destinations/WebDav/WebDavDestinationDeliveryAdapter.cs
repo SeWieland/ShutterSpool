@@ -13,6 +13,8 @@ namespace ShutterSpool.Infrastructure.Destinations.WebDav;
 
 internal static class WebDavDestinationUris
 {
+    internal const string StagingCollection = ".shutterspool-staging";
+
     public static bool TryCollection(string value, [NotNullWhen(true)] out Uri? uri)
     {
         uri = null;
@@ -67,7 +69,7 @@ internal static class WebDavDestinationUris
         if (parts.Any(part => part.Length is 0 or > 255 || part is "." or ".." || part.Any(char.IsControl) || part.Contains(':')
             || part.Contains('%') && (part.Contains("%2f", StringComparison.OrdinalIgnoreCase)
                 || part.Contains("%5c", StringComparison.OrdinalIgnoreCase) || part.Contains("%2e", StringComparison.OrdinalIgnoreCase)))) return false;
-        if (parts[0].Equals(".shutterspool-staging", StringComparison.OrdinalIgnoreCase)) return false;
+        if (parts[0].Equals(StagingCollection, StringComparison.OrdinalIgnoreCase)) return false;
         segments = parts;
         return true;
     }
@@ -78,7 +80,14 @@ internal static class WebDavDestinationUris
 
 internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory clients, DestinationCapabilities? capabilities = null) : IDestinationDeliveryAdapter
 {
+    internal const string HttpClientName = "webdav";
     internal const string PrivateRequestTelemetryKey = "ShutterSpool.PrivateProviderRequest";
+    private const string DestinationKindDisabled = "DESTINATION_KIND_DISABLED";
+    private const string TargetConflict = "TARGET_CONFLICT";
+    private const string ProviderUnavailable = "PROVIDER_UNAVAILABLE";
+    private const string TlsValidationFailed = "TLS_VALIDATION_FAILED";
+    private const string DavResponseInvalid = "DAV_RESPONSE_INVALID";
+    private const string UnsupportedPublication = "UNSUPPORTED_PUBLICATION";
     private const int BufferSize = 64 * 1024;
     private const int MaxXmlBytes = 64 * 1024;
     public string Kind => "webdav";
@@ -86,13 +95,13 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
     public async Task<(bool Writable, string? ErrorCode)> TestAsync(string collectionUrl, string username, string password,
         CancellationToken cancellationToken)
     {
-        if (!(capabilities ?? DestinationCapabilities.All).IsEnabled(Kind)) return (false, "DESTINATION_KIND_DISABLED");
+        if (!(capabilities ?? DestinationCapabilities.All).IsEnabled(Kind)) return (false, DestinationKindDisabled);
         if (!WebDavDestinationUris.TryCollection(collectionUrl, out Uri? root)) return (false, "INVALID_COLLECTION_URL");
         using var deadline = CreateDeadline(cancellationToken);
         CancellationToken operationToken = deadline.Token;
         try
         {
-            using HttpClient client = clients.CreateClient("webdav");
+            using HttpClient client = clients.CreateClient(HttpClientName);
             DeliveryResult? rootCheck = await VerifyCollectionAsync(client, root, username, password, operationToken);
             if (rootCheck is not null) return (false, rootCheck.ErrorCode);
             DeliveryResult? result = await VerifyNoReplaceAsync(client, root, username, password, operationToken);
@@ -107,55 +116,35 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
     public async Task<DeliveryResult> WriteAsync(DeliveryRequest request, Stream original, CancellationToken cancellationToken)
     {
         if (!(capabilities ?? DestinationCapabilities.All).IsEnabled(Kind))
-            return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "DESTINATION_KIND_DISABLED");
+            return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: DestinationKindDisabled);
         if (!TryConfig(request, out Uri? root, out string? user, out string? password, out string[]? segments, out string? error))
             return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: error);
         if (!ValidExpectedContent(request))
             return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "INVALID_EXPECTED_CONTENT");
         using var deadline = CreateDeadline(cancellationToken);
         CancellationToken operationToken = deadline.Token;
-        using HttpClient client = clients.CreateClient("webdav");
+        using HttpClient client = clients.CreateClient(HttpClientName);
         Uri target = WebDavDestinationUris.Child(root, segments);
         bool moveStarted = false;
         try
         {
-            DeliveryResult? rootCheck = await VerifyCollectionAsync(client, root, user, password, operationToken);
-            if (rootCheck is not null) return rootCheck;
-            DeliveryResult? existing = await VerifyTargetAsync(client, target, user, password, request, token: operationToken);
-            if (existing is not null) return existing;
-            DeliveryResult? capability = await VerifyNoReplaceAsync(client, root, user, password, operationToken);
-            if (capability is not null) return capability;
+            DeliveryResult? preflight = await VerifyCollectionAsync(client, root, user, password, operationToken)
+                ?? await VerifyTargetAsync(client, target, user, password, request, token: operationToken)
+                ?? await VerifyNoReplaceAsync(client, root, user, password, operationToken);
+            if (preflight is not null) return preflight;
             await EnsureParentsAsync(client, root, segments, user, password, operationToken);
-            Uri stageRoot = WebDavDestinationUris.Child(root, [".shutterspool-staging"]);
-            await MakeCollectionAsync(client, root, stageRoot, user, password, operationToken);
-            Uri staged = WebDavDestinationUris.Child(root, [".shutterspool-staging", request.AttemptId.ToString("N")]);
-            var verifier = new HashingReadStream(original, request.Size, request.Sha256);
-            using (var put = Request(HttpMethod.Put, staged, user, password))
-            {
-                put.Content = new StreamContent(verifier, BufferSize);
-                put.Content.Headers.ContentLength = request.Size;
-                put.Headers.TryAddWithoutValidation("X-Hash", "sha256");
-                put.Headers.TryAddWithoutValidation("OC-Checksum", $"SHA256:{request.Sha256}");
-                using HttpResponseMessage response = await client.SendAsync(put, HttpCompletionOption.ResponseHeadersRead, operationToken);
-                if (!IsCompletedWriteStatus(response.StatusCode))
-                    return response.StatusCode == HttpStatusCode.Accepted
-                        ? new(DeliveryResultKind.TransientFailure, ErrorCode: "PROVIDER_UNAVAILABLE")
-                        : ResultFor(response.StatusCode, mayHavePublished: false);
-                if (!verifier.Matches) return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "ORIGINAL_CHANGED");
-                if (!MatchesProviderHash(response, request.Sha256))
-                    return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "PROVIDER_HASH_MISMATCH");
-            }
-            using var move = Request(new HttpMethod("MOVE"), staged, user, password);
-            move.Headers.TryAddWithoutValidation("Destination", target.AbsoluteUri);
-            move.Headers.TryAddWithoutValidation("Overwrite", "F");
+            Uri stageRoot = WebDavDestinationUris.Child(root, [WebDavDestinationUris.StagingCollection]);
+            await MakeCollectionAsync(client, stageRoot, user, password, operationToken);
+            Uri staged = WebDavDestinationUris.Child(root, [WebDavDestinationUris.StagingCollection, request.AttemptId.ToString("N")]);
+            DeliveryResult? upload = await UploadOriginalAsync(client, staged, user, password, request, original, operationToken);
+            if (upload is not null) return upload;
+
+            using var move = NoReplaceMove(staged, target, user, password);
             moveStarted = true;
             using HttpResponseMessage moved = await client.SendAsync(move, HttpCompletionOption.ResponseHeadersRead, operationToken);
             if (moved.StatusCode is HttpStatusCode.PreconditionFailed or HttpStatusCode.Conflict)
             {
-                DeliveryResult? occupied = await VerifyTargetAsync(client, target, user, password, request, token: operationToken);
-                return occupied?.Kind == DeliveryResultKind.Confirmed ? occupied
-                    : occupied?.ErrorCode == "TARGET_CONFLICT" ? new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "TARGET_CONFLICT")
-                    : new(DeliveryResultKind.Uncertain, ErrorCode: "MOVE_CONFLICT_UNVERIFIABLE");
+                return await VerifyMoveCollisionAsync(client, target, user, password, request, operationToken);
             }
             if (!IsCompletedWriteStatus(moved.StatusCode)) return ResultFor(moved.StatusCode, mayHavePublished: true);
             return new(DeliveryResultKind.Confirmed, DeliveryConfirmationEvidenceLevel.AcknowledgedCompleteWrite);
@@ -168,20 +157,16 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
         }
         catch (HttpRequestException exception)
         {
-            if (exception.HttpRequestError == HttpRequestError.SecureConnectionError)
-                return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "TLS_VALIDATION_FAILED");
-            return exception.StatusCode is { } status ? ResultFor(status, moveStarted)
-                : new(moveStarted ? DeliveryResultKind.Uncertain : DeliveryResultKind.TransientFailure,
-                    ErrorCode: moveStarted ? "PROVIDER_OUTCOME_UNKNOWN" : "PROVIDER_UNAVAILABLE");
+            return RequestFailure(exception, moveStarted);
         }
         catch (InvalidDataException) { return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "UNSAFE_TARGET"); }
-        catch (XmlException) { return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "DAV_RESPONSE_INVALID"); }
+        catch (XmlException) { return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: DavResponseInvalid); }
     }
 
     public async Task<DeliveryReconciliation> ReconcileAsync(DeliveryRequest request, CancellationToken cancellationToken)
     {
         if (!(capabilities ?? DestinationCapabilities.All).IsEnabled(Kind))
-            return new(DeliveryReconciliationKind.Uncertain, ErrorCode: "DESTINATION_KIND_DISABLED");
+            return new(DeliveryReconciliationKind.Uncertain, ErrorCode: DestinationKindDisabled);
         if (!TryConfig(request, out Uri? root, out string? user, out string? password, out string[]? segments, out string? error))
             return new(DeliveryReconciliationKind.Conflict, ErrorCode: error);
         if (!ValidExpectedContent(request))
@@ -190,15 +175,12 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
         CancellationToken operationToken = deadline.Token;
         try
         {
-            using HttpClient client = clients.CreateClient("webdav");
+            using HttpClient client = clients.CreateClient(HttpClientName);
             DeliveryResult? result = await VerifyTargetAsync(client, WebDavDestinationUris.Child(root, segments), user, password, request, mayHavePublished: true, operationToken);
-            return result is null
-                ? new(DeliveryReconciliationKind.Uncertain, ErrorCode: "ABSENCE_NOT_AUTHORITATIVE")
-                : result.Kind == DeliveryResultKind.Confirmed
-                    ? new(DeliveryReconciliationKind.Confirmed, result.Evidence)
-                    : result.ErrorCode == "TARGET_CONFLICT"
-                        ? new(DeliveryReconciliationKind.Conflict, ErrorCode: result.ErrorCode)
-                        : new(DeliveryReconciliationKind.Uncertain, ErrorCode: result.ErrorCode);
+            if (result is null) return new(DeliveryReconciliationKind.Uncertain, ErrorCode: "ABSENCE_NOT_AUTHORITATIVE");
+            if (result.Kind == DeliveryResultKind.Confirmed) return new(DeliveryReconciliationKind.Confirmed, result.Evidence);
+            if (result.ErrorCode == TargetConflict) return new(DeliveryReconciliationKind.Conflict, ErrorCode: TargetConflict);
+            return new(DeliveryReconciliationKind.Uncertain, ErrorCode: result.ErrorCode);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception) when (exception is HttpRequestException or XmlException or IOException)
@@ -214,109 +196,173 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
         return request;
     }
 
+    private static HttpRequestMessage NoReplaceMove(Uri source, Uri target, string user, string password)
+    {
+        var move = Request(new HttpMethod("MOVE"), source, user, password);
+        move.Headers.TryAddWithoutValidation("Destination", target.AbsoluteUri);
+        move.Headers.TryAddWithoutValidation("Overwrite", "F");
+        return move;
+    }
+
+    private static async Task<DeliveryResult?> UploadOriginalAsync(HttpClient client, Uri staged, string user, string password,
+        DeliveryRequest request, Stream original, CancellationToken token)
+    {
+        var verifier = new HashingReadStream(original, request.Size, request.Sha256);
+        using var put = Request(HttpMethod.Put, staged, user, password);
+        put.Content = new StreamContent(verifier, BufferSize);
+        put.Content.Headers.ContentLength = request.Size;
+        put.Headers.TryAddWithoutValidation("X-Hash", "sha256");
+        put.Headers.TryAddWithoutValidation("OC-Checksum", $"SHA256:{request.Sha256}");
+        using HttpResponseMessage response = await client.SendAsync(put, HttpCompletionOption.ResponseHeadersRead, token);
+        if (response.StatusCode == HttpStatusCode.Accepted)
+            return new(DeliveryResultKind.TransientFailure, ErrorCode: ProviderUnavailable);
+        if (!IsCompletedWriteStatus(response.StatusCode)) return ResultFor(response.StatusCode, mayHavePublished: false);
+        if (!verifier.Matches) return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "ORIGINAL_CHANGED");
+        if (!MatchesProviderHash(response, request.Sha256))
+            return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "PROVIDER_HASH_MISMATCH");
+        return null;
+    }
+
+    private static async Task<DeliveryResult> VerifyMoveCollisionAsync(HttpClient client, Uri target, string user, string password,
+        DeliveryRequest request, CancellationToken token)
+    {
+        DeliveryResult? occupied = await VerifyTargetAsync(client, target, user, password, request, token: token);
+        if (occupied?.Kind == DeliveryResultKind.Confirmed) return occupied;
+        if (occupied?.ErrorCode == TargetConflict) return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: TargetConflict);
+        return new(DeliveryResultKind.Uncertain, ErrorCode: "MOVE_CONFLICT_UNVERIFIABLE");
+    }
+
+    private static DeliveryResult RequestFailure(HttpRequestException exception, bool mayHavePublished)
+    {
+        if (exception.HttpRequestError == HttpRequestError.SecureConnectionError)
+            return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: TlsValidationFailed);
+        if (exception.StatusCode is { } status) return ResultFor(status, mayHavePublished);
+        if (mayHavePublished) return new(DeliveryResultKind.Uncertain, ErrorCode: "PROVIDER_OUTCOME_UNKNOWN");
+        return new(DeliveryResultKind.TransientFailure, ErrorCode: ProviderUnavailable);
+    }
+
     private static async Task EnsureParentsAsync(HttpClient client, Uri root, string[] segments, string user, string password, CancellationToken token)
     {
         for (int length = 1; length < segments.Length; length++)
-            await MakeCollectionAsync(client, root, WebDavDestinationUris.Child(root, segments[..length]), user, password, token);
+            await MakeCollectionAsync(client, WebDavDestinationUris.Child(root, segments[..length]), user, password, token);
     }
 
     private static async Task<DeliveryResult?> VerifyNoReplaceAsync(HttpClient client, Uri root, string user, string password,
         CancellationToken token)
     {
-        byte[] first = Encoding.UTF8.GetBytes("ShutterSpool WebDAV no-replace probe v1");
-        byte[] second = Encoding.UTF8.GetBytes("ShutterSpool WebDAV occupied probe v1");
-        string id = Guid.NewGuid().ToString("N");
-        Uri stageRoot = WebDavDestinationUris.Child(root, [".shutterspool-staging"]);
-        Uri source = WebDavDestinationUris.Child(root, [".shutterspool-staging", $"probe-{id}-source"]);
-        Uri replacement = WebDavDestinationUris.Child(root, [".shutterspool-staging", $"probe-{id}-replacement"]);
-        Uri target = WebDavDestinationUris.Child(root, [$".shutterspool-probe-{id}.bin"]);
-        bool operationInFlight = false;
-        bool cleanupDone = false;
+        var probe = new NoReplaceProbe(root);
+        bool cleanupAttempted = false;
         try
         {
-            await MakeCollectionAsync(client, root, stageRoot, user, password, token);
-            using (var put = Request(HttpMethod.Put, source, user, password))
+            Uri stageRoot = WebDavDestinationUris.Child(root, [WebDavDestinationUris.StagingCollection]);
+            await MakeCollectionAsync(client, stageRoot, user, password, token);
+            DeliveryResult? failure = await probe.VerifyAsync(client, user, password, token);
+            if (failure is not null) return failure;
+
+            cleanupAttempted = true;
+            if (!await probe.CleanupAsync(client, user, password, token))
+                return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "PROBE_CLEANUP_FAILED");
+            return null;
+        }
+        catch (HttpRequestException exception) { return RequestFailure(exception, mayHavePublished: false); }
+        catch (OperationCanceledException) { return new(DeliveryResultKind.TransientFailure, ErrorCode: "PROVIDER_TIMEOUT"); }
+        catch (XmlException) { return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: DavResponseInvalid); }
+        finally
+        {
+            if (!probe.MutationMayStillBeRunning && !cleanupAttempted && !token.IsCancellationRequested)
+                await probe.CleanupAsync(client, user, password, token);
+        }
+    }
+
+    private sealed class NoReplaceProbe
+    {
+        private Uri Source { get; }
+        private Uri Replacement { get; }
+        private Uri Target { get; }
+        private byte[] First { get; } = Encoding.UTF8.GetBytes("ShutterSpool WebDAV no-replace probe v1");
+        private byte[] Second { get; } = Encoding.UTF8.GetBytes("ShutterSpool WebDAV occupied probe v1");
+        public bool MutationMayStillBeRunning { get; private set; }
+
+        public NoReplaceProbe(Uri root)
+        {
+            string id = Guid.NewGuid().ToString("N");
+            Source = WebDavDestinationUris.Child(root, [WebDavDestinationUris.StagingCollection, $"probe-{id}-source"]);
+            Replacement = WebDavDestinationUris.Child(root, [WebDavDestinationUris.StagingCollection, $"probe-{id}-replacement"]);
+            Target = WebDavDestinationUris.Child(root, [$".shutterspool-probe-{id}.bin"]);
+        }
+
+        public async Task<DeliveryResult?> VerifyAsync(HttpClient client, string user, string password, CancellationToken token) =>
+            await UploadAsync(client, Source, First, user, password, token)
+            ?? await UploadAsync(client, Replacement, Second, user, password, token)
+            ?? await MoveIntoEmptyTargetAsync(client, user, password, token)
+            ?? await MoveOntoOccupiedTargetAsync(client, user, password, token);
+
+        private async Task<DeliveryResult?> UploadAsync(HttpClient client, Uri resource, byte[] content, string user,
+            string password, CancellationToken token)
+        {
+            using var put = Request(HttpMethod.Put, resource, user, password);
+            put.Content = new ByteArrayContent(content);
+            MutationMayStillBeRunning = true;
+            using HttpResponseMessage response = await client.SendAsync(put, HttpCompletionOption.ResponseHeadersRead, token);
+            if (!IsCompletedWriteStatus(response.StatusCode)) return ResultFor(response.StatusCode, mayHavePublished: false);
+            MutationMayStillBeRunning = false;
+            return null;
+        }
+
+        private async Task<DeliveryResult?> MoveIntoEmptyTargetAsync(HttpClient client, string user, string password, CancellationToken token)
+        {
+            using (var move = NoReplaceMove(Source, Target, user, password))
             {
-                put.Content = new ByteArrayContent(first);
-                operationInFlight = true;
-                using HttpResponseMessage response = await client.SendAsync(put, HttpCompletionOption.ResponseHeadersRead, token);
-                if (!IsCompletedWriteStatus(response.StatusCode)) return ResultFor(response.StatusCode, mayHavePublished: false);
-                operationInFlight = false;
-            }
-            using (var put = Request(HttpMethod.Put, replacement, user, password))
-            {
-                put.Content = new ByteArrayContent(second);
-                operationInFlight = true;
-                using HttpResponseMessage response = await client.SendAsync(put, HttpCompletionOption.ResponseHeadersRead, token);
-                if (!IsCompletedWriteStatus(response.StatusCode)) return ResultFor(response.StatusCode, mayHavePublished: false);
-                operationInFlight = false;
-            }
-            using (var move = Request(new HttpMethod("MOVE"), source, user, password))
-            {
-                move.Headers.TryAddWithoutValidation("Destination", target.AbsoluteUri);
-                move.Headers.TryAddWithoutValidation("Overwrite", "F");
-                operationInFlight = true;
+                MutationMayStillBeRunning = true;
                 using HttpResponseMessage response = await client.SendAsync(move, HttpCompletionOption.ResponseHeadersRead, token);
                 if (response.StatusCode is HttpStatusCode.MethodNotAllowed or HttpStatusCode.NotImplemented)
                 {
-                    operationInFlight = false;
-                    return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "UNSUPPORTED_PUBLICATION");
+                    MutationMayStillBeRunning = false;
+                    return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: UnsupportedPublication);
                 }
                 if (!IsCompletedWriteStatus(response.StatusCode))
                 {
                     if (response.StatusCode is HttpStatusCode.PreconditionFailed or HttpStatusCode.Conflict)
-                        operationInFlight = false;
+                        MutationMayStillBeRunning = false;
                     return ResultFor(response.StatusCode, mayHavePublished: true);
                 }
-                operationInFlight = false;
+                MutationMayStillBeRunning = false;
             }
-            if (!await MatchesAsync(client, target, user, password, first, token))
-                return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "UNSUPPORTED_PUBLICATION");
-            using (var move = Request(new HttpMethod("MOVE"), replacement, user, password))
+            return await MatchesAsync(client, Target, user, password, First, token)
+                ? null : new(DeliveryResultKind.ConfigurationFailure, ErrorCode: UnsupportedPublication);
+        }
+
+        private async Task<DeliveryResult?> MoveOntoOccupiedTargetAsync(HttpClient client, string user, string password, CancellationToken token)
+        {
+            using (var move = NoReplaceMove(Replacement, Target, user, password))
             {
-                move.Headers.TryAddWithoutValidation("Destination", target.AbsoluteUri);
-                move.Headers.TryAddWithoutValidation("Overwrite", "F");
-                operationInFlight = true;
+                MutationMayStillBeRunning = true;
                 using HttpResponseMessage response = await client.SendAsync(move, HttpCompletionOption.ResponseHeadersRead, token);
                 if (IsCompletedWriteStatus(response.StatusCode))
                 {
-                    operationInFlight = false;
-                    return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "UNSUPPORTED_PUBLICATION");
+                    MutationMayStillBeRunning = false;
+                    return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: UnsupportedPublication);
                 }
                 if (response.StatusCode is not (HttpStatusCode.PreconditionFailed or HttpStatusCode.Conflict))
                     return ResultFor(response.StatusCode, mayHavePublished: true);
-                operationInFlight = false;
+                MutationMayStillBeRunning = false;
             }
-            if (!await MatchesAsync(client, target, user, password, first, token)
-                || !await MatchesAsync(client, replacement, user, password, second, token))
-                return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "UNSUPPORTED_PUBLICATION");
-            cleanupDone = true;
-            if (!await CleanupProbeResourcesAsync(client, target, source, replacement, user, password, first, second, token))
-                return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "PROBE_CLEANUP_FAILED");
+            if (!await MatchesAsync(client, Target, user, password, First, token)
+                || !await MatchesAsync(client, Replacement, user, password, Second, token))
+                return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: UnsupportedPublication);
             return null;
         }
-        catch (HttpRequestException exception)
+
+        public async Task<bool> CleanupAsync(HttpClient client, string user, string password, CancellationToken token)
         {
-            if (exception.HttpRequestError == HttpRequestError.SecureConnectionError)
-                return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "TLS_VALIDATION_FAILED");
-            return exception.StatusCode is { } status ? ResultFor(status, mayHavePublished: false)
-                : new(DeliveryResultKind.TransientFailure, ErrorCode: "PROVIDER_UNAVAILABLE");
-        }
-        catch (OperationCanceledException)
-        {
-            return new(DeliveryResultKind.TransientFailure, ErrorCode: "PROVIDER_TIMEOUT");
-        }
-        catch (XmlException) { return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "DAV_RESPONSE_INVALID"); }
-        finally
-        {
-            if (!operationInFlight && !cleanupDone && !token.IsCancellationRequested)
-            {
-                await CleanupProbeResourcesAsync(client, target, source, replacement, user, password, first, second, token);
-            }
+            bool targetCleaned = await CleanupOneProbeAsync(client, Target, user, password, [First, Second], token);
+            bool sourceCleaned = await CleanupOneProbeAsync(client, Source, user, password, [First], token);
+            bool replacementCleaned = await CleanupOneProbeAsync(client, Replacement, user, password, [Second], token);
+            return targetCleaned && sourceCleaned && replacementCleaned;
         }
     }
 
-    private static async Task MakeCollectionAsync(HttpClient client, Uri root, Uri collection, string user, string password, CancellationToken token)
+    private static async Task MakeCollectionAsync(HttpClient client, Uri collection, string user, string password, CancellationToken token)
     {
         using var request = Request(new HttpMethod("MKCOL"), collection, user, password);
         using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
@@ -342,7 +388,7 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
         XNamespace dav = "DAV:";
         string expectedHref = uri.AbsolutePath.TrimEnd('/');
         bool found = xml.Root?.Name == dav + "multistatus" && xml.Root.Elements(dav + "response").Any(item =>
-            string.Equals((string?)item.Element(dav + "href")?.Value?.TrimEnd('/'), expectedHref, StringComparison.Ordinal)
+            string.Equals(item.Element(dav + "href")?.Value.TrimEnd('/'), expectedHref, StringComparison.Ordinal)
             && item.Elements(dav + "propstat").Any(stat => ((string?)stat.Element(dav + "status"))?.Contains(" 200 ", StringComparison.Ordinal) == true
                 && stat.Element(dav + "prop")?.Element(dav + "resourcetype")?.Elements(dav + "collection").Any() == true));
         return found ? null : new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "COLLECTION_NOT_AVAILABLE");
@@ -354,21 +400,27 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
         ResourceMetadata metadata = await InspectResourceAsync(client, target, user, password, request, token);
         if (metadata.Kind == ResourceMetadataKind.Missing) return null;
         if (metadata.Kind == ResourceMetadataKind.Conflict)
-            return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "TARGET_CONFLICT");
+            return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: TargetConflict);
         if (metadata.Kind == ResourceMetadataKind.Receipt)
             return new(DeliveryResultKind.Confirmed, DeliveryConfirmationEvidenceLevel.ProviderReceipt);
         if (metadata.Kind == ResourceMetadataKind.Uncertain)
         {
             if (metadata.Status is { } status) return ResultFor(status, mayHavePublished);
-            if (metadata.ErrorCode == "TLS_VALIDATION_FAILED")
+            if (metadata.ErrorCode == TlsValidationFailed)
                 return mayHavePublished
                     ? new(DeliveryResultKind.Uncertain, ErrorCode: metadata.ErrorCode)
                     : new(DeliveryResultKind.ConfigurationFailure, ErrorCode: metadata.ErrorCode);
-            if (!mayHavePublished && metadata.ErrorCode == "PROVIDER_UNAVAILABLE")
-                return new(DeliveryResultKind.TransientFailure, ErrorCode: "PROVIDER_UNAVAILABLE");
+            if (!mayHavePublished && metadata.ErrorCode == ProviderUnavailable)
+                return new(DeliveryResultKind.TransientFailure, ErrorCode: ProviderUnavailable);
             return new(DeliveryResultKind.Uncertain, ErrorCode: metadata.ErrorCode ?? "READ_BACK_UNKNOWN");
         }
 
+        return await ReadBackTargetAsync(client, target, user, password, request, mayHavePublished, token);
+    }
+
+    private static async Task<DeliveryResult?> ReadBackTargetAsync(HttpClient client, Uri target, string user, string password,
+        DeliveryRequest request, bool mayHavePublished, CancellationToken token)
+    {
         using var get = Request(HttpMethod.Get, target, user, password);
         using HttpResponseMessage response = await client.SendAsync(get, HttpCompletionOption.ResponseHeadersRead, token);
         if (response.StatusCode == HttpStatusCode.NotFound) return null;
@@ -377,17 +429,17 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
             if (mayHavePublished) return new(DeliveryResultKind.Uncertain, ErrorCode: "READ_BACK_UNKNOWN");
             DeliveryResult failure = ResultFor(response.StatusCode, mayHavePublished: false);
             return failure.Kind == DeliveryResultKind.TransientFailure ? failure
-                : new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "TARGET_CONFLICT");
+                : new(DeliveryResultKind.ConfigurationFailure, ErrorCode: TargetConflict);
         }
         if (response.Content.Headers.ContentLength is long length && length != request.Size)
-            return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "TARGET_CONFLICT");
+            return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: TargetConflict);
         using Stream input = await response.Content.ReadAsStreamAsync(token);
         byte[] expected;
         try { expected = Convert.FromHexString(request.Sha256); }
         catch (FormatException) { return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "INVALID_EXPECTED_HASH"); }
         return await MatchesContentAsync(input, request.Size, expected, token)
             ? new(DeliveryResultKind.Confirmed, DeliveryConfirmationEvidenceLevel.ReadBackHash)
-            : new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "TARGET_CONFLICT");
+            : new(DeliveryResultKind.ConfigurationFailure, ErrorCode: TargetConflict);
     }
 
     private static async Task<ResourceMetadata> InspectResourceAsync(HttpClient client, Uri target, string user, string password,
@@ -403,7 +455,7 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
         catch (HttpRequestException exception)
         {
             string errorCode = exception.HttpRequestError == HttpRequestError.SecureConnectionError
-                ? "TLS_VALIDATION_FAILED" : "PROVIDER_UNAVAILABLE";
+                ? TlsValidationFailed : ProviderUnavailable;
             return new(ResourceMetadataKind.Uncertain, errorCode, exception.StatusCode);
         }
         using (response)
@@ -412,8 +464,8 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
             if (response.StatusCode != HttpStatusCode.MultiStatus)
                 return new(ResourceMetadataKind.Uncertain, Status: response.StatusCode);
             try { return ParseResourceMetadata(await ReadXmlAsync(response, token), target, request); }
-            catch (XmlException) { return new(ResourceMetadataKind.Uncertain, "DAV_RESPONSE_INVALID"); }
-            catch (IOException) { return new(ResourceMetadataKind.Uncertain, "PROVIDER_UNAVAILABLE"); }
+            catch (XmlException) { return new(ResourceMetadataKind.Uncertain, DavResponseInvalid); }
+            catch (IOException) { return new(ResourceMetadataKind.Uncertain, ProviderUnavailable); }
             catch (FormatException) { return new(ResourceMetadataKind.Uncertain, "INVALID_EXPECTED_HASH"); }
         }
     }
@@ -421,67 +473,64 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
     private static ResourceMetadata ParseResourceMetadata(XDocument xml, Uri target, DeliveryRequest request)
     {
         XNamespace dav = "DAV:";
-        XNamespace ownCloud = "http://owncloud.org/ns";
-        if (xml.Root?.Name != dav + "multistatus") return new(ResourceMetadataKind.Uncertain, "DAV_RESPONSE_INVALID");
+        if (xml.Root?.Name != dav + "multistatus") return new(ResourceMetadataKind.Uncertain, DavResponseInvalid);
         XElement[] matching = [.. xml.Root.Elements(dav + "response").Where(item => IsTargetHref((string?)item.Element(dav + "href"), target))];
         if (matching.Length != 1) return new(ResourceMetadataKind.Uncertain);
         XElement resource = matching[0];
         XElement[] propstats = [.. resource.Elements(dav + "propstat")];
         if (resource.Element(dav + "status") is { } responseStatus)
         {
-            if (!TryStatusCode(responseStatus.Value, out int status)) return new(ResourceMetadataKind.Uncertain, "DAV_RESPONSE_INVALID");
+            if (!TryStatusCode(responseStatus.Value, out int status)) return new(ResourceMetadataKind.Uncertain, DavResponseInvalid);
             if (status == 404) return propstats.Length == 0
                 ? new(ResourceMetadataKind.Missing) : new(ResourceMetadataKind.Uncertain);
             if (status is < 200 or >= 300) return new(ResourceMetadataKind.Uncertain, Status: (HttpStatusCode)status);
         }
+        return ReadResourceProperties(propstats, request);
+    }
 
-        var types = new List<XElement>();
-        var sizes = new List<XElement>();
-        var checksums = new List<XElement>();
-        bool failedResourceType = false;
-        bool failedRequiredProperty = false;
-        bool failedChecksum = false;
-        if (propstats.Length == 0) return new(ResourceMetadataKind.Uncertain);
+    private static ResourceMetadata ReadResourceProperties(XElement[] propstats, DeliveryRequest request)
+    {
+        XNamespace dav = "DAV:";
+        XNamespace ownCloud = "http://owncloud.org/ns";
+        List<XElement> available = [];
+        List<XElement> missing = [];
         foreach (XElement propstat in propstats)
         {
-            if (!TryStatusCode((string?)propstat.Element(dav + "status"), out int status))
-                return new(ResourceMetadataKind.Uncertain, "DAV_RESPONSE_INVALID");
             XElement? prop = propstat.Element(dav + "prop");
-            if (prop is null) return new(ResourceMetadataKind.Uncertain, "DAV_RESPONSE_INVALID");
-            XElement[] propTypes = [.. prop.Elements(dav + "resourcetype")];
-            XElement[] propSizes = [.. prop.Elements(dav + "getcontentlength")];
-            XElement[] propChecksums = [.. prop.Elements(ownCloud + "checksums")];
-            if (status is >= 200 and < 300)
-            {
-                types.AddRange(propTypes);
-                sizes.AddRange(propSizes);
-                checksums.AddRange(propChecksums);
-            }
-            else if (status >= 500 || status is 401 or 403)
-                return new(ResourceMetadataKind.Uncertain, Status: (HttpStatusCode)status);
-            else if (status == 404)
-            {
-                failedResourceType |= propTypes.Length > 0;
-                failedRequiredProperty |= propSizes.Length > 0;
-                failedChecksum |= propChecksums.Length > 0;
-            }
-            else if (propTypes.Length + propSizes.Length + propChecksums.Length > 0)
+            if (!TryStatusCode((string?)propstat.Element(dav + "status"), out int status) || prop is null)
+                return new(ResourceMetadataKind.Uncertain, DavResponseInvalid);
+            if (status is >= 200 and < 300) available.Add(prop);
+            else if (status == 404) missing.Add(prop);
+            else if (status >= 500 || status is 401 or 403
+                || prop.Elements().Any(item => item.Name == dav + "resourcetype" || item.Name == dav + "getcontentlength"
+                    || item.Name == ownCloud + "checksums"))
                 return new(ResourceMetadataKind.Uncertain, Status: (HttpStatusCode)status);
         }
+        return ClassifyResourceProperties(available, missing, request);
+    }
 
-        if ((failedRequiredProperty && sizes.Count > 0) || (failedChecksum && checksums.Count > 0))
+    private static ResourceMetadata ClassifyResourceProperties(List<XElement> available, List<XElement> missing, DeliveryRequest request)
+    {
+        XNamespace dav = "DAV:";
+        XNamespace ownCloud = "http://owncloud.org/ns";
+        XElement[] types = [.. available.Elements(dav + "resourcetype")];
+        XElement[] sizes = [.. available.Elements(dav + "getcontentlength")];
+        XElement[] checksums = [.. available.Elements(ownCloud + "checksums")];
+        if ((sizes.Length > 0 && missing.Elements(dav + "getcontentlength").Any())
+            || (checksums.Length > 0 && missing.Elements(ownCloud + "checksums").Any()))
             return new(ResourceMetadataKind.Uncertain);
-        if (failedResourceType || types.Count != 1) return new(ResourceMetadataKind.Uncertain);
-        if (types[0].Elements().Any(item => item.Name == dav + "collection")) return new(ResourceMetadataKind.Conflict);
+        if (types.Length != 1 || missing.Elements(dav + "resourcetype").Any()) return new(ResourceMetadataKind.Uncertain);
+        if (types[0].Elements(dav + "collection").Any()) return new(ResourceMetadataKind.Conflict);
         if (types[0].Elements().Any()) return new(ResourceMetadataKind.Uncertain);
-        long[] parsedSizes = [.. sizes.Select(item => long.TryParse(item.Value.Trim(), NumberStyles.None,
-            CultureInfo.InvariantCulture, out long parsedSize) ? parsedSize : (long?)null)
-            .Where(item => item is not null).Select(item => item!.Value)];
-        if (parsedSizes.Any(size => size != request.Size))
-            return new(ResourceMetadataKind.Conflict);
-        if (failedRequiredProperty || sizes.Count != 1 || parsedSizes.Length != 1 || failedChecksum || checksums.Count != 1)
-            return new(ResourceMetadataKind.Fallback);
 
+        int validSizes = 0;
+        foreach (XElement size in sizes)
+        {
+            if (!long.TryParse(size.Value.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out long length)) continue;
+            if (length != request.Size) return new(ResourceMetadataKind.Conflict);
+            validSizes++;
+        }
+        if (sizes.Length != 1 || validSizes != 1 || checksums.Length != 1) return new(ResourceMetadataKind.Fallback);
         return ClassifyChecksum(checksums[0], Convert.FromHexString(request.Sha256));
     }
 
@@ -509,19 +558,16 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
     {
         if (string.IsNullOrWhiteSpace(href) || href.Any(char.IsControl) || href.Contains('\\')
             || href.Contains('?') || href.Contains('#')) return false;
+        Uri? resolved;
         string rawPath;
-        Uri resolved;
-        if (href.StartsWith("/", StringComparison.Ordinal))
+        if (href.StartsWith('/'))
         {
-            if (href.StartsWith("//", StringComparison.Ordinal)) return false;
+            if (href.StartsWith("//", StringComparison.Ordinal) || !Uri.TryCreate(target, href, out resolved)) return false;
             rawPath = href;
-            if (!Uri.TryCreate(target, href, out Uri? parsed) || parsed is null) return false;
-            resolved = parsed;
         }
         else
         {
-            if (!Uri.TryCreate(href, UriKind.Absolute, out Uri? parsed) || parsed is null) return false;
-            resolved = parsed;
+            if (!Uri.TryCreate(href, UriKind.Absolute, out resolved)) return false;
             int authority = href.IndexOf("://", StringComparison.Ordinal);
             if (authority < 0) return false;
             int pathStart = href.IndexOf('/', authority + 3);
@@ -535,29 +581,22 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
 
     private static bool EscapedPathEquals(string left, string right)
     {
-        int leftIndex = 0;
-        int rightIndex = 0;
-        while (leftIndex < left.Length && rightIndex < right.Length)
+        if (left.Length != right.Length) return false;
+        for (int i = 0; i < left.Length; i++)
         {
-            bool leftEscape = left[leftIndex] == '%';
-            bool rightEscape = right[rightIndex] == '%';
-            if (leftEscape || rightEscape)
-            {
-                if (!leftEscape || !rightEscape || leftIndex + 2 >= left.Length || rightIndex + 2 >= right.Length)
-                    return false;
-                int leftHigh = HexValue(left[leftIndex + 1]);
-                int leftLow = HexValue(left[leftIndex + 2]);
-                int rightHigh = HexValue(right[rightIndex + 1]);
-                int rightLow = HexValue(right[rightIndex + 2]);
-                if (leftHigh < 0 || leftLow < 0 || rightHigh < 0 || rightLow < 0
-                    || leftHigh != rightHigh || leftLow != rightLow) return false;
-                leftIndex += 3;
-                rightIndex += 3;
-                continue;
-            }
-            if (left[leftIndex++] != right[rightIndex++]) return false;
+            if (left[i] != right[i]) return false;
+            if (left[i] != '%') continue;
+            if (i + 2 >= left.Length || !HexDigitsEqual(left[i + 1], right[i + 1]) || !HexDigitsEqual(left[i + 2], right[i + 2]))
+                return false;
+            i += 2;
         }
-        return leftIndex == left.Length && rightIndex == right.Length;
+        return true;
+    }
+
+    private static bool HexDigitsEqual(char left, char right)
+    {
+        int digit = HexValue(left);
+        return digit >= 0 && digit == HexValue(right);
     }
 
     private static int HexValue(char value) => value switch
@@ -640,15 +679,6 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
         return response.StatusCode is HttpStatusCode.OK or HttpStatusCode.NoContent or HttpStatusCode.NotFound;
     }
 
-    private static async Task<bool> CleanupProbeResourcesAsync(HttpClient client, Uri target, Uri source, Uri replacement,
-        string user, string password, byte[] first, byte[] second, CancellationToken token)
-    {
-        bool targetCleaned = await CleanupOneProbeAsync(client, target, user, password, [first, second], token);
-        bool sourceCleaned = await CleanupOneProbeAsync(client, source, user, password, [first], token);
-        bool replacementCleaned = await CleanupOneProbeAsync(client, replacement, user, password, [second], token);
-        return targetCleaned && sourceCleaned && replacementCleaned;
-    }
-
     private static async Task<bool> CleanupOneProbeAsync(HttpClient client, Uri uri, string user, string password,
         byte[][] ownedContent, CancellationToken token)
     {
@@ -724,7 +754,7 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
             return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: status == HttpStatusCode.Unauthorized ? "AUTHENTICATION_FAILED" : "DAV_OPERATION_REJECTED");
         if (mayHavePublished) return new(DeliveryResultKind.Uncertain, ErrorCode: "PROVIDER_OUTCOME_UNKNOWN");
         if ((int)status >= 500 || status is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests)
-            return new(DeliveryResultKind.TransientFailure, ErrorCode: "PROVIDER_UNAVAILABLE");
+            return new(DeliveryResultKind.TransientFailure, ErrorCode: ProviderUnavailable);
         return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "DAV_OPERATION_REJECTED");
     }
 
@@ -762,7 +792,12 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
             _hash.AppendData(buffer.Span[..read]);
             return read;
         }
-        protected override void Dispose(bool disposing) { if (disposing) _hash.Dispose(); base.Dispose(disposing); }
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) _hash.Dispose();
+            base.Dispose(disposing);
+        }
+
         public override ValueTask DisposeAsync() { _hash.Dispose(); return ValueTask.CompletedTask; }
         public override void Flush() => throw new NotSupportedException();
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();

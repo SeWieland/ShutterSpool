@@ -417,22 +417,35 @@ internal sealed class EfWebDavDestinationConfiguration(ShutterSpoolDbContext dat
         if (destination is null) return "DESTINATION_NOT_FOUND";
         if (destination.IsArchived) return "DESTINATION_ARCHIVED";
         if (destination.ConfigurationRevision != expectedRevision) return "CONFIGURATION_CONFLICT";
+        string? error = await UpdateProviderConfigurationAsync(destinationId, normalized.AbsoluteUri, username.Trim(), password, cancellationToken);
+        if (error is not null) return error;
+        destination.ConfigurationRevision++;
+        await database.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return null;
+    }
+
+    private async Task<string?> UpdateProviderConfigurationAsync(Guid destinationId, string collectionUrl, string username,
+        string? password, CancellationToken cancellationToken)
+    {
         WebDavDestinationEntity? config = await database.WebDavDestinations.SingleOrDefaultAsync(item => item.DestinationId == destinationId, cancellationToken);
-        bool identityChanged = config is null || config.CollectionUrl != normalized.AbsoluteUri || config.Username != username.Trim();
+        bool identityChanged = config is null || config.CollectionUrl != collectionUrl || config.Username != username;
         if (identityChanged && await database.Deliveries.AnyAsync(item => item.DestinationId == destinationId, cancellationToken)) return "IDENTITY_LOCKED";
         DestinationCredentialEntity? credential = await database.DestinationCredentials.SingleOrDefaultAsync(item => item.DestinationId == destinationId, cancellationToken);
         if (password is null && credential is null) return "INVALID_CREDENTIALS";
-        if (config is null) database.WebDavDestinations.Add(new() { DestinationId = destinationId, CollectionUrl = normalized.AbsoluteUri, Username = username.Trim() });
-        else { config.CollectionUrl = normalized.AbsoluteUri; config.Username = username.Trim(); }
+        if (config is null)
+            database.WebDavDestinations.Add(new() { DestinationId = destinationId, CollectionUrl = collectionUrl, Username = username });
+        else
+        {
+            config.CollectionUrl = collectionUrl;
+            config.Username = username;
+        }
         if (password is not null)
         {
             string encrypted = protector.Protect(password);
             if (credential is null) database.DestinationCredentials.Add(new() { DestinationId = destinationId, EncryptedSecret = encrypted });
             else credential.EncryptedSecret = encrypted;
         }
-        destination.ConfigurationRevision++;
-        await database.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
         return null;
     }
 

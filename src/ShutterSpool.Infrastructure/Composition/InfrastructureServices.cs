@@ -198,7 +198,7 @@ public static class InfrastructureServices
         services.AddScoped<IDestinationDeliveryAdapter, LocalDestinationDeliveryAdapter>();
         services.AddScoped<ILocalDestinationConfiguration, LocalDestinationConfigurationService>();
         services.AddScoped<IWebDavDestinationConfiguration, EfWebDavDestinationConfiguration>();
-        services.AddHttpClient("webdav", client => client.Timeout = Timeout.InfiniteTimeSpan)
+        services.AddHttpClient(WebDavDestinationDeliveryAdapter.HttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan)
             .ConfigurePrimaryHttpMessageHandler(() => new WebDavEgressPolicy(egress).CreateHandler())
             .RemoveAllLoggers();
         services.AddScoped<WebDavDestinationDeliveryAdapter>();
