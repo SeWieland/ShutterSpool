@@ -90,6 +90,7 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
     private const string UnsupportedPublication = "UNSUPPORTED_PUBLICATION";
     private const int BufferSize = 64 * 1024;
     private const int MaxXmlBytes = 64 * 1024;
+    private static readonly XName ResourceTypeName = XName.Get("resourcetype", "DAV:");
     public string Kind => "webdav";
 
     public async Task<(bool Writable, string? ErrorCode)> TestAsync(string collectionUrl, string username, string password,
@@ -360,6 +361,51 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
             bool replacementCleaned = await CleanupOneProbeAsync(client, Replacement, user, password, [Second], token);
             return targetCleaned && sourceCleaned && replacementCleaned;
         }
+
+        private static async Task<bool> MatchesAsync(HttpClient client, Uri uri, string user, string password, byte[] expected,
+            CancellationToken token)
+        {
+            using var request = Request(HttpMethod.Get, uri, user, password);
+            using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+            if (response.StatusCode != HttpStatusCode.OK || response.Content.Headers.ContentRange is not null) return false;
+            if (response.Content.Headers.ContentLength is long length && length != expected.Length) return false;
+            await using Stream body = await response.Content.ReadAsStreamAsync(token);
+            return await MatchesContentAsync(body, expected.Length, SHA256.HashData(expected), token);
+        }
+
+        private static async Task<bool> CleanupOneProbeAsync(HttpClient client, Uri uri, string user, string password,
+            byte[][] ownedContent, CancellationToken token)
+        {
+            using var request = Request(HttpMethod.Get, uri, user, password);
+            using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+            if (response.StatusCode == HttpStatusCode.NotFound) return true;
+            if (response.StatusCode != HttpStatusCode.OK || response.Content.Headers.ContentRange is not null) return false;
+            System.Net.Http.Headers.EntityTagHeaderValue? etag = response.Headers.ETag;
+            if (etag is null || etag.IsWeak) return false;
+            if (response.Content.Headers.ContentLength is long length && length > ownedContent.Max(content => content.Length)) return false;
+            await using Stream body = await response.Content.ReadAsStreamAsync(token);
+            using var output = new MemoryStream(ownedContent.Max(content => content.Length) + 1);
+            byte[] buffer = new byte[BufferSize];
+            int read;
+            while ((read = await body.ReadAsync(buffer, token)) != 0)
+            {
+                if (output.Length + read > ownedContent.Max(content => content.Length)) return false;
+                await output.WriteAsync(buffer.AsMemory(0, read), token);
+            }
+            byte[] actual = output.ToArray();
+            if (!ownedContent.Any(content => content.AsSpan().SequenceEqual(actual))) return false;
+            return await DeleteOwnedAsync(client, uri, user, password, etag, token);
+        }
+
+        private static async Task<bool> DeleteOwnedAsync(HttpClient client, Uri uri, string user, string password,
+            System.Net.Http.Headers.EntityTagHeaderValue etag,
+            CancellationToken token)
+        {
+            using var request = Request(HttpMethod.Delete, uri, user, password);
+            request.Headers.IfMatch.Add(etag);
+            using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+            return response.StatusCode is HttpStatusCode.OK or HttpStatusCode.NoContent or HttpStatusCode.NotFound;
+        }
     }
 
     private static async Task MakeCollectionAsync(HttpClient client, Uri collection, string user, string password, CancellationToken token)
@@ -390,7 +436,7 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
         bool found = xml.Root?.Name == dav + "multistatus" && xml.Root.Elements(dav + "response").Any(item =>
             string.Equals(item.Element(dav + "href")?.Value.TrimEnd('/'), expectedHref, StringComparison.Ordinal)
             && item.Elements(dav + "propstat").Any(stat => ((string?)stat.Element(dav + "status"))?.Contains(" 200 ", StringComparison.Ordinal) == true
-                && stat.Element(dav + "prop")?.Element(dav + "resourcetype")?.Elements(dav + "collection").Any() == true));
+                && stat.Element(dav + "prop")?.Element(ResourceTypeName)?.Elements(dav + "collection").Any() == true));
         return found ? null : new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "COLLECTION_NOT_AVAILABLE");
     }
 
@@ -502,7 +548,7 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
             if (status is >= 200 and < 300) available.Add(prop);
             else if (status == 404) missing.Add(prop);
             else if (status >= 500 || status is 401 or 403
-                || prop.Elements().Any(item => item.Name == dav + "resourcetype" || item.Name == dav + "getcontentlength"
+                || prop.Elements().Any(item => item.Name == ResourceTypeName || item.Name == dav + "getcontentlength"
                     || item.Name == ownCloud + "checksums"))
                 return new(ResourceMetadataKind.Uncertain, Status: (HttpStatusCode)status);
         }
@@ -513,13 +559,13 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
     {
         XNamespace dav = "DAV:";
         XNamespace ownCloud = "http://owncloud.org/ns";
-        XElement[] types = [.. available.Elements(dav + "resourcetype")];
+        XElement[] types = [.. available.Elements(ResourceTypeName)];
         XElement[] sizes = [.. available.Elements(dav + "getcontentlength")];
         XElement[] checksums = [.. available.Elements(ownCloud + "checksums")];
         if ((sizes.Length > 0 && missing.Elements(dav + "getcontentlength").Any())
             || (checksums.Length > 0 && missing.Elements(ownCloud + "checksums").Any()))
             return new(ResourceMetadataKind.Uncertain);
-        if (types.Length != 1 || missing.Elements(dav + "resourcetype").Any()) return new(ResourceMetadataKind.Uncertain);
+        if (types.Length != 1 || missing.Elements(ResourceTypeName).Any()) return new(ResourceMetadataKind.Uncertain);
         if (types[0].Elements(dav + "collection").Any()) return new(ResourceMetadataKind.Conflict);
         if (types[0].Elements().Any()) return new(ResourceMetadataKind.Uncertain);
 
@@ -582,13 +628,20 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
     private static bool EscapedPathEquals(string left, string right)
     {
         if (left.Length != right.Length) return false;
-        for (int i = 0; i < left.Length; i++)
+        int i = 0;
+        while (i < left.Length)
         {
             if (left[i] != right[i]) return false;
-            if (left[i] != '%') continue;
-            if (i + 2 >= left.Length || !HexDigitsEqual(left[i + 1], right[i + 1]) || !HexDigitsEqual(left[i + 2], right[i + 2]))
-                return false;
-            i += 2;
+            if (left[i] == '%')
+            {
+                if (i + 2 >= left.Length || !HexDigitsEqual(left[i + 1], right[i + 1]) || !HexDigitsEqual(left[i + 2], right[i + 2]))
+                    return false;
+                i += 3;
+            }
+            else
+            {
+                i++;
+            }
         }
         return true;
     }
@@ -640,17 +693,6 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
         return XDocument.Load(reader);
     }
 
-    private static async Task<bool> MatchesAsync(HttpClient client, Uri uri, string user, string password, byte[] expected,
-        CancellationToken token)
-    {
-        using var request = Request(HttpMethod.Get, uri, user, password);
-        using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
-        if (response.StatusCode != HttpStatusCode.OK || response.Content.Headers.ContentRange is not null) return false;
-        if (response.Content.Headers.ContentLength is long length && length != expected.Length) return false;
-        await using Stream body = await response.Content.ReadAsStreamAsync(token);
-        return await MatchesContentAsync(body, expected.Length, SHA256.HashData(expected), token);
-    }
-
     private static async Task<bool> MatchesContentAsync(Stream body, long expectedSize, byte[] expectedHash,
         CancellationToken token)
     {
@@ -667,40 +709,6 @@ internal sealed class WebDavDestinationDeliveryAdapter(IHttpClientFactory client
         byte[] actual = hash.GetHashAndReset();
         return count == expectedSize && expectedHash.Length == actual.Length
             && CryptographicOperations.FixedTimeEquals(actual, expectedHash);
-    }
-
-    private static async Task<bool> DeleteOwnedAsync(HttpClient client, Uri uri, string user, string password,
-        System.Net.Http.Headers.EntityTagHeaderValue etag,
-        CancellationToken token)
-    {
-        using var request = Request(HttpMethod.Delete, uri, user, password);
-        request.Headers.IfMatch.Add(etag);
-        using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
-        return response.StatusCode is HttpStatusCode.OK or HttpStatusCode.NoContent or HttpStatusCode.NotFound;
-    }
-
-    private static async Task<bool> CleanupOneProbeAsync(HttpClient client, Uri uri, string user, string password,
-        byte[][] ownedContent, CancellationToken token)
-    {
-        using var request = Request(HttpMethod.Get, uri, user, password);
-        using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
-        if (response.StatusCode == HttpStatusCode.NotFound) return true;
-        if (response.StatusCode != HttpStatusCode.OK || response.Content.Headers.ContentRange is not null) return false;
-        System.Net.Http.Headers.EntityTagHeaderValue? etag = response.Headers.ETag;
-        if (etag is null || etag.IsWeak) return false;
-        if (response.Content.Headers.ContentLength is long length && length > ownedContent.Max(content => content.Length)) return false;
-        await using Stream body = await response.Content.ReadAsStreamAsync(token);
-        using var output = new MemoryStream(ownedContent.Max(content => content.Length) + 1);
-        byte[] buffer = new byte[BufferSize];
-        int read;
-        while ((read = await body.ReadAsync(buffer, token)) != 0)
-        {
-            if (output.Length + read > ownedContent.Max(content => content.Length)) return false;
-            await output.WriteAsync(buffer.AsMemory(0, read), token);
-        }
-        byte[] actual = output.ToArray();
-        if (!ownedContent.Any(content => content.AsSpan().SequenceEqual(actual))) return false;
-        return await DeleteOwnedAsync(client, uri, user, password, etag, token);
     }
 
     private static bool ValidExpectedContent(DeliveryRequest request)
