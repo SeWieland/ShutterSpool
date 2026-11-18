@@ -15,6 +15,7 @@ using ShutterSpool.Application.Sources;
 using ShutterSpool.Application.Workspaces;
 using ShutterSpool.Infrastructure.Persistence;
 using ShutterSpool.Server.Composition;
+using WorkspaceFixture = ShutterSpool.IntegrationTests.WorkspaceTenancyPostgresTests.WorkspaceFixture;
 
 namespace ShutterSpool.IntegrationTests;
 
@@ -56,12 +57,12 @@ public sealed class WorkspaceCameraIngressTests
     [InlineData("/INTERNAL/CAMERA/HOOK/")]
     public async Task Hook_route_variants_preserve_admitted_transfer_after_credential_replacement(string hookPath)
     {
-        await using var fixture = await WorkspaceTenancyPostgresTests.WorkspaceFixture.CreateAsync();
+        await using var fixture = await WorkspaceFixture.CreateAsync();
         await fixture.ProvisionAsync();
         WorkspaceDefinition[] workspaces = await fixture.RegistryAsync();
         await using WebApplication server = await StartAsync(fixture);
         CreatedSource created;
-        await using (var scope = fixture.Scope(server.Services, workspaces[0]))
+        await using (var scope = WorkspaceFixture.Scope(server.Services, workspaces[0]))
             created = await scope.ServiceProvider.GetRequiredService<SourceManagementService>().CreateAsync("Synthetic rotated camera", "Delay", 60,
                 cancellationToken: Token);
         using HttpClient client = server.GetTestClient();
@@ -71,7 +72,7 @@ public sealed class WorkspaceCameraIngressTests
         long admitted = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1_000_000;
         using (HttpResponseMessage admission = await client.PostAsJsonAsync(hookPath, Event("pre-upload", created.Username, endpoint, admitted), Token))
             Assert.Equal(HttpStatusCode.OK, admission.StatusCode);
-        await using (var scope = fixture.Scope(server.Services, workspaces[0]))
+        await using (var scope = WorkspaceFixture.Scope(server.Services, workspaces[0]))
             Assert.True((await scope.ServiceProvider.GetRequiredService<SourceManagementService>().RegenerateAsync(created.Id, 0,
                 username: "replacement-" + Guid.NewGuid().ToString("N"), token: Token)).Applied);
 
@@ -85,7 +86,7 @@ public sealed class WorkspaceCameraIngressTests
             Assert.Equal(HttpStatusCode.Forbidden, wrongIdentity.StatusCode);
         using (HttpResponseMessage wrongSize = await client.PostAsJsonAsync(hookPath, Event("upload", created.Username, endpoint, admitted + 1_000_000_000, 4), Token))
             Assert.Equal(HttpStatusCode.Forbidden, wrongSize.StatusCode);
-        await using (var scope = fixture.Scope(server.Services, workspaces[0]))
+        await using (var scope = WorkspaceFixture.Scope(server.Services, workspaces[0]))
         {
             ShutterSpoolDbContext database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
             Assert.Empty(await database.Assets.ToArrayAsync(Token));
@@ -103,8 +104,8 @@ public sealed class WorkspaceCameraIngressTests
             using HttpResponseMessage completion = await client.PostAsJsonAsync(hookPath, Event("upload", created.Username, endpoint, admitted + 1_000_000_000, 3), Token);
             Assert.Equal(HttpStatusCode.OK, completion.StatusCode);
         }
-        await AssertCustodyAsync(server, fixture, workspaces);
-        await using (var scope = fixture.Scope(server.Services, workspaces[0]))
+        await AssertCustodyAsync(server, workspaces);
+        await using (var scope = WorkspaceFixture.Scope(server.Services, workspaces[0]))
         {
             CameraUploadAdmissionEntity completed = await scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>().CameraUploadAdmissions.SingleAsync(Token);
             Assert.Equal(CameraTransferState.Completed, completed.State);
@@ -116,14 +117,14 @@ public sealed class WorkspaceCameraIngressTests
     [Fact]
     public async Task Private_callbacks_bind_current_source_credentials_and_preserve_accepted_media_after_restart()
     {
-        await using var fixture = await WorkspaceTenancyPostgresTests.WorkspaceFixture.CreateAsync();
+        await using var fixture = await WorkspaceFixture.CreateAsync();
         await fixture.ProvisionAsync();
         WorkspaceDefinition[] workspaces = await fixture.RegistryAsync();
         CreatedSource created;
         Guid login;
         await using (WebApplication server = await StartAsync(fixture))
         {
-            await using (var scope = fixture.Scope(server.Services, workspaces[0]))
+            await using (var scope = WorkspaceFixture.Scope(server.Services, workspaces[0]))
                 created = await scope.ServiceProvider.GetRequiredService<SourceManagementService>().CreateAsync("Synthetic camera", "Delay", 60,
                     cancellationToken: Token);
             using HttpClient client = server.GetTestClient();
@@ -145,8 +146,8 @@ public sealed class WorkspaceCameraIngressTests
                 Assert.Equal(HttpStatusCode.OK, bytes.StatusCode);
             using (HttpResponseMessage completion = await client.PostAsJsonAsync("/internal/camera/hook", Event("upload", created.Username, endpoint, admitted + 1_000_000_000, 3), Token))
                 Assert.Equal(HttpStatusCode.OK, completion.StatusCode);
-            await AssertCustodyAsync(server, fixture, workspaces);
-            await using (var scope = fixture.Scope(server.Services, workspaces[0]))
+            await AssertCustodyAsync(server, workspaces);
+            await using (var scope = WorkspaceFixture.Scope(server.Services, workspaces[0]))
             {
                 var changed = await scope.ServiceProvider.GetRequiredService<SourceManagementService>().RegenerateAsync(created.Id, 0, token: Token);
                 Assert.True(changed.Applied);
@@ -159,7 +160,7 @@ public sealed class WorkspaceCameraIngressTests
             await server.StopAsync(Token);
         }
         await using WebApplication restarted = await StartAsync(fixture);
-        await AssertCustodyAsync(restarted, fixture, workspaces);
+        await AssertCustodyAsync(restarted, workspaces);
         using HttpClient replay = restarted.GetTestClient();
         replay.DefaultRequestHeaders.Add("X-API-KEY", CallbackKey);
         using HttpResponseMessage rejected = await replay.GetAsync($"/internal/camera/fs/{login:N}/stat/%2Fsynthetic.jpg", Token);
@@ -167,16 +168,16 @@ public sealed class WorkspaceCameraIngressTests
         await restarted.StopAsync(Token);
     }
 
-    private static async Task AssertCustodyAsync(WebApplication server, WorkspaceTenancyPostgresTests.WorkspaceFixture fixture, WorkspaceDefinition[] workspaces)
+    private static async Task AssertCustodyAsync(WebApplication server, WorkspaceDefinition[] workspaces)
     {
-        await using (var own = fixture.Scope(server.Services, workspaces[0]))
+        await using (var own = WorkspaceFixture.Scope(server.Services, workspaces[0]))
         {
             AssetEntity asset = await own.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>().Assets.SingleAsync(Token);
             Assert.Equal("Spooled", asset.State);
             Assert.Equal("synthetic.jpg", asset.OriginalName);
             Assert.Equal(new byte[] { 4, 5, 6 }, await File.ReadAllBytesAsync(Path.Combine(workspaces[0].StorageRoot, asset.SpoolKey.Replace('/', Path.DirectorySeparatorChar)), Token));
         }
-        await using var other = fixture.Scope(server.Services, workspaces[1]);
+        await using var other = WorkspaceFixture.Scope(server.Services, workspaces[1]);
         Assert.Empty(await other.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>().Assets.ToArrayAsync(Token));
     }
 
@@ -195,7 +196,7 @@ public sealed class WorkspaceCameraIngressTests
         timestamp, status = 1, protocol = "FTP", fs_provider = 6, file_size = size,
     };
 
-    private static async Task<WebApplication> StartAsync(WorkspaceTenancyPostgresTests.WorkspaceFixture fixture)
+    private static async Task<WebApplication> StartAsync(WorkspaceFixture fixture)
     {
         WebApplicationBuilder builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Testing" });
         builder.Configuration.AddConfiguration(fixture.Configuration);

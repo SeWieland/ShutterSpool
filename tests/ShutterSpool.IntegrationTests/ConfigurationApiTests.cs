@@ -30,6 +30,7 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using WorkspaceFixture = ShutterSpool.IntegrationTests.WorkspaceTenancyPostgresTests.WorkspaceFixture;
 
 namespace ShutterSpool.IntegrationTests;
 
@@ -902,22 +903,22 @@ public sealed partial class ConfigurationApiTests
     {
         private static readonly byte[] SigningKey = Encoding.UTF8.GetBytes("synthetic-api-test-signing-key-at-least-32-bytes");
 
-        private ConfigurationApiFixture(WorkspaceTenancyPostgresTests.WorkspaceFixture storage, WorkspaceDefinition workspace, WebApplicationFactory<Program> server, HttpClient client)
+        private ConfigurationApiFixture(WorkspaceFixture storage, WorkspaceDefinition workspace, WebApplicationFactory<Program> server, HttpClient client)
         {
             Storage = storage;
             Workspace = workspace;
             Database = storage.Database(0);
             Server = server;
             Client = client;
-            BoundScope = storage.Scope(server.Services, workspace);
+            BoundScope = WorkspaceFixture.Scope(server.Services, workspace);
         }
 
-        private WorkspaceTenancyPostgresTests.WorkspaceFixture Storage { get; }
+        private WorkspaceFixture Storage { get; }
         private WorkspaceDefinition Workspace { get; }
         private AsyncServiceScope BoundScope { get; }
         public IServiceProvider Services => BoundScope.ServiceProvider;
         public string RuntimeRole => new Npgsql.NpgsqlConnectionStringBuilder(Storage.Connection(0)).Username!;
-        public AsyncServiceScope Scope() => Storage.Scope(Server.Services, Workspace);
+        public AsyncServiceScope Scope() => WorkspaceFixture.Scope(Server.Services, Workspace);
         public ArchitectureTestDatabase Database { get; }
         public WebApplicationFactory<Program> Server { get; }
         public HttpClient Client { get; }
@@ -927,7 +928,7 @@ public sealed partial class ConfigurationApiTests
             CameraIngressSettings? profileSettings = null, string? minimumPasswordLength = null,
             ICameraIngressDirectories? directoriesOverride = null)
         {
-            var storage = await WorkspaceTenancyPostgresTests.WorkspaceFixture.CreateAsync(workspaceCount: 1);
+            var storage = await WorkspaceFixture.CreateAsync(workspaceCount: 1);
             storage.Configuration["Logging:LogLevel:Default"] = "Warning";
             storage.Configuration["Logging:LogLevel:Microsoft.EntityFrameworkCore.Database.Command"] = "None";
             storage.Configuration["ShutterSpool:Security:Authority"] = "https://issuer.test";

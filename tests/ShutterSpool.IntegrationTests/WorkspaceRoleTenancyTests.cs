@@ -10,6 +10,7 @@ using System.Net.Http.Json;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using WorkspaceFixture = ShutterSpool.IntegrationTests.WorkspaceTenancyPostgresTests.WorkspaceFixture;
 
 namespace ShutterSpool.IntegrationTests;
 
@@ -24,7 +25,7 @@ public sealed partial class WorkspaceTenancyHttpTests
         Guid capture = Guid.NewGuid(), source = Guid.NewGuid();
         await fixture.SeedAsync(first, source, (capture, "first-private"));
         await fixture.SeedAsync(second, source, (capture, "second-private"));
-        await using (var scope = fixture.Storage.Scope(fixture.Server.Services, second))
+        await using (var scope = WorkspaceFixture.Scope(fixture.Server.Services, second))
         {
             var database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
             (await database.AuthorizationGrants.SingleAsync(item => item.Subject == first.Name, Token)).Role = WorkspaceRole.Viewer;
@@ -41,7 +42,7 @@ public sealed partial class WorkspaceTenancyHttpTests
         Assert.Equal(HttpStatusCode.NotFound, secondHidden.StatusCode);
         using HttpResponseMessage secondConfig = await SendAsync(client, HttpMethod.Get, "/management/sources", second.Id);
         Assert.Equal(HttpStatusCode.Forbidden, secondConfig.StatusCode);
-        await using (var scope = fixture.Storage.Scope(fixture.Server.Services, second))
+        await using (var scope = WorkspaceFixture.Scope(fixture.Server.Services, second))
         {
             var database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
             (await database.Set<WorkspaceViewerPolicyEntity>().SingleAsync(Token)).IncludeUnreleased = true;
@@ -61,7 +62,7 @@ public sealed partial class WorkspaceTenancyHttpTests
     {
         await using var fixture = await TenantHttpFixture.CreateAsync();
         WorkspaceDefinition workspace = fixture.Workspaces[0];
-        await using (var scope = fixture.Storage.Scope(fixture.Server.Services, workspace))
+        await using (var scope = WorkspaceFixture.Scope(fixture.Server.Services, workspace))
         {
             var database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
             (await database.AuthorizationGrants.SingleAsync(Token)).Role = WorkspaceRole.Viewer;
@@ -83,7 +84,11 @@ public sealed partial class WorkspaceTenancyHttpTests
                 using JsonDocument document = JsonDocument.Parse(frame);
                 JsonElement root = document.RootElement;
                 int type = root.GetProperty("type").GetInt32();
-                if (type != 1) { Assert.Contains(type, new[] { 6, 7 }); continue; }
+                if (type != 1)
+                {
+                    Assert.True(type is 6 or 7, $"Unexpected SignalR message type {type}.");
+                    continue;
+                }
                 Assert.Equal("resyncRequired", root.GetProperty("target").GetString());
                 JsonElement payload = Assert.Single(root.GetProperty("arguments").EnumerateArray());
                 Assert.Equal(new[] { "epoch" }, payload.EnumerateObject().Select(property => property.Name));
@@ -104,7 +109,7 @@ public sealed partial class WorkspaceTenancyHttpTests
         }
         Assert.Equal(1, resyncHints);
         Assert.Equal(WebSocketState.Open, socket.State);
-        await using (var scope = fixture.Storage.Scope(fixture.Server.Services, workspace))
+        await using (var scope = WorkspaceFixture.Scope(fixture.Server.Services, workspace))
         {
             var database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
             var policy = await database.Set<WorkspaceViewerPolicyEntity>().SingleAsync(Token);

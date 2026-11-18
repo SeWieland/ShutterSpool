@@ -49,9 +49,8 @@ public sealed partial class CameraIngressIntegrationTests
         await fixture.Ingress.ReceiveAsync(login.Id, path, new MemoryStream(bytes), 1_024, Token);
 
         Assert.True(Directory.Exists(Path.Combine(fixture.DirectoriesRoot, sourceId.ToString("N"), "files")));
-        string[] privatePayloads = EnumeratePayloads(fixture.SpoolRoot);
-        Assert.Single(privatePayloads);
-        Assert.Equal(bytes, await File.ReadAllBytesAsync(privatePayloads[0], Token));
+        string privatePayload = Assert.Single(EnumeratePayloads(fixture.SpoolRoot));
+        Assert.Equal(bytes, await File.ReadAllBytesAsync(privatePayload, Token));
         Assert.Empty(await fixture.Database.Assets.AsNoTracking().ToListAsync(Token));
 
         IngestResult result = await fixture.Ingress.CompleteAsync(login.Id, login.Username, session, path, timestamp + 1_000, bytes.Length, Token);

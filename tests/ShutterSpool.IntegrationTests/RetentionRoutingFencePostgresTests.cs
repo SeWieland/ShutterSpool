@@ -77,8 +77,9 @@ public sealed class RetentionRoutingFencePostgresTests
             .Where(item => item.AssetId == ordinaryAssetId || item.AssetId == favoriteAssetId)
             .Where(item => item.Kind == RoutingDecisionKindValue.InvalidTarget && item.RuleId != null)
             .ToArrayAsync(token);
-        Assert.Equal(2, actualInvalidTargets.Length);
-        Assert.All(actualInvalidTargets, item => Assert.Contains(item.RuleId, new[] { "raw-path", "jpeg-path" }));
+        (Guid AssetId, string? RuleId)[] expectedInvalidTargets = [(ordinaryAssetId, "jpeg-path"), (favoriteAssetId, "raw-path")];
+        Assert.Equal(expectedInvalidTargets, actualInvalidTargets.OrderBy(item => item.RuleId, StringComparer.Ordinal)
+            .Select(item => (item.AssetId, item.RuleId)));
         Assert.Equal(0, await database.Deliveries.CountAsync(item => item.AssetId == ordinaryAssetId, token));
 
         var read = new EfCaptureRetentionStore(database, TimeProvider.System);

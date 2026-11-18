@@ -505,8 +505,7 @@ public sealed class WebDavDestinationAdapterTests
         DeliveryResult result = await adapter.WriteAsync(Request(bytes), new MemoryStream(bytes), CancellationToken.None);
 
         Assert.Equal(DeliveryResultKind.ConfigurationFailure, result.Kind);
-        Assert.Single(handler.Operations);
-        Assert.Equal("dav.example.test", handler.Operations[0].Host);
+        Assert.Equal("dav.example.test", Assert.Single(handler.Operations).Host);
     }
 
     [Theory]
