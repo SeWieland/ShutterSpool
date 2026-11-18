@@ -104,13 +104,14 @@ internal sealed class EfDeliveryWorkProcessor(IDbContextFactory<ShutterSpoolDbCo
             .SingleAsync(cancellationToken);
         string kind = await database.Destinations.AsNoTracking().Where(item => item.Id == delivery.DestinationId)
             .Select(item => item.Kind).SingleAsync(cancellationToken);
-        DestinationDeliveryConfiguration? configuration = kind == "local"
-            ? new LocalDestinationDeliveryConfiguration(await database.LocalDestinations.AsNoTracking()
+        DestinationDeliveryConfiguration? configuration = kind switch
+        {
+            "local" => new LocalDestinationDeliveryConfiguration(await database.LocalDestinations.AsNoTracking()
                 .Where(item => item.DestinationId == delivery.DestinationId).Select(item => item.RootPath)
-                .SingleOrDefaultAsync(cancellationToken))
-            : kind == "webdav"
-                ? await WebDavConfigurationAsync(database, delivery.DestinationId, protector, cancellationToken)
-                : null;
+                .SingleOrDefaultAsync(cancellationToken)),
+            "webdav" => await WebDavConfigurationAsync(database, delivery.DestinationId, protector, cancellationToken),
+            _ => null,
+        };
         Guid captureId = await database.RoutingDecisions.AsNoTracking().Where(item => item.Id == delivery.DecisionId)
             .Select(item => item.CaptureId).SingleAsync(cancellationToken);
         var request = new DeliveryRequest(delivery.Id, attempt.Id, delivery.AssetId, delivery.DestinationId,

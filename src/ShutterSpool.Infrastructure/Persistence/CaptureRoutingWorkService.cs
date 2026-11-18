@@ -11,6 +11,7 @@ namespace ShutterSpool.Infrastructure.Persistence;
 
 internal sealed class CaptureRoutingWorkService(ShutterSpoolDbContext database, TimeProvider clock) : ICaptureRoutingActionStore
 {
+    private const string SpooledState = "Spooled";
 
     public async Task<RoutingSupplierRequest?> RetrySupplierRequestAsync(Guid deliveryId, CancellationToken cancellationToken)
     {
@@ -27,13 +28,11 @@ internal sealed class CaptureRoutingWorkService(ShutterSpoolDbContext database, 
 
     public async Task<RoutingSupplierRequest?> ReevaluateSupplierRequestAsync(Guid assetId, Guid destinationId, CancellationToken cancellationToken)
     {
-        CurrentEvaluation? evaluation = await LoadCurrentEvaluationAsync(assetId, destinationId, lockCapture: false, cancellationToken);
+        CurrentEvaluation? evaluation = await ReadCurrentEvaluationAsync(assetId, destinationId, cancellationToken);
         if (evaluation is not { IsReleased: true } || !evaluation.Destination.Enabled) return null;
-        RoutingDecision decision = RoutingRuleEvaluator.Evaluate(evaluation.Config is null ? [] : RoutingRuleJson.ReadRules(evaluation.Config.RulesJson),
-            EfCaptureRoutingProcessor.Facts(evaluation.Capture, evaluation.Asset, evaluation.Role, releasedCuration: false, currentCollection: evaluation.Collection));
+        bool needsOriginal = NeedsOriginal(evaluation, EvaluateRules(evaluation));
         database.ChangeTracker.Clear();
-        return RoutingActionPolicy.NeedsOriginal(decision, evaluation.Deliveries.Select(item => (item.State, item.TargetPath)))
-            ? new(assetId) : null;
+        return needsOriginal ? new(assetId) : null;
     }
 
     public async Task<RoutingActionPreview> RetryAsync(Guid deliveryId, Guid? verifiedSupplierId, CancellationToken cancellationToken)
@@ -169,12 +168,8 @@ internal sealed class CaptureRoutingWorkService(ShutterSpoolDbContext database, 
 
     public async Task<RoutingActionPreview> ReevaluateAsync(Guid assetId, Guid destinationId, string? confirmationToken, Guid? verifiedSupplierId, CancellationToken cancellationToken)
     {
-        CurrentEvaluation? before = await LoadCurrentEvaluationAsync(assetId, destinationId, lockCapture: false, cancellationToken);
-        RoutingDecision? beforeDecision = before is { IsReleased: true } && before.Destination.Enabled
-            ? RoutingRuleEvaluator.Evaluate(before.Config is null ? [] : RoutingRuleJson.ReadRules(before.Config.RulesJson),
-                EfCaptureRoutingProcessor.Facts(before.Capture, before.Asset, before.Role, releasedCuration: false, currentCollection: before.Collection)) : null;
-        bool beforeNeedsBytes = beforeDecision is not null && RoutingActionPolicy.NeedsOriginal(beforeDecision,
-            before!.Deliveries.Select(item => (item.State, item.TargetPath)));
+        CurrentEvaluation? before = await ReadCurrentEvaluationAsync(assetId, destinationId, cancellationToken);
+        bool beforeNeedsBytes = before is { IsReleased: true, Destination.Enabled: true } && NeedsOriginal(before, EvaluateRules(before));
         database.ChangeTracker.Clear();
         await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await LockRoutingAsync(cancellationToken);
@@ -183,37 +178,63 @@ internal sealed class CaptureRoutingWorkService(ShutterSpoolDbContext database, 
         if (!evaluation.IsReleased) return new(RoutingActionStatus.BlockedNotReleased, assetId, destinationId, evaluation.Current?.TargetPath, null, false,
             "Reevaluate is available after this Capture has been released.");
         if (!evaluation.Destination.Enabled) return new(RoutingActionStatus.Paused, assetId, destinationId, evaluation.Current?.TargetPath, null, false, "Destination is disabled; Reevaluate waits until it is enabled.");
-        RoutingDecision decision = RoutingRuleEvaluator.Evaluate(evaluation.Config is null ? [] : RoutingRuleJson.ReadRules(evaluation.Config.RulesJson),
-            EfCaptureRoutingProcessor.Facts(evaluation.Capture, evaluation.Asset, evaluation.Role, releasedCuration: false, currentCollection: evaluation.Collection));
-        if (decision.Kind == RoutingDecisionKind.Matched && await HasTargetCollisionAsync(assetId, destinationId, decision.TargetPath!, cancellationToken))
-            decision = new(RoutingDecisionKind.InvalidTarget, decision.RuleId, decision.Required, decision.TargetPath, "Another Asset already uses the resolved destination path.");
+        RoutingDecision decision = await EvaluateCurrentTargetAsync(evaluation, cancellationToken);
         if (!Guid.TryParseExact(confirmationToken, "N", out Guid previewId))
             return new(RoutingActionStatus.ConfirmationRequired, assetId, destinationId, evaluation.Current?.TargetPath, decision.TargetPath,
                 decision.Required, "Get a fresh preview before confirming Reevaluate.");
-        RoutingActionEntity? action = await database.RoutingActions.SingleOrDefaultAsync(item => item.Id == previewId, cancellationToken);
-        string fingerprint = Fingerprint(evaluation, decision);
-        if (action is null || action.Kind != "ReevaluatePreview" || action.AssetId != assetId || action.DestinationId != destinationId
-            || action.ConfirmedAt is not null || RoutingActionPolicy.PreviewExpired(action.CreatedAt, clock.GetUtcNow())
-            || action.Fingerprint != fingerprint)
+        RoutingActionEntity? action = await FindCurrentPreviewAsync(previewId, evaluation, decision, cancellationToken);
+        if (action is null)
             return new(RoutingActionStatus.StalePreview, assetId, destinationId, evaluation.Current?.TargetPath, decision.TargetPath,
                 decision.Required, "Curation, Collection, rules or the current decision changed; preview again.");
-        bool successfulSameTarget = evaluation.Deliveries.Any(item => item.State == DeliveryState.Delivered
-            && string.Equals(item.TargetPath, decision.TargetPath, StringComparison.OrdinalIgnoreCase));
+        bool queuesDelivery = NeedsOriginal(evaluation, decision);
         var preview = new RoutingActionPreview(RoutingActionStatus.ConfirmationRequired, assetId, destinationId, evaluation.Current?.TargetPath,
             decision.TargetPath, decision.Required, decision.Explanation, action.Id.ToString("N"));
+        RoutingActionPreview? blocked = await CheckReevaluationWorkAsync(evaluation, preview, queuesDelivery, beforeNeedsBytes,
+            verifiedSupplierId, cancellationToken);
+        if (blocked is not null) return blocked;
+
+        await StageReevaluationAsync(evaluation, decision, action, queuesDelivery, verifiedSupplierId, cancellationToken);
+        await database.SaveChangesAsync(cancellationToken);
+        await RefreshCaptureStateAsync(evaluation.Capture, cancellationToken);
+        await database.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return preview with { Status = RoutingActionStatus.Recorded };
+    }
+
+    private async Task<RoutingActionEntity?> FindCurrentPreviewAsync(Guid previewId, CurrentEvaluation evaluation,
+        RoutingDecision decision, CancellationToken cancellationToken)
+    {
+        RoutingActionEntity? action = await database.RoutingActions.SingleOrDefaultAsync(item => item.Id == previewId, cancellationToken);
+        string fingerprint = Fingerprint(evaluation, decision);
+        if (action is null || action.Kind != "ReevaluatePreview" || action.AssetId != evaluation.Asset.Id
+            || action.DestinationId != evaluation.Destination.Id || action.ConfirmedAt is not null
+            || RoutingActionPolicy.PreviewExpired(action.CreatedAt, clock.GetUtcNow()) || action.Fingerprint != fingerprint)
+            return null;
+        return action;
+    }
+
+    private async Task<RoutingActionPreview?> CheckReevaluationWorkAsync(CurrentEvaluation evaluation, RoutingActionPreview preview,
+        bool queuesDelivery, bool beforeNeedsBytes, Guid? verifiedSupplierId, CancellationToken cancellationToken)
+    {
         if (evaluation.Deliveries.Any(item => item.State == DeliveryState.Ambiguous))
             return preview with { Status = RoutingActionStatus.BlockedReconciliation, Explanation = "An ambiguous remote outcome must be reconciled first." };
-        if (decision.TargetPath is not null && evaluation.Deliveries.Any(item => item.State == DeliveryState.Running
-            && string.Equals(item.TargetPath, decision.TargetPath, StringComparison.OrdinalIgnoreCase)))
+        if (preview.ProposedTarget is not null && evaluation.Deliveries.Any(item => item.State == DeliveryState.Running
+            && string.Equals(item.TargetPath, preview.ProposedTarget, StringComparison.OrdinalIgnoreCase)))
             return preview with { Status = RoutingActionStatus.BlockedReconciliation, Explanation = "A write to this target is still in progress; confirm its outcome before reevaluating." };
-        if (decision.Kind == RoutingDecisionKind.Matched && !successfulSameTarget && !beforeNeedsBytes)
-            return preview with { Status = RoutingActionStatus.StalePreview, Explanation = "Routing changed; preview again." };
-        if (beforeNeedsBytes && verifiedSupplierId is null)
+        if (!beforeNeedsBytes)
+            return queuesDelivery ? preview with { Status = RoutingActionStatus.StalePreview, Explanation = "Routing changed; preview again." } : null;
+        if (verifiedSupplierId is not Guid supplierId)
             return preview with { Status = RoutingActionStatus.BlockedOriginalUnavailable, Explanation = "Verified original or matching replay bytes are unavailable." };
-        if (decision.Kind == RoutingDecisionKind.Matched && !successfulSameTarget
-            && !await SupplierStillAuthoritativeAsync(assetId, verifiedSupplierId!.Value, cancellationToken))
+        if (queuesDelivery && !await SupplierStillAuthoritativeAsync(evaluation.Asset.Id, supplierId, cancellationToken))
             return preview with { Status = RoutingActionStatus.BlockedOriginalUnavailable, Explanation = "Verified original bytes changed before Reevaluate committed." };
+        return null;
+    }
 
+    private async Task StageReevaluationAsync(CurrentEvaluation evaluation, RoutingDecision decision, RoutingActionEntity action,
+        bool queuesDelivery, Guid? verifiedSupplierId, CancellationToken cancellationToken)
+    {
+        Guid assetId = evaluation.Asset.Id;
+        Guid destinationId = evaluation.Destination.Id;
         foreach (DeliveryEntity delivery in evaluation.Deliveries.Where(item => item.State is DeliveryState.Pending or DeliveryState.RetryWait or DeliveryState.Failed or DeliveryState.Disabled))
             delivery.State = DeliveryState.Superseded;
         if (evaluation.Current is not null) evaluation.Current.IsCurrent = false;
@@ -238,15 +259,12 @@ internal sealed class CaptureRoutingWorkService(ShutterSpoolDbContext database, 
         action.ProposedTarget = decision.TargetPath;
         action.Required = decision.Required;
         action.ConfirmedAt = clock.GetUtcNow();
-        action.Result = StoredResult(decision.Kind == RoutingDecisionKind.Matched && !successfulSameTarget
-            ? RoutingActionStatus.Queued : RoutingActionStatus.Recorded);
+        action.Result = StoredResult(queuesDelivery ? RoutingActionStatus.Queued : RoutingActionStatus.Recorded);
         action.DeliveryId = null;
-        bool createsIntent = decision.Kind == RoutingDecisionKind.Matched
-            || decision.RuleId is not null
-                && decision.Kind is (RoutingDecisionKind.InvalidTarget or RoutingDecisionKind.DestinationDisabled);
-        if (createsIntent && !(decision.Kind == RoutingDecisionKind.Matched && successfulSameTarget))
+        if (queuesDelivery || decision.RuleId is not null
+            && decision.Kind is (RoutingDecisionKind.InvalidTarget or RoutingDecisionKind.DestinationDisabled))
             await RetentionQualification.RecordNewIntentAsync(database, evaluation.Capture, clock.GetUtcNow(), cancellationToken);
-        if (decision.Kind == RoutingDecisionKind.Matched && !successfulSameTarget)
+        if (queuesDelivery)
         {
             DateTimeOffset createdAt = clock.GetUtcNow();
             var delivery = new DeliveryEntity
@@ -258,25 +276,16 @@ internal sealed class CaptureRoutingWorkService(ShutterSpoolDbContext database, 
             database.Deliveries.Add(delivery);
             action.DeliveryId = delivery.Id;
         }
-        await database.SaveChangesAsync(cancellationToken);
-        await RefreshCaptureStateAsync(evaluation.Capture, cancellationToken);
-        await database.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-        return preview with { Status = RoutingActionStatus.Recorded };
     }
 
     private async Task<RoutingActionPreview> EvaluateCurrentAsync(Guid assetId, Guid destinationId, CancellationToken cancellationToken)
     {
-        CurrentEvaluation? evaluation = await LoadCurrentEvaluationAsync(assetId, destinationId, lockCapture: false, cancellationToken);
+        CurrentEvaluation? evaluation = await ReadCurrentEvaluationAsync(assetId, destinationId, cancellationToken);
         if (evaluation is null) return new(RoutingActionStatus.NotFound, assetId, destinationId, null, null, false, "Asset or current Capture decision was not found.");
         if (!evaluation.IsReleased) return new(RoutingActionStatus.BlockedNotReleased, assetId, destinationId, evaluation.Current?.TargetPath, null, false,
             "Reevaluate is available after this Capture has been released.");
         if (!evaluation.Destination.Enabled) return new(RoutingActionStatus.Paused, assetId, destinationId, evaluation.Current?.TargetPath, null, false, "Destination is disabled.");
-        RoutingRule[] rules = evaluation.Config is null ? [] : RoutingRuleJson.ReadRules(evaluation.Config.RulesJson);
-        RoutingDecision decision = RoutingRuleEvaluator.Evaluate(rules,
-            EfCaptureRoutingProcessor.Facts(evaluation.Capture, evaluation.Asset, evaluation.Role, releasedCuration: false, currentCollection: evaluation.Collection));
-        if (decision.Kind == RoutingDecisionKind.Matched && await HasTargetCollisionAsync(assetId, destinationId, decision.TargetPath!, cancellationToken))
-            decision = new(RoutingDecisionKind.InvalidTarget, decision.RuleId, decision.Required, decision.TargetPath, "Another Asset already uses the resolved destination path.");
+        RoutingDecision decision = await EvaluateCurrentTargetAsync(evaluation, cancellationToken);
         string fingerprint = Fingerprint(evaluation, decision);
         var action = new RoutingActionEntity
         {
@@ -290,10 +299,33 @@ internal sealed class CaptureRoutingWorkService(ShutterSpoolDbContext database, 
             decision.Required, decision.Explanation, action.Id.ToString("N"));
     }
 
+    private static bool NeedsOriginal(CurrentEvaluation evaluation, RoutingDecision decision) =>
+        RoutingActionPolicy.NeedsOriginal(decision, evaluation.Deliveries.Select(item => (item.State, item.TargetPath)));
+
+    private static RoutingDecision EvaluateRules(CurrentEvaluation evaluation) =>
+        RoutingRuleEvaluator.Evaluate(evaluation.Config is null ? [] : RoutingRuleJson.ReadRules(evaluation.Config.RulesJson),
+            EfCaptureRoutingProcessor.Facts(evaluation.Capture, evaluation.Asset, evaluation.Role, releasedCuration: false,
+                currentCollection: evaluation.Collection));
+
+    private async Task<RoutingDecision> EvaluateCurrentTargetAsync(CurrentEvaluation evaluation, CancellationToken cancellationToken)
+    {
+        RoutingDecision decision = EvaluateRules(evaluation);
+        if (decision.Kind == RoutingDecisionKind.Matched
+            && await HasTargetCollisionAsync(evaluation.Asset.Id, evaluation.Destination.Id, decision.TargetPath!, cancellationToken))
+            return new(RoutingDecisionKind.InvalidTarget, decision.RuleId, decision.Required, decision.TargetPath, "Another Asset already uses the resolved destination path.");
+        return decision;
+    }
+
+    private async Task<CurrentEvaluation?> ReadCurrentEvaluationAsync(Guid assetId, Guid destinationId, CancellationToken cancellationToken)
+    {
+        await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        CurrentEvaluation? evaluation = await LoadCurrentEvaluationAsync(assetId, destinationId, lockCapture: false, cancellationToken);
+        if (evaluation is not null) await transaction.CommitAsync(cancellationToken);
+        return evaluation;
+    }
+
     private async Task<CurrentEvaluation?> LoadCurrentEvaluationAsync(Guid assetId, Guid destinationId, bool lockCapture, CancellationToken cancellationToken)
     {
-        await using IDbContextTransaction? readTransaction = lockCapture ? null
-            : await database.Database.BeginTransactionAsync(cancellationToken);
         await database.Database.ExecuteSqlRawAsync(
             "SELECT pg_advisory_xact_lock(hashtextextended('shutterspool-collection-assignment', 0))", cancellationToken);
         var member = await (from item in database.CaptureAssets.AsNoTracking()
@@ -320,7 +352,7 @@ internal sealed class CaptureRoutingWorkService(ShutterSpoolDbContext database, 
         var currentMember = await (from item in database.CaptureAssets.AsNoTracking()
             join asset in database.Assets.AsNoTracking() on item.AssetId equals asset.Id
             where item.CaptureId == capture.Id && item.AssetId == assetId && item.IsPrimary
-                && asset.State == "Spooled"
+                && asset.State == SpooledState
                 && !database.PrivacyErasureAssets.Any(erased => erased.AssetId == assetId)
                 && !database.AssetRemovalOperations.Any(operation => operation.AssetId == assetId)
             select new { item.Role, Asset = asset }).SingleOrDefaultAsync(cancellationToken);
@@ -333,7 +365,6 @@ internal sealed class CaptureRoutingWorkService(ShutterSpoolDbContext database, 
         DestinationRoutingEntity? config = await database.DestinationRoutings.AsNoTracking()
             .SingleOrDefaultAsync(item => item.DestinationId == destinationId, cancellationToken);
         DestinationEntity destination = await database.Destinations.AsNoTracking().SingleAsync(item => item.Id == destinationId, cancellationToken);
-        if (readTransaction is not null) await readTransaction.CommitAsync(cancellationToken);
         return new(capture, collection, currentMember.Asset, currentMember.Role, current, deliveries, config, destination,
             capture.ReleasedAt is not null && capture.RoutingSnapshotJson is not null);
     }
@@ -371,7 +402,7 @@ internal sealed class CaptureRoutingWorkService(ShutterSpoolDbContext database, 
             .Select(item => new { item.Size, item.Sha256, item.State }).SingleOrDefaultAsync(cancellationToken);
         var supplier = await database.Assets.AsNoTracking().Where(item => item.Id == supplierId)
             .Select(item => new { item.Size, item.Sha256, item.State }).SingleOrDefaultAsync(cancellationToken);
-        if (original is null || supplier is null || original.State != "Spooled" || supplier.State != "Spooled"
+        if (original is null || supplier is null || original.State != SpooledState || supplier.State != SpooledState
             || original.Size != supplier.Size || original.Sha256 != supplier.Sha256) return false;
         Guid[] assetIds = assetId == supplierId ? [assetId] : [assetId, supplierId];
         if (await database.AssetRemovalOperations.AnyAsync(operation => assetIds.Contains(operation.AssetId), cancellationToken)
@@ -392,7 +423,7 @@ internal sealed class CaptureRoutingWorkService(ShutterSpoolDbContext database, 
             && (database.PrivacyErasureAssets.Any(erased => erased.AssetId == member.AssetId)
                 || database.AssetRemovalOperations.Any(operation => operation.AssetId == member.AssetId)), cancellationToken);
         if (captureFenced) return false;
-        return await database.Assets.AnyAsync(asset => asset.Id == assetId && asset.State == "Spooled"
+        return await database.Assets.AnyAsync(asset => asset.Id == assetId && asset.State == SpooledState
             && !database.PrivacyErasureAssets.Any(erased => erased.AssetId == asset.Id)
             && !database.AssetRemovalOperations.Any(operation => operation.AssetId == asset.Id), cancellationToken);
     }

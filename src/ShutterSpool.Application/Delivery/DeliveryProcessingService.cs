@@ -114,7 +114,11 @@ public sealed class DeliveryProcessingService(IDeliveryWorkStore workStore, ICom
         finally
         {
             ownership.Cancel();
-            try { await renewal; } catch (OperationCanceledException) { }
+            try { await renewal; }
+            catch (OperationCanceledException)
+            {
+                // Renewal is stopping. Join it before disposing the ownership token source.
+            }
         }
         return result;
     }
@@ -133,7 +137,10 @@ public sealed class DeliveryProcessingService(IDeliveryWorkStore workStore, ICom
                 }
             }
         }
-        catch (OperationCanceledException) when (ownership.IsCancellationRequested) { }
+        catch (OperationCanceledException) when (ownership.IsCancellationRequested)
+        {
+            // The write finished or the caller cancelled, so the lease no longer needs renewal.
+        }
         catch (Exception) { ownership.Cancel(); }
     }
 

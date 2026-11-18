@@ -259,8 +259,10 @@ The retention summary carries policy revision, tier, deadlines, protection and p
 
 ## Delivery work
 
-PostgreSQL holds due deliveries, attempts and renewable claims. The worker scans it even when a Valkey wakeup is missed or Valkey is unavailable. `ShutterSpool:DeliveryWorker:LeaseDurationSeconds`, `LeaseRenewalSeconds` and `ScanIntervalSeconds` default to 60, 15 and 2. The renewal interval must be shorter than the lease. Delivery history is grouped in the authorized Capture routing endpoint.
+PostgreSQL holds due deliveries, attempts and renewable claims. The worker scans it even when a Valkey wakeup is missed or Valkey is unavailable. `ShutterSpool:DeliveryWorker:LeaseDurationSeconds`, `LeaseRenewalSeconds` and `ScanIntervalSeconds` default to 60, 15 and 2. The renewal interval must be shorter than the lease.
 The [delivery boundary guide](../ShutterSpool.Infrastructure/README.md#destination-delivery-boundaries) maps the worker, adapter, filesystem operation and configuration service to their owners.
+
+Workspace Owners and Administrators can page recorded deliveries with `GET /management/captures/{id}/deliveries`. Use `GET /management/captures/{id}/routing` to page routing decisions.
 
 `ShutterSpool:Destinations:EnabledKinds` is the operator's list of available kinds (`local`, `webdav`).
 No destination kinds are enabled unless explicitly configured.

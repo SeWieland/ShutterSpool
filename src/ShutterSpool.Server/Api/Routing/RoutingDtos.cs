@@ -18,9 +18,12 @@ public sealed record RoutingConditionDto(string Fact, string Operator, JsonEleme
     });
 
     internal static RoutingConditionDto From(RoutingCondition condition) => new(condition.Fact, condition.Operator,
-        condition.Value.Number is decimal number ? JsonSerializer.SerializeToElement(number)
-        : condition.Value.Time is DateTime time ? JsonSerializer.SerializeToElement(time)
-        : JsonSerializer.SerializeToElement(condition.Value.Text));
+        condition.Value switch
+        {
+            { Number: { } number } => JsonSerializer.SerializeToElement(number),
+            { Time: { } time } => JsonSerializer.SerializeToElement(time),
+            _ => JsonSerializer.SerializeToElement(condition.Value.Text),
+        });
 }
 
 public sealed record RoutingRuleDto(string Id, string Name, int Order, bool Required, RoutingConditionDto[] Conditions,

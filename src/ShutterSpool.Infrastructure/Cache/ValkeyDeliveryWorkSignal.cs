@@ -23,7 +23,10 @@ internal sealed class ValkeyDeliveryWorkSignal(string? connectionString) : IDeli
         IConnectionMultiplexer? client = await GetConnectionAsync(cancellationToken);
         if (client is null) return;
         try { await client.GetSubscriber().PublishAsync(RedisChannel.Literal(ChannelName), "1"); }
-        catch (RedisException) { }
+        catch (RedisException)
+        {
+            // The local hint is already queued and other workers poll PostgreSQL for durable work.
+        }
     }
 
     public async ValueTask WaitAsync(TimeSpan timeout, CancellationToken cancellationToken)
@@ -33,7 +36,10 @@ internal sealed class ValkeyDeliveryWorkSignal(string? connectionString) : IDeli
         using var wait = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         wait.CancelAfter(timeout);
         try { _ = await _signals.Reader.ReadAsync(wait.Token); }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // The poll interval elapsed without a hint. Return so the worker checks PostgreSQL.
+        }
     }
 
     private async Task<IConnectionMultiplexer?> GetConnectionAsync(CancellationToken cancellationToken)

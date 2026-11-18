@@ -1,11 +1,42 @@
+using ShutterSpool.Domain.Routing;
+using ShutterSpool.Infrastructure.Persistence;
 using ShutterSpool.Server.Api.Destinations;
+using ShutterSpool.Server.Api.Routing;
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 
 namespace ShutterSpool.IntegrationTests;
 
 public sealed partial class ConfigurationApiTests
 {
+    [Fact]
+    public void Stored_and_API_routing_values_preserve_their_representation_precedence()
+    {
+        DateTime time = new(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        RoutingRule rule = new("mixed", "Mixed values", 0, true,
+            [new("source", "equals", new(Text: "camera", Number: 7, Time: time)),
+             new("source", "equals", new(Text: "camera", Time: time)),
+             new("captureTime", "equals", new(Time: time)),
+             new("tags", "contains", new(Tags: ["tag"]))], "", "photo.jpg");
+
+        using JsonDocument stored = JsonDocument.Parse(RoutingRuleJson.WriteRule(rule));
+        JsonElement conditions = stored.RootElement.GetProperty("Conditions");
+        Assert.Equal("camera", conditions[0].GetProperty("Value").GetString());
+        Assert.Equal("camera", conditions[1].GetProperty("Value").GetString());
+        Assert.Equal("2026-01-02T03:04:05.0000000Z", conditions[2].GetProperty("Value").GetString());
+        Assert.Equal(JsonValueKind.Null, conditions[3].GetProperty("Value").ValueKind);
+
+        RoutingConditionDto[] response = RoutingRuleDto.From(rule).Conditions;
+        Assert.Equal(7m, response[0].Value.GetDecimal());
+        Assert.Equal("2026-01-02T03:04:05Z", response[1].Value.GetString());
+        Assert.Equal("2026-01-02T03:04:05Z", response[2].Value.GetString());
+        Assert.Equal(JsonValueKind.Null, response[3].Value.ValueKind);
+
+        RoutingRule missingValue = rule with { Conditions = [new("label", "present", null!)] };
+        Assert.Throws<NullReferenceException>(() => RoutingRuleJson.WriteRule(missingValue));
+    }
+
     [Theory]
     [InlineData("present", "5")]
     [InlineData("present", "true")]

@@ -2,6 +2,7 @@ using ShutterSpool.Server.Security;
 using ShutterSpool.Application.Delivery;
 using ShutterSpool.Application.Routing;
 using ShutterSpool.Server.Api.Routing;
+using System.Net.Mime;
 
 namespace ShutterSpool.Server.Api.Deliveries;
 
@@ -11,25 +12,25 @@ public static class DeliveryEndpoints
     {
         management.MapPost("/deliveries/{id:guid}/retry", RetryAsync).RequireAuthorization(WorkspacePolicies.Curate).WithSummary("Retry unfinished delivery work")
             .Produces<RoutingActionResponse>().ProducesProblem(StatusCodes.Status404NotFound)
-            .Produces<RoutingConflictProblemDetails>(StatusCodes.Status409Conflict, "application/problem+json");
+            .Produces<RoutingConflictProblemDetails>(StatusCodes.Status409Conflict, MediaTypeNames.Application.ProblemJson);
         management.MapPost("/deliveries/{id:guid}/resend/preview", PreviewResendAsync).RequireAuthorization(WorkspacePolicies.Administer)
             .WithSummary("Preview a repeat of a successful delivery")
             .Produces<RoutingActionResponse>().ProducesProblem(StatusCodes.Status404NotFound)
-            .Produces<RoutingConflictProblemDetails>(StatusCodes.Status409Conflict, "application/problem+json");
+            .Produces<RoutingConflictProblemDetails>(StatusCodes.Status409Conflict, MediaTypeNames.Application.ProblemJson);
         management.MapPost("/deliveries/{id:guid}/resend", ResendAsync).RequireAuthorization(WorkspacePolicies.Administer)
             .WithSummary("Repeat a successful delivery after confirmation")
             .Produces<RoutingActionResponse>().ProducesValidationProblem()
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .Produces<RoutingConflictProblemDetails>(StatusCodes.Status409Conflict, "application/problem+json");
+            .Produces<RoutingConflictProblemDetails>(StatusCodes.Status409Conflict, MediaTypeNames.Application.ProblemJson);
         management.MapGet("/assets/{assetId:guid}/destinations/{destinationId:guid}/reevaluate-preview", PreviewReevaluateAsync).RequireAuthorization(WorkspacePolicies.Administer)
             .WithSummary("Preview routing with current Capture curation and destination rules")
             .Produces<RoutingActionResponse>().ProducesProblem(StatusCodes.Status404NotFound)
-            .Produces<RoutingConflictProblemDetails>(StatusCodes.Status409Conflict, "application/problem+json");
+            .Produces<RoutingConflictProblemDetails>(StatusCodes.Status409Conflict, MediaTypeNames.Application.ProblemJson);
         management.MapPost("/assets/{assetId:guid}/destinations/{destinationId:guid}/reevaluate", ReevaluateAsync).RequireAuthorization(WorkspacePolicies.Administer)
             .WithSummary("Record a new routing decision after confirmation")
             .Produces<RoutingActionResponse>().ProducesValidationProblem()
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .Produces<RoutingConflictProblemDetails>(StatusCodes.Status409Conflict, "application/problem+json");
+            .Produces<RoutingConflictProblemDetails>(StatusCodes.Status409Conflict, MediaTypeNames.Application.ProblemJson);
         return management;
     }
 
@@ -76,7 +77,7 @@ public static class DeliveryEndpoints
             return Results.Json(new RoutingConflictProblemDetails
             {
                 Status = StatusCodes.Status409Conflict, Title = "Routing action conflict", Current = current,
-            }, statusCode: StatusCodes.Status409Conflict, contentType: "application/problem+json");
+            }, statusCode: StatusCodes.Status409Conflict, contentType: MediaTypeNames.Application.ProblemJson);
         return Results.Ok(current);
     }
 

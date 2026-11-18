@@ -48,11 +48,13 @@ internal static class RoutingRuleJson
         return value.ValueKind == JsonValueKind.String ? new(Text: value.GetString()) : new();
     }
 
-    private static JsonElement WriteValue(RoutingValue value) => value.Text is not null
-        ? JsonSerializer.SerializeToElement(value.Text)
-        : value.Number is decimal number ? JsonSerializer.SerializeToElement(number)
-        : value.Time is DateTime time ? JsonSerializer.SerializeToElement(time.ToString("O", CultureInfo.InvariantCulture))
-        : JsonSerializer.SerializeToElement<object?>(null);
+    private static JsonElement WriteValue(RoutingValue value)
+    {
+        if (value.Text is string text) return JsonSerializer.SerializeToElement(text);
+        if (value.Number is decimal number) return JsonSerializer.SerializeToElement(number);
+        if (value.Time is DateTime time) return JsonSerializer.SerializeToElement(time.ToString("O", CultureInfo.InvariantCulture));
+        return JsonSerializer.SerializeToElement<object?>(null);
+    }
 
     private sealed record ConditionRow(string Fact, string Operator, JsonElement Value);
     private sealed record RuleRow(string Id, string Name, int Order, bool Required, ConditionRow[] Conditions,

@@ -41,7 +41,12 @@ public static class DeliveryPolicy
             return new(DeliveryState.Delivered, "ConfirmedAfterRecovery", null, null, Evidence: result.Evidence);
         if (result.Kind == DeliveryReconciliationKind.NotPublished && result.SafeToRepeat)
         {
-            DeliveryState state = !current ? DeliveryState.Superseded : !enabled ? DeliveryState.Disabled : DeliveryState.Pending;
+            DeliveryState state = (current, enabled) switch
+            {
+                (false, _) => DeliveryState.Superseded,
+                (_, false) => DeliveryState.Disabled,
+                _ => DeliveryState.Pending,
+            };
             return new(state, "NotPublishedAfterRecovery", "Reconciliation proved the prior write was not published.",
                 state == DeliveryState.Pending ? "Reconciliation proved the prior write was not published." : null, now);
         }
