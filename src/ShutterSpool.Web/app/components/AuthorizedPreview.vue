@@ -35,6 +35,26 @@ function clear() {
     imageLoaded = false;
     emit('display', 'pending');
 }
+function applyDerivative({ response, blob }: Awaited<ReturnType<typeof derivative>>) {
+    if (response.status === 304) {
+        if (url.value) {
+            state.value = "ready";
+            if (imageLoaded) emit('display', 'ready');
+        }
+        return;
+    }
+    state.value = response.headers.get("X-Preview-State")?.toLowerCase() ?? (response.ok ? "ready" : "unavailable");
+    if (!blob) {
+        if ([401, 403, 404, 410].includes(response.status)) clear();
+        emit('display', state.value === 'pending' ? 'pending' : 'unavailable');
+        return;
+    }
+    if (url.value) URL.revokeObjectURL(url.value);
+    imageLoaded = false;
+    url.value = URL.createObjectURL(blob);
+    etag = response.headers.get("ETag") ?? undefined;
+    emit('display', 'pending');
+}
 async function load(force = false) {
     if (!visible || document.hidden) return;
     if (!props.captureId) {
@@ -47,32 +67,14 @@ async function load(force = false) {
     const current = ++version;
     inFlight = true;
     try {
-        const { response, blob } = await derivative(
+        const result = await derivative(
             props.captureId,
             props.profile,
             controller.signal,
             etag,
             props.maximumDimension,
         );
-        if (current !== version) return;
-        if (response.status === 304) {
-            if (url.value) state.value = "ready";
-            if (url.value && imageLoaded) emit('display', 'ready');
-            return;
-        }
-        state.value =
-            response.headers.get("X-Preview-State")?.toLowerCase() ??
-            (response.ok ? "ready" : "unavailable");
-        if (!blob) {
-            if ([401, 403, 404, 410].includes(response.status)) clear();
-            emit('display', state.value === 'pending' ? 'pending' : 'unavailable');
-            return;
-        }
-        if (url.value) URL.revokeObjectURL(url.value);
-        imageLoaded = false;
-        url.value = URL.createObjectURL(blob);
-        emit('display', 'pending');
-        etag = response.headers.get("ETag") ?? undefined;
+        if (current === version) applyDerivative(result);
     } catch {
         if (current === version) { state.value = "unavailable"; emit('display', 'unavailable'); }
     } finally {

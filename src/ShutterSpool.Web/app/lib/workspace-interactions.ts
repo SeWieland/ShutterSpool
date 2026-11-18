@@ -18,6 +18,14 @@ export function deliveryPresentation(state?: string | null) {
     return deliveryStates[state ?? ''] ?? { label: 'Status unavailable', icon: 'i-lucide-info', tone: 'muted' };
 }
 
+function remainingReleaseTime(seconds: number) {
+    const minutes = Math.floor(seconds / 60), hours = Math.floor(minutes / 60);
+    if (hours >= 24) return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+    if (hours > 0) return `${hours}h ${minutes % 60}m`;
+    if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
+    return `${seconds}s`;
+}
+
 export function curationTiming(curation: CaptureCurationResponse | null | undefined, now: number) {
     if (!curation) return { icon: 'i-lucide-info', title: 'Delivery stage could not be checked', fraction: undefined, urgent: false };
     if (curation?.releasedAt) return { icon: 'i-lucide-check', title: 'Released', fraction: undefined, urgent: false };
@@ -25,11 +33,9 @@ export function curationTiming(curation: CaptureCurationResponse | null | undefi
     const due = curation?.releaseDueAt?.getTime();
     if (due == null || !Number.isFinite(due)) return { icon: 'i-lucide-clock', title: 'Waiting for release', fraction: undefined, urgent: false };
     const seconds = Math.max(0, Math.ceil((due - now) / 1000));
-    const minutes = Math.floor(seconds / 60), hours = Math.floor(minutes / 60);
-    const remaining = hours >= 24 ? `${Math.floor(hours / 24)}d ${hours % 24}h` : hours ? `${hours}h ${minutes % 60}m` : minutes ? `${minutes}m ${seconds % 60}s` : `${seconds}s`;
     const duration = curation?.delaySeconds;
     const fraction = duration != null && duration > 0 ? Math.max(0, Math.min(1, (due - now) / (duration * 1000))) : undefined;
-    return { icon: 'i-lucide-clock', title: seconds ? `Waiting · release in ${remaining}` : 'Release due · waiting for server', fraction, urgent: fraction != null && fraction <= .2 };
+    return { icon: 'i-lucide-clock', title: seconds ? `Waiting · release in ${remainingReleaseTime(seconds)}` : 'Release due · waiting for server', fraction, urgent: fraction != null && fraction <= .2 };
 }
 
 export function ratingInterval(anchor: number, value: number) {
@@ -68,21 +74,21 @@ export function formatFileSize(bytes?: number | null) {
     return `${(bytes / 1024 ** unit).toLocaleString('en', { maximumFractionDigits: 1 })} ${['B', 'KiB', 'MiB', 'GiB', 'TiB'][unit]}`;
 }
 export function reconcileCaptures<T extends {
-    id?: unknown;
+    id?: string | null;
     acceptedAt?: Date | string | null;
-}>(retained: T[], incoming: T[], append: boolean, afterId = String(retained.at(-1)?.id ?? ''), oldestFirst = false) {
+}>(retained: T[], incoming: T[], append: boolean, afterId = retained.at(-1)?.id ?? '', oldestFirst = false) {
     if (!append && !incoming.length)
         return [];
-    const fresh = new Map(incoming.map(row => [String(row.id), row]));
-    const timestamp = (row: T) => typeof row.acceptedAt === 'string' ? Date.parse(row.acceptedAt) : row.acceptedAt?.getTime() ?? NaN;
+    const fresh = new Set(incoming.map(row => row.id));
+    const timestamp = (row: T) => typeof row.acceptedAt === 'string' ? Date.parse(row.acceptedAt) : row.acceptedAt?.getTime() ?? Number.NaN;
     const boundary = incoming.at(-1);
-    const boundaryTime = boundary ? timestamp(boundary) : NaN;
+    const boundaryTime = boundary ? timestamp(boundary) : Number.NaN;
     // Dates lose PostgreSQL sub-millisecond precision; never infer equal-millisecond keyset order from IDs.
     const keep = (row: T) => {
         const time = timestamp(row);
-        return !fresh.has(String(row.id)) && (append || !Number.isFinite(time) || !Number.isFinite(boundaryTime) || (oldestFirst ? time >= boundaryTime : time <= boundaryTime));
+        return !fresh.has(row.id) && (append || !Number.isFinite(time) || !Number.isFinite(boundaryTime) || (oldestFirst ? time >= boundaryTime : time <= boundaryTime));
     };
-    const anchor = append ? retained.findIndex(row => String(row.id) === afterId) + 1 : 0;
+    const anchor = append ? retained.findIndex(row => row.id === afterId) + 1 : 0;
     const rows = [...retained.slice(0, anchor).filter(keep), ...incoming, ...retained.slice(anchor).filter(keep)];
-    return [...new Map(rows.map(row => [String(row.id), row])).values()];
+    return [...new Map(rows.map(row => [row.id, row])).values()];
 }

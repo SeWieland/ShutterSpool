@@ -754,16 +754,20 @@ test('delivery summary groups targets and preserves older blockers while hiding 
 
 test('Capture evidence drops old-owner pages and cursors, but retains same-owner pages after refresh failure', async () => {
     const requests = [];
+    const oldDeliveries = Promise.withResolvers();
     let failOwner;
     const api = evidenceApi((kind, id, query) => {
         requests.push({ kind, id, query });
+        if (kind === 'deliveries' && query.cursor === 'capture-a-deliveries-next') return oldDeliveries.promise;
         if (id === failOwner) return Promise.reject(new Error('synthetic failure'));
-        return Promise.resolve({ items: [{ id: `${id}-${kind}`, assetId: `${id}-asset` }], nextCursor: `${id}-${kind}-next` });
+        return Promise.resolve({ items: [{ id: query.cursor ?? `${id}-${kind}`, assetId: `${id}-asset` }], nextCursor: `${id}-${kind}-next` });
     });
     const view = component('CaptureEvidence', reactive({ capture: { id: 'capture-a', assets: [] }, generation: 0 }), api);
     try {
         await settle();
         assert.equal(view.read('decisions.value.items[0].id'), 'capture-a-routing');
+        const pending = view.read("read('deliveries')");
+        assert.equal(requests.at(-1).query.cursor, 'capture-a-deliveries-next');
         failOwner = 'capture-b';
         view.props.capture.id = failOwner;
         await nextTick();
@@ -778,11 +782,31 @@ test('Capture evidence drops old-owner pages and cursors, but retains same-owner
         failOwner = undefined;
         await view.read('read()');
         await settle();
-        const retained = view.read('deliveries.value');
+        for (const [page, endpoint] of [['decisions', 'routing'], ['deliveries', 'deliveries'], ['actions', 'actions']]) {
+            const cursor = `capture-b-${endpoint}-next`;
+            const sequence = view.read('deliveryReadSequence.value');
+            await view.read(`read('${page}')`);
+            assert.deepEqual([requests.at(-1).kind, requests.at(-1).query.cursor], [endpoint, cursor]);
+            assert.equal(view.read(`${page}.value.items[0].id`), cursor);
+            assert.equal(view.read('deliveryReadSequence.value'), sequence + Number(page === 'deliveries'));
+        }
+        const retained = ['decisions', 'deliveries', 'actions'].map(page => [page, view.read(`${page}.value`)]);
+        const assertPagesRetained = () => {
+            for (const [page, previous] of retained) assert.equal(view.read(`${page}.value`), previous);
+        };
+        const deliveryReads = view.read('deliveryReadSequence.value');
+        oldDeliveries.resolve({ items: [{ id: 'late-capture-a-delivery' }], nextCursor: 'late-capture-a-cursor' });
+        await pending;
+        assertPagesRetained();
+        assert.equal(view.read('deliveryReadSequence.value'), deliveryReads);
         failOwner = 'capture-b';
+        await view.read("read('deliveries')");
+        assert.match(view.read('error.value'), /Unable to read delivery evidence/);
+        assertPagesRetained();
+        assert.equal(view.read('deliveryReadSequence.value'), deliveryReads);
         view.props.generation++;
         await nextTick(); await settle();
-        assert.equal(view.read('deliveries.value'), retained);
+        assertPagesRetained();
     } finally { view.close(); }
 });
 

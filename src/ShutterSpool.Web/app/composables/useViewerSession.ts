@@ -12,20 +12,20 @@ export interface ViewerSessionOptions {
     onCurationKey: (event: KeyboardEvent) => boolean;
 }
 
+async function exitFullscreenSafely() {
+    try {
+        await document.exitFullscreen?.();
+    } catch {
+        // Logical viewer closure must not depend on browser fullscreen support.
+    }
+}
+
 export function useViewerSession(options: ViewerSessionOptions) {
     let focusBeforeViewer: HTMLElement | null = null;
     let sequence = 0;
     let suppressClick = false;
     let fullscreenAttempt: { request: number; element: HTMLElement } | undefined;
     let fullscreenOwner: { request: number; element: HTMLElement } | undefined;
-
-    async function exitFullscreenSafely() {
-        try {
-            await document.exitFullscreen?.();
-        } catch {
-            // Logical viewer closure must not depend on browser fullscreen support.
-        }
-    }
 
     async function enter() {
         if (options.active.value || typeof document === 'undefined') return;

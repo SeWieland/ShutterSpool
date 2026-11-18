@@ -1,10 +1,11 @@
 # Watch a Gallery slideshow
 
-Use the signed-in owner Gallery to watch photographs without entering Curation.
+Sign in and [open your workspace](workspaces.md#choose-a-workspace) to watch photographs available to you in Gallery.
+If your role is Viewer, the [workspace's Viewer visibility setting](workspaces.md#control-what-viewers-can-see) determines which photographs you can see.
 The slideshow follows the current Gallery filters and Newest first or Oldest first order, including photographs beyond the loaded grid.
 Selecting tiles does not choose slideshow membership.
 
-1. In **Gallery → Photos**, choose your filters and order.
+1. Open **Gallery**. If you see **Photos** and **Trash**, choose **Photos**. Then choose your filters and order.
 2. Choose **Fullscreen photographs** in the Gallery toolbar, then choose **Play**. Opening fullscreen alone does not start playback.
 3. Choose **3s**, **5s** or **10s** for each photograph. The default is five seconds, starting when the preview is displayed.
 4. Choose **Pause** to stay on a photograph. Previous/Next also pauses playback; **Play** resumes with a full interval.
@@ -39,5 +40,4 @@ It does not rate, release or deliver photographs, and it does not extend their a
 Favorite remains a separate action; read [Favorites and retention](retention.md#favorites-and-other-protections) for its limits.
 Removed photographs are no longer available for playback.
 
-The slideshow is for photographs in the owner Gallery.
 Curation and Trash do not offer playback, and video playback and shared invitation galleries are not available.

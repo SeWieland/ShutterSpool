@@ -14,8 +14,8 @@ function fixture(pages) {
     let next = 0;
     const player = new GallerySlideshow(state, {
         yield: async () => {},
-        read: async (cursor, startAt, signal) => {
-            reads.push({cursor, startAt, signal});
+        read: async (cursor, startAt, signal, direction) => {
+            reads.push({cursor, startAt, signal, direction});
             const page = pages[cursor ?? 'first'];
             if (page instanceof Error) throw page;
             return page;
@@ -174,11 +174,14 @@ test('known removals invalidate buffered frames and removal of the current photo
 test('manual navigation uses bounded authorized pages beyond grid state and pauses first', async () => {
     const f = fixture({ first: { items: [frame('a')], nextCursor: 'next' }, next: { items: [frame('b')] } });
     await f.player.play('a');
-    await f.player.navigate('a', 1);
+    await f.player.navigate('a', -1);
     assert.equal(f.state.playing, false);
     assert.deepEqual(f.displayed, ['a', 'b']);
     assert.equal(f.timers.size, 0);
-    assert.equal(f.reads.at(-2).startAt, 'a');
+    assert.deepEqual(f.reads.slice(-2).map(({ cursor, startAt, direction }) => [cursor, startAt, direction]), [
+        [undefined, 'a', -1],
+        ['next', undefined, -1],
+    ]);
     f.player.stop();
 });
 test('multiple large loops retain one metadata page and no visited-id history', async () => {

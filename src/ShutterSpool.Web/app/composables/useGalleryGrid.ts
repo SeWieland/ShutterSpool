@@ -31,7 +31,7 @@ export function useGalleryGrid(rowCount: Ref<number>, enabled: Ref<boolean>, lay
                 observedTile = tile;
                 resizeObserver?.observe(tile);
             }
-            tileHeight.value = tile.getBoundingClientRect().height + parseFloat(getComputedStyle(grid).rowGap || '0');
+            tileHeight.value = tile.getBoundingClientRect().height + Number.parseFloat(getComputedStyle(grid).rowGap || '0');
         }
         const range = galleryGridWindow(rowCount.value, -grid.getBoundingClientRect().top, tileHeight.value, columns.value, window.innerHeight);
         start.value = range.start;

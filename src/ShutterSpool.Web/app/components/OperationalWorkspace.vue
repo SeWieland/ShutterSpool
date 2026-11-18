@@ -716,20 +716,7 @@ watch(() => live.activity.value, hint => {
     previewVersions.value[hint.captureId] = (previewVersions.value[hint.captureId] ?? 0) + 1;
     void forgetUnavailableCapture(hint.captureId);
 });
-async function openCapture(id: string, viewer = false, pane?: 'A' | 'B', focusOnly = false, parentSignal?: AbortSignal) {
-    if (parentSignal?.aborted) return;
-    detailController?.abort();
-    const controller = detailController = new AbortController();
-    const request = ++detailSequence.value;
-    const access = accessGeneration();
-    const ownerView = view.value;
-    const ownerSurface = retentionSurface.value;
-    const ownerKey = refreshOwnerKey();
-    const cancelFromParent = () => controller.abort();
-    if (parentSignal?.aborted) cancelFromParent();
-    else parentSignal?.addEventListener('abort', cancelFromParent, { once: true });
-    const isCurrent = () => request === detailSequence.value && access === accessGeneration() && workspaceActive
-        && !controller.signal.aborted && ownerView === view.value && ownerSurface === retentionSurface.value && ownerKey === refreshOwnerKey();
+function selectCapture(id: string, pane: 'A' | 'B' | undefined, focusOnly: boolean) {
     if (pane)
         activePane.value = pane;
     else if (!compare.value && !focusOnly)
@@ -750,32 +737,50 @@ async function openCapture(id: string, viewer = false, pane?: 'A' | 'B', focusOn
     clearTimeout(tagSearch);
     error.value = '';
     detailError.value = '';
+}
+function showCaptureDetail(id: string, value: CaptureDetailResponse | undefined) {
+    capture.value = value;
+    const galleryViewer = full.value && view.value === 'Gallery';
+    if (galleryViewer && value && unavailableInViewer(value)) {
+        invalidateSlide(id);
+        return;
+    }
+    if (!value?.curation) return;
+    if (galleryViewer) curationVisit.sync(id, value.curation);
+    else observeCuration(id, value.curation);
+}
+async function openCapture(id: string, viewer = false, pane?: 'A' | 'B', focusOnly = false, parentSignal?: AbortSignal) {
+    if (parentSignal?.aborted) return;
+    detailController?.abort();
+    const controller = detailController = new AbortController();
+    const request = ++detailSequence.value;
+    const access = accessGeneration();
+    const ownerView = view.value;
+    const ownerSurface = retentionSurface.value;
+    const ownerKey = refreshOwnerKey();
+    const cancelFromParent = () => controller.abort();
+    if (parentSignal?.aborted) cancelFromParent();
+    else parentSignal?.addEventListener('abort', cancelFromParent, { once: true });
+    const isCurrent = () => request === detailSequence.value && access === accessGeneration() && workspaceActive
+        && !controller.signal.aborted && ownerView === view.value && ownerSurface === retentionSurface.value && ownerKey === refreshOwnerKey();
+    selectCapture(id, pane, focusOnly);
     if (viewer)
         void enterFull();
     try {
         const value = await api.management.captures.byId(id).get({ options: [cancellable(controller.signal)] });
-        if (!isCurrent())
-            return;
-        capture.value = value;
-        if (full.value && view.value === 'Gallery' && value && unavailableInViewer(value as Capture)) {
-            invalidateSlide(id);
-            return;
-        }
-        if (value?.curation) {
-            if (full.value && view.value === 'Gallery') curationVisit.sync(id, value.curation);
-            else observeCuration(id, value.curation);
-        }
+        if (isCurrent()) showCaptureDetail(id, value);
     }
     catch (failure) {
         if (!isCurrent()) return;
         const status = handleFailure(failure);
-        if (status === 404 && isCurrent()) {
+        if (!isCurrent()) return;
+        if (status === 404) {
             await forgetUnavailableCapture(id);
             error.value = mayCurate.value
                 ? 'This Capture is no longer available in this workspace. Open Trash or ask an administrator for current recovery/removal evidence.'
                 : 'This photograph is not available to you in this workspace. Choose a visible photograph.';
         }
-        else if (isCurrent())
+        else
             detailError.value = 'Unable to open this Capture. Refresh to try again.';
     } finally {
         parentSignal?.removeEventListener('abort', cancelFromParent);
@@ -822,27 +827,28 @@ async function returnFromSettings() {
     const target = settingsReturnFocus?.isConnected ? settingsReturnFocus : tile?.querySelector<HTMLElement>('.tile-open') ?? document.querySelector<HTMLElement>('.view-heading h1');
     target?.focus({ preventScroll: true });
 }
-async function switchView(next: View) {
-    emit('navigate');
-    if ((next === 'Sources' || next === 'Delivery') && !mayAdminister.value || next === 'Curation' && !mayCurate.value) return;
-    if (next === view.value)
-        return;
-    if (view.value === 'Settings' && settingsDirty.value && !window.confirm('Discard unsaved storage settings and leave Settings?')) return;
-    if ((view.value === 'Sources' && dirtyEditors.Sources) || (view.value === 'Delivery' && dirtyEditors.Delivery)) {
-        if (!window.confirm(`Discard unsaved ${view.value} changes and leave this workspace?`)) return;
+function leaveCurrentView(next: View) {
+    if (view.value === 'Settings' && settingsDirty.value && !window.confirm('Discard unsaved storage settings and leave Settings?')) return false;
+    if ((view.value === 'Sources' || view.value === 'Delivery') && dirtyEditors[view.value]) {
+        if (!window.confirm(`Discard unsaved ${view.value} changes and leave this workspace?`)) return false;
         dirtyEditors[view.value] = false;
     }
     settingsDirty.value = false;
     if (view.value === 'Settings') storageVisited.value = false;
     const leavingPhotos = ['Sources', 'Delivery', 'Settings'].includes(next) && ['Gallery', 'Curation'].includes(view.value);
-    if (leavingPhotos && unresolved.value && !window.confirm('Unresolved curation edits remain. Abandon local intent and leave the photo workspace?'))
-        return;
     if (leavingPhotos) {
+        if (unresolved.value && !window.confirm('Unresolved curation edits remain. Abandon local intent and leave the photo workspace?')) return false;
         curationActions.cancelReads();
         bulkTag.value = '';
         photoVisit++;
         curationVisit.clear();
     }
+    return true;
+}
+async function switchView(next: View) {
+    emit('navigate');
+    if ((next === 'Sources' || next === 'Delivery') && !mayAdminister.value || next === 'Curation' && !mayCurate.value) return;
+    if (next === view.value || !leaveCurrentView(next)) return;
     captureBrowser.cancelRequests();
     loading.value = false;
     const leavingScroll = view.value === 'Gallery' && galleryInspectionId.value ? inspectionScroll : window.scrollY;
@@ -1128,7 +1134,7 @@ async function captureAction(action: 'hold' | 'restore' | 'release') {
             return;
         if (result)
             value.observe(result);
-        await refresh(new Set([id]));
+        refresh(new Set([id]));
     }
     catch (failure) {
         handleFailure(failure);
@@ -1142,7 +1148,10 @@ async function captureAction(action: 'hold' | 'restore' | 'release') {
     }
 }
 function state(row: Capture) {
-    return row.curation?.releasedAt ? row.deliverySummary?.attention ? 'Needs attention' : row.deliverySummary?.confirmed ? `${row.deliverySummary.confirmed} confirmed` : 'Released · delivery pending' : row.curation?.held ? 'Held' : 'Awaiting release';
+    if (!row.curation?.releasedAt) return row.curation?.held ? 'Held' : 'Awaiting release';
+    if (row.deliverySummary?.attention) return 'Needs attention';
+    if (row.deliverySummary?.confirmed) return `${row.deliverySummary.confirmed} confirmed`;
+    return 'Released · delivery pending';
 }
 function navigate(delta: number) {
     if (full.value && view.value === 'Gallery') {
@@ -1161,20 +1170,34 @@ function navigate(delta: number) {
             void router.replace(workspaceRoute(`/captures/${encodeURIComponent(String(next.id))}`));
     }
 }
-function curationKey(event: KeyboardEvent) {
-    if (view.value !== 'Curation' || !mayCurate.value) return false;
-    if (view.value === 'Curation' && ['+', '=', '-', 'Home'].includes(event.key)) {
+const panByKey = new Map<string, [number, number]>([
+    ['ArrowLeft', [40, 0]], ['ArrowRight', [-40, 0]],
+    ['ArrowUp', [0, 40]], ['ArrowDown', [0, -40]],
+]);
+function zoomOrPan(event: KeyboardEvent) {
+    if (event.key === 'Home') {
         event.preventDefault();
-        setZoom(event.key === 'Home' ? 1 : zoom.value * (event.key === '-' ? 1 / 1.25 : 1.25));
+        setZoom(1);
         return true;
     }
-    if (zoom.value > 1 && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
+    if (['+', '=', '-'].includes(event.key)) {
         event.preventDefault();
-        offset.x += event.key === 'ArrowLeft' ? 40 : event.key === 'ArrowRight' ? -40 : 0;
-        offset.y += event.key === 'ArrowUp' ? 40 : event.key === 'ArrowDown' ? -40 : 0;
+        setZoom(zoom.value * (event.key === '-' ? 1 / 1.25 : 1.25));
+        return true;
+    }
+    const movement = panByKey.get(event.key);
+    if (movement && zoom.value > 1) {
+        event.preventDefault();
+        offset.x += movement[0];
+        offset.y += movement[1];
         boundOffset();
         return true;
     }
+    return false;
+}
+function curationKey(event: KeyboardEvent) {
+    if (view.value !== 'Curation' || !mayCurate.value) return false;
+    if (zoomOrPan(event)) return true;
     if (canCurate.value && /^[0-5]$/.test(event.key)) {
         edit.value?.change({ rating: Number(event.key) });
         return true;
@@ -1202,17 +1225,18 @@ function deliveryStatus(row: Capture) {
 async function inspectDelivery(row: Capture) {
     await inspectCapture(String(row.id), deliveryStatus(row).state, 'delivery');
 }
-function workflowStatus(row: Capture | CaptureDetailResponse | undefined) {
+type WorkflowCapture = Capture | CaptureDetailResponse | undefined;
+function workflowStatus(row: WorkflowCapture) {
     const now = Date.now();
     return curationTiming(workflowCuration(row), retentionTiming(row?.retention, now, true, !live.online.value).stale ? row?.retention?.asOf?.getTime() ?? now : now);
 }
-function workflowCuration(row: Capture | CaptureDetailResponse | undefined) {
+function workflowCuration(row: WorkflowCapture) {
     const saved = editSessions.get(String(row?.id))?.server;
     const detail = capture.value?.id === row?.id ? capture.value?.curation : undefined;
     const current = detail && (detail.revision ?? 0) > (row?.curation?.revision ?? 0) ? detail : row?.curation;
     return saved && (saved.revision ?? 0) > (current?.revision ?? 0) ? saved : current;
 }
-function retentionWins(row: Capture | CaptureDetailResponse | undefined) {
+function retentionWins(row: WorkflowCapture) {
     const now = Date.now();
     const timing = retentionTiming(row?.retention, now, true, !live.online.value);
     const deadline = row?.retention?.timeline?.endsAt?.getTime();
@@ -1224,7 +1248,7 @@ async function bulkFavorite(isFavorite: boolean) {
 }
 async function afterTrash(id: string, moved: boolean) {
     if (moved && galleryInspectionId.value === id) await closeGalleryInspection();
-    await refresh(new Set([id]));
+    refresh(new Set([id]));
 }
 async function forgetUnavailableCapture(id: string) {
     captureBrowser.cancelRequests(); loading.value = false;
@@ -1236,7 +1260,7 @@ async function forgetUnavailableCapture(id: string) {
         if (!continuing) closeFull();
         if (continuing) invalidateSlide(id);
         else { detailSequence.value++; activeId.value = ''; capture.value = undefined; }
-    } else playback.remove(id);
+    } else void playback.remove(id);
     if (paneAId.value === id) paneAId.value = '';
     if (secondId.value === id) { secondId.value = ''; compare.value = false; }
     if (galleryInspectionId.value === id) await closeGalleryInspection();
@@ -1244,7 +1268,7 @@ async function forgetUnavailableCapture(id: string) {
 async function afterErasure(id: string) {
     previewVersions.value[id] = (previewVersions.value[id] ?? 0) + 1;
     await forgetUnavailableCapture(id);
-    await refresh(new Set([id]));
+    refresh(new Set([id]));
 }
 async function bulkTrash() {
     await curationActions.trash();

@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import type { CaptureInboxItemResponse as Capture } from '../api/models';
+import type { CaptureInboxItemResponse as Capture, CaptureCurationResponse } from '../api/models';
 
 const props = defineProps<{
-    items: Array<{ capture: Capture; retentionWins: boolean; curation?: Capture['curation'] }>;
+    items: Array<{ capture: Capture; retentionWins: boolean; curation?: CaptureCurationResponse | null }>;
     activeId: string;
     stale: boolean;
     maximumDimension: number;
