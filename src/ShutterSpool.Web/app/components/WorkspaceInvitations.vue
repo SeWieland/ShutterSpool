@@ -37,7 +37,7 @@ async function read() {
 }
 async function join(offer?: Offer) {
     if (busy.value || loading.value || error.value || pending.value && offer) return;
-    if (offer && offer.status === 'pending' && offer.revision != null) pending.value = {
+    if (offer?.status === 'pending' && offer.revision != null) pending.value = {
         id: String(offer.id), workspaceId: String(offer.workspaceId), operationId: crypto.randomUUID(), expectedRevision: offer.revision,
     };
     const operation = pending.value;

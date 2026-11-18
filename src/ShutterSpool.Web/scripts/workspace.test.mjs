@@ -1737,7 +1737,14 @@ test('Source setup retains loaded profiles through recovery checks until an expl
 
 test('Source custom credentials submit exact bytes independently of generated username and clear after rejection', async () => {
     const requests = [];
-    const run = sourceWorkspace(async () => ({ items: [] }), [], undefined, undefined, { sources: { post: async body => { requests.push(body); throw { responseStatusCode: 400, errors: { additionalData: { password: ['Password does not meet deployment policy.'] } } }; } } });
+    const run = sourceWorkspace(async () => ({ items: [] }), [], undefined, undefined, { sources: { post: async body => {
+        requests.push(body);
+        throw { responseStatusCode: 400, errors: { additionalData: {
+            Password: ['Password does not meet deployment policy.', 'Choose another password.'],
+            PasswordMode: 1,
+            Username: { details: 'Synthetic unexpected payload' },
+        } } };
+    } } });
     run("capabilityState.value = 'ready'; connectionProfile.value = 'ModernFtps'; capabilities.value = { profiles: [{profile:'ModernFtps',enabled:true}],passwordPolicy:{minimumLength:12,maximumLength:128,generatedLength:20} }; name.value = 'Shared camera'; passwordMode.value = 'Custom'; customPassword.value = 'Exact_CASE!123'; dirty.value = true");
     await run("command('create')");
     assert.equal(requests[0].password, 'Exact_CASE!123');
@@ -1746,7 +1753,9 @@ test('Source custom credentials submit exact bytes independently of generated us
     assert.equal(run('customPassword.value'), '');
     assert.equal(run('name.value'), 'Shared camera');
     assert.equal(run('dirty.value'), true);
-    assert.equal(run('credentialErrors.value.password'), 'Password does not meet deployment policy.');
+    assert.equal(run('credentialErrors.value.password'), 'Password does not meet deployment policy. Choose another password.');
+    assert.equal(run('credentialErrors.value.passwordMode'), '1');
+    assert.equal(run('credentialErrors.value.username'), 'Check this credential field.');
     assert.equal(run('settingsTab.value'), 'Connection');
     assert.equal(run('secret.value'), '');
 });
@@ -1810,13 +1819,15 @@ test('Source replacement confirmation precedes mutation and access loss clears p
 
 
 test('Source duplicate usernames from generated conflict extensions remain field errors for creation and replacement', async () => {
+    const usernameConflict = { field: 'username', errorCode: 'SOURCE_USERNAME_CONFLICT' };
     for (const action of ['create', 'secret']) {
-        for (const extensions of [
-            {errors:{username:['This username is already in use.']}},
-            {field:'username',errorCode:'SOURCE_USERNAME_CONFLICT'},
+        for (const { extensions, title, message } of [
+            { extensions: { errors: { username: ['Choose another username.'] } }, title: 'Conflict', message: 'Choose another username.' },
+            { extensions: usernameConflict, title: 'This username has been assigned.', message: 'This username has been assigned.' },
+            { extensions: usernameConflict, title: { details: 'Synthetic unexpected title' }, message: 'This username is already in use.' },
         ]) {
             let writes = 0; let reads = 0;
-            const rejected = async () => { writes++; throw {responseStatusCode:409,title:'This username is already in use.',additionalData:extensions}; };
+            const rejected = async () => { writes++; throw { responseStatusCode: 409, title, additionalData: extensions }; };
             const run = sourceWorkspace(async () => ({items:[]}), [{id:'a',name:'Saved camera',username:'old_name',configurationRevision:4}], undefined, undefined, {sources:{post:rejected,get:async()=>{reads++;return {items:[]};},byId:()=>({regenerateSecret:{post:rejected}})}});
             run("capabilityState.value='ready'; connectionProfile.value='ModernFtps'; capabilities.value={profiles:[{profile:'ModernFtps',enabled:true}],passwordPolicy:{minimumLength:12,maximumLength:128,generatedLength:20}};");
             if (action === 'secret') run("chosen.value='a'; revision.value=4");
@@ -1824,7 +1835,7 @@ test('Source duplicate usernames from generated conflict extensions remain field
             await run(`command('${action}')`);
             assert.equal(writes, 1);
             assert.equal(reads, 0, 'a definitively rejected username needs no recovery read');
-            assert.equal(run('credentialErrors.value.username'), 'This username is already in use.');
+            assert.equal(run('credentialErrors.value.username'), message);
             assert.equal(run('conflict.value'), false);
             assert.equal(run('name.value'), 'Retained camera draft');
             assert.equal(run('username.value'), 'duplicate_name');
@@ -1846,6 +1857,42 @@ test('Source username browser pattern accepts hyphens and underscores and reject
     for (const username of ['', '-camera', '_camera', 'camera/root', 'camera name', 'a'.repeat(65)]) assert.equal(valid.test(username), false, username);
 });
 
+
+test('Source creation discloses its password only after the saved read for the current editor', async () => {
+    for (const changeOwner of [false, true]) {
+        const started = Promise.withResolvers();
+        const saved = Promise.withResolvers();
+        const run = sourceWorkspace(async () => ({ items: [] }), [{ id: 'other', configurationRevision: 8 }], undefined, undefined, { sources: {
+            post: async () => ({ id: 'created', secret: 'SYNTHETIC_ONE_TIME_VALUE' }),
+            byId: id => ({ get: ({ options }) => {
+                started.resolve({ id, signal: options[0].signal });
+                return saved.promise;
+            } }),
+        } });
+        run("capabilityState.value = 'ready'; connectionProfile.value = 'ModernFtps'; capabilities.value = { profiles: [{ profile: 'ModernFtps', enabled: true }] }; name.value = 'New camera'; dirty.value = true");
+        const command = run("command('create')");
+        const read = await Promise.race([started.promise, command.then(() => undefined)]);
+        assert.ok(read, 'creation must reread the returned Source');
+        assert.equal(read.id, 'created');
+        assert.equal(run('secret.value'), '');
+        if (changeOwner) run("chosen.value = 'other'; name.value = 'Unrelated draft'; dirty.value = true");
+        assert.equal(read.signal.aborted, changeOwner);
+        saved.resolve({ id: 'created', configurationRevision: 1, username: 'new_camera' });
+        await command;
+
+        assert.equal(run('chosen.value'), changeOwner ? 'other' : 'created');
+        assert.equal(run('secret.value'), changeOwner ? '' : 'SYNTHETIC_ONE_TIME_VALUE');
+        assert.equal(run('dirty.value'), changeOwner);
+        assert.equal(run('busy.value'), false);
+        if (changeOwner) {
+            assert.equal(run('feedback.value'), '');
+            assert.equal(run('name.value'), 'Unrelated draft');
+        } else {
+            assert.equal(run('username.value'), 'new_camera');
+            assert.equal(run('feedback.value'), 'Source created. Copy its password now.');
+        }
+    }
+});
 
 test('Source committed creation with lost response rereads the created Source before deliberate password replacement', async () => {
     const events = [];

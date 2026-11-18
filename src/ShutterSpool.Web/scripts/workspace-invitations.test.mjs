@@ -158,6 +158,39 @@ test('existing membership response explains that an invitation did not change it
     assert.equal(client.run('pending.value'), undefined);
 });
 
+test('an invitation response for a different operation stays pending until a successful check', async () => {
+    const writes = [];
+    let readAvailable = true;
+    const client = component('WorkspaceInvitationManagement', { management: { invitations: {
+        get: async () => {
+            if (!readAvailable) throw new Error('Invitation list unavailable');
+            return { items: [] };
+        },
+        post: async body => {
+            writes.push(body);
+            return { operationId: writes.length === 1 ? 'different-operation' : body.operationId, status: 'applied' };
+        },
+    } } });
+    await client.run('read()');
+    client.run("email.value = 'photographer@example.test'");
+    await client.run('create()');
+    assert.equal(client.run('pending.value.operationId'), writes[0].operationId);
+    assert.equal(client.run('email.value'), 'photographer@example.test');
+    assert.match(client.run('feedback.value'), /could not confirm/);
+
+    readAvailable = false;
+    await client.run('checkPrevious()');
+    assert.equal(writes.length, 1);
+    assert.equal(client.run('pending.value.operationId'), writes[0].operationId);
+
+    readAvailable = true;
+    await client.run('checkPrevious()');
+    assert.equal(writes.length, 2);
+    assert.deepEqual(writes[1], writes[0]);
+    assert.equal(client.run('pending.value'), undefined);
+    assert.equal(client.run('email.value'), '');
+});
+
 test('failed setup email preserves the saved invitation and explicitly retries the same operation', async () => {
     const writes = [];
     let failEmail = true;

@@ -84,10 +84,16 @@ async function refreshCapabilities() {
     }
 }
 function changeSettingsTab(event: KeyboardEvent, index: number) {
-    const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
-    if (!step && event.key !== 'Home' && event.key !== 'End') return;
+    const tabCount = settingsTabs.length;
+    let next: number;
+    switch (event.key) {
+        case 'ArrowRight': next = (index + 1) % tabCount; break;
+        case 'ArrowLeft': next = (index + tabCount - 1) % tabCount; break;
+        case 'Home': next = 0; break;
+        case 'End': next = tabCount - 1; break;
+        default: return;
+    }
     event.preventDefault();
-    const next = event.key === 'Home' ? 0 : event.key === 'End' ? 2 : (index + step + 3) % 3;
     settingsTab.value = settingsTabs[next]!;
     document.getElementById(`source-tab-${next}`)?.focus();
 }
@@ -252,7 +258,7 @@ function requestRemoval() {
 }
 async function removeSource() {
     const target = removal.value;
-    if (!target || target.id !== chosen.value || busy.value || conflict.value) return;
+    if (target?.id !== chosen.value || busy.value || conflict.value) return;
     const access = accessGeneration();
     const version = ownerVersion;
     const isCurrentOwner = () => chosen.value === target.id && version === ownerVersion;
@@ -267,7 +273,11 @@ async function removeSource() {
         removal.value = undefined;
         if (chosen.value === target.id) chosen.value = '';
         dirty.value = false;
-        feedback.value = result?.outcome === 'archived' ? `${target.name} archived. Existing Captures are preserved.` : result?.outcome === 'deleted' ? `${target.name} deleted.` : 'Removal outcome unavailable. Refresh Sources to confirm their state.';
+        switch (result?.outcome) {
+            case 'archived': feedback.value = `${target.name} archived. Existing Captures are preserved.`; break;
+            case 'deleted': feedback.value = `${target.name} deleted.`; break;
+            default: feedback.value = 'Removal outcome unavailable. Refresh Sources to confirm their state.';
+        }
     } catch (failure) {
         if (access !== accessGeneration()) return;
         if (!isCurrentOwner()) { emit('refresh'); return; }
@@ -370,10 +380,12 @@ function authenticationStatus(id: string) {
         return { state: 'unavailable', icon: 'i-lucide-info', text: 'Authentication history unavailable' };
     if (!value.outcome)
         return { state: 'neutral', icon: 'i-lucide-circle-help', text: value.coverageComplete ? 'No saved authentication outcome' : 'No saved outcome; observation coverage is incomplete' };
-    const outcome = value.outcome === 'Succeeded' ? 'succeeded' : 'was rejected';
+    const succeeded = value.outcome === 'Succeeded';
+    const outcome = succeeded ? 'succeeded' : 'was rejected';
     const date = value.observedAt ? new Date(value.observedAt).toLocaleString() : 'at an unknown time';
-    return { state: value.stale ? 'unavailable' : value.outcome === 'Succeeded' ? 'success' : 'error',
-        icon: value.outcome === 'Succeeded' ? 'i-lucide-circle-check' : 'i-lucide-circle-x',
+    let state = succeeded ? 'success' : 'error';
+    if (value.stale) state = 'unavailable';
+    return { state, icon: succeeded ? 'i-lucide-circle-check' : 'i-lucide-circle-x',
         text: `Last recorded camera authentication ${outcome} ${date}${value.stale ? '; authentication history unavailable; saved result may be old' : ''}${!value.coverageComplete ? '; observation coverage is incomplete' : ''}` };
 }
 const authenticationPresentations = computed(() => Object.fromEntries(props.sources.map(item => [String(item.id), authenticationStatus(String(item.id))])));
@@ -381,7 +393,8 @@ const sourceRows = computed(() => props.sources.map(item => {
     const id = String(item.id);
     const observations = phasePresentations.value[id] ?? [];
     const current = observations.find(item => item.active) ?? observations[0];
-    const activitySummary = phaseLoading.value && !phases.available ? 'Reading activity' : !phases.available ? 'Activity unavailable' : current?.label ?? 'No current transfer observation';
+    let activitySummary = current?.label ?? 'No current transfer observation';
+    if (!phases.available) activitySummary = phaseLoading.value ? 'Reading activity' : 'Activity unavailable';
     const tone = !phases.available ? 'stale' : current?.tone ?? 'neutral';
     const counts = sourceActivityCounters(observations, phases.available && !!props.connected);
     return { ...item, id, display: displaySource(item), authentication: authenticationPresentations.value[id]!,
@@ -394,6 +407,12 @@ const sourceRows = computed(() => props.sources.map(item => {
         active: observations.some(item => item.active) };
 }));
 watch(sourceRows, () => { if (statusPopup) void nextTick(placeStatusPopup); });
+function mergeAuthentication(previous: AuthenticationState | undefined, saved: SourceAuthenticationObservation | undefined, coverageComplete: boolean): AuthenticationState {
+    if (saved && (!previous?.version || saved.version >= previous.version))
+        return { outcome: saved.outcome, observedAt: saved.observedAt, version: saved.version, available: true, coverageComplete };
+    if (previous?.outcome) return { ...previous, coverageComplete, stale: false };
+    return { version: previous?.version ?? 0, available: true, coverageComplete };
+}
 async function refreshAuthentication(ids: string[]) {
     const sequence = ++authReadSequence;
     const access = accessGeneration();
@@ -407,13 +426,7 @@ async function refreshAuthentication(ids: string[]) {
         const updated = { ...authentication.value };
         for (const id of ids) {
             const saved = result.items.find(item => item.sourceId.toLowerCase() === id.toLowerCase());
-            const previous = updated[id];
-            if (saved && (!previous?.version || saved.version >= previous.version))
-                updated[id] = { outcome: saved.outcome, observedAt: saved.observedAt, version: saved.version, available: true,
-                    coverageComplete: result.coverageComplete };
-            else if (!previous?.outcome)
-                updated[id] = { version: previous?.version ?? 0, available: true, coverageComplete: result.coverageComplete };
-            else updated[id] = { ...previous, coverageComplete: result.coverageComplete, stale: false };
+            updated[id] = mergeAuthentication(updated[id], saved, result.coverageComplete);
         }
         authentication.value = updated;
     } catch (error) {
@@ -629,100 +642,153 @@ onUnmounted(() => {
     unsubscribe();
     streamObservers.forEach(observer => observer.disconnect());
 });
-async function command(action: 'save' | 'enabled' | 'secret' | 'create') {
-    if (busy.value || conflict.value)
-        return;
-    if ((action === 'create' || action === 'secret') && !validatePasswordInput()) return;
+type SourceCommand = 'save' | 'enabled' | 'secret' | 'create';
+
+function sourceSettings() {
+    return {
+        collectionId: collection.value[0],
+        name: name.value,
+        curationMode: mode.value,
+        delaySeconds: mode.value === 'Delay' ? delay.value * delayUnit.value : null,
+        sourceType: 'CameraFtpUpload' as const,
+        connectionProfile: connectionProfile.value as ConnectionProfile,
+    };
+}
+async function readCreatedSource(id: string) {
+    sourceReadController?.abort();
+    const controller = sourceReadController = new AbortController();
+    const request = ++sourceReadSequence;
+    const saved = await sourceMetadataReads.run(controller.signal, () => api.management.sources.byId(id).get({ options: [cancellable(controller.signal)] }));
+    if (controller.signal.aborted || request !== sourceReadSequence || controller !== sourceReadController || disposed) return;
+    return { saved };
+}
+function commandFeedback(action: SourceCommand, returnedSecret: string | null | undefined, profileChanged: boolean) {
+    if (action === 'secret') return 'Credentials replaced. Update every device using this Source.';
+    if (action === 'create')
+        return returnedSecret ? 'Source created. Copy its password now.' : 'Source created. Use your chosen password in each device.';
+    if (action === 'save' && profileChanged)
+        return 'Saved. Reconnect every client using this Source to apply its connection profile. The credential is unchanged.';
+    return 'Saved. Policy changes apply to future Captures.';
+}
+function applyCommandResult(action: SourceCommand, value: SourceConfigurationResponse | null | undefined, returnedSecret: string | null | undefined, profileChanged: boolean) {
+    // Selection clears credentials synchronously. Select the saved Source before showing the new password.
+    if (value?.id) chosen.value = String(value.id);
+    secret.value = returnedSecret ?? '';
+    replacingCredential.value = false;
+    if (value) {
+        revision.value = value.configurationRevision;
+        username.value = value.username ?? username.value;
+    }
+    if (action !== 'secret') dirty.value = false;
+    feedback.value = commandFeedback(action, returnedSecret, profileChanged);
+}
+function credentialErrorText(message: unknown): string {
+    if (typeof message === 'string') return message;
+    if (typeof message === 'number' || typeof message === 'boolean') return message.toString();
+    if (message == null) return '';
+    return 'Check this credential field.';
+}
+type FieldErrors = { additionalData?: Record<string, unknown> } & Record<string, unknown>;
+function applyCredentialErrors(error: unknown, status: number | undefined) {
+    const problem = error as { title?: unknown; errors?: FieldErrors; additionalData?: { errors?: FieldErrors; field?: string; errorCode?: string } } | undefined;
+    const validation = problem?.errors ?? problem?.additionalData?.errors;
+    const fields = validation?.additionalData ?? validation ?? {};
+    for (const field of ['username', 'password', 'passwordMode']) {
+        const messages = fields[field] ?? fields[field[0]!.toUpperCase() + field.slice(1)];
+        if (messages) credentialErrors.value[field] = Array.isArray(messages)
+            ? messages.map(credentialErrorText).join(' ')
+            : credentialErrorText(messages);
+    }
+    if (status === 409 && problem?.additionalData?.field === 'username' && problem.additionalData.errorCode === 'SOURCE_USERNAME_CONFLICT') {
+        const title = problem.title;
+        credentialErrors.value.username ??= typeof title === 'string' && title ? title : 'This username is already in use.';
+    }
+}
+function commandFailureFeedback(status: number | undefined, fieldRejected: boolean) {
+    if (fieldRejected) return 'Check the highlighted credential fields.';
+    if (status === 409) return 'Configuration conflict. Reload saved settings before editing again.';
+    if (status === 400) return 'Settings were not accepted. Check your entries.';
+    return 'Outcome uncertain. Reread saved Sources before trying again. A lost generated password cannot be recovered; replace it deliberately.';
+}
+function applyCommandFailure(error: unknown) {
+    const status = handleFailure(error);
+    applyCredentialErrors(error, status);
+    const fieldRejected = (status === 400 || status === 409) && Object.keys(credentialErrors.value).length > 0;
+    const needsReread = status !== 400 && !fieldRejected;
+    conflict.value = needsReread;
+    feedback.value = commandFailureFeedback(status, fieldRejected);
+    if (needsReread) emit('refresh');
+    if (fieldRejected) settingsTab.value = 'Connection';
+}
+function canRunCommand(action: SourceCommand) {
+    if (busy.value || conflict.value) return false;
+    if ((action === 'create' || action === 'secret') && !validatePasswordInput()) return false;
+    return (action !== 'save' && action !== 'create') || canAssignProfile.value;
+}
+async function command(action: SourceCommand) {
+    if (!canRunCommand(action)) return;
     const generation = accessGeneration();
     const owner = chosen.value;
     const version = ownerVersion;
+    const hasAccess = () => accessGeneration() === generation;
     const isCurrentOwner = () => owner === chosen.value && version === ownerVersion;
-    const encryptionChanged = connectionProfile.value !== source.value?.connectionProfile;
-    if ((action === 'save' || action === 'create') && !canAssignProfile.value) return;
+    const profileChanged = connectionProfile.value !== source.value?.connectionProfile;
+    const applyResult = (value?: SourceConfigurationResponse | null, returnedSecret?: string | null) => {
+        if (!hasAccess()) return;
+        emit('refresh');
+        if (isCurrentOwner()) applyCommandResult(action, value, returnedSecret, profileChanged);
+    };
     busy.value = true;
     feedback.value = '';
     secret.value = '';
     credentialErrors.value = {};
     credentialDialog.value?.close();
-    const credentials = credentialOptions();
     try {
-        let value: SourceConfigurationResponse | null | undefined;
-        let returnedSecret: string | undefined;
         if (action === 'create') {
-            const result = await api.management.sources.post({ collectionId: collection.value[0], name: name.value, curationMode: mode.value, delaySeconds: mode.value === 'Delay' ? delay.value * delayUnit.value : null, sourceType: 'CameraFtpUpload', connectionProfile: connectionProfile.value as ConnectionProfile, ...credentials });
-            if (accessGeneration() !== generation)
-                return;
+            const result = await api.management.sources.post({ ...sourceSettings(), ...credentialOptions() });
+            if (!hasAccess()) return;
             if (!isCurrentOwner()) {
                 emit('refresh');
                 return;
             }
-            returnedSecret = result?.secret ?? undefined;
-            if (result?.id) {
-                sourceReadController?.abort();
-                const controller = sourceReadController = new AbortController();
-                const request = ++sourceReadSequence;
-                value = await sourceMetadataReads.run(controller.signal, () => api.management.sources.byId(String(result.id)).get({ options: [cancellable(controller.signal)] }));
-                if (controller.signal.aborted || request !== sourceReadSequence || controller !== sourceReadController || disposed || accessGeneration() !== generation || !isCurrentOwner()) return;
-            }
-        }
-        else {
-            const endpoint = api.management.sources.byId(owner);
-            const expectedRevision = revision.value;
-            if (action === 'save')
-                value = await endpoint.put({ collectionId: collection.value[0], name: name.value, curationMode: mode.value, delaySeconds: mode.value === 'Delay' ? delay.value * delayUnit.value : null, expectedRevision, sourceType: 'CameraFtpUpload', connectionProfile: connectionProfile.value as ConnectionProfile });
-            if (action === 'enabled')
-                value = await endpoint.ingress.put({ expectedRevision, enabled: !source.value?.ingressEnabled });
-            if (action === 'secret') {
-                const result = await endpoint.regenerateSecret.post({ expectedRevision, ...credentials });
-                value = result?.current;
-                returnedSecret = result?.secret ?? undefined;
-            }
-        }
-        if (accessGeneration() !== generation)
+            const returnedSecret = result?.secret;
+            const read = result?.id ? await readCreatedSource(String(result.id)) : { saved: undefined };
+            if (!read || !hasAccess() || !isCurrentOwner()) return;
+            applyResult(read.saved, returnedSecret);
             return;
-        emit('refresh');
-        if (!isCurrentOwner()) return;
-        if (value?.id)
-            chosen.value = String(value.id);
-        secret.value = returnedSecret ?? '';
-        replacingCredential.value = false;
-        if (value) { revision.value = value.configurationRevision; username.value = value.username ?? username.value; }
-        if (action !== 'secret') dirty.value = false;
-        feedback.value = action === 'secret' ? 'Credentials replaced. Update every device using this Source.' : action === 'create' ? (returnedSecret ? 'Source created. Copy its password now.' : 'Source created. Use your chosen password in each device.') : action === 'save' && encryptionChanged
-            ? 'Saved. Reconnect every client using this Source to apply its connection profile. The credential is unchanged.'
-            : 'Saved. Policy changes apply to future Captures.';
-    }
-    catch (error) {
-        if (accessGeneration() !== generation) return;
+        }
+        const endpoint = api.management.sources.byId(owner);
+        const expectedRevision = revision.value;
+        switch (action) {
+            case 'save':
+                applyResult(await endpoint.put({ ...sourceSettings(), expectedRevision }));
+                break;
+            case 'enabled':
+                applyResult(await endpoint.ingress.put({ expectedRevision, enabled: !source.value?.ingressEnabled }));
+                break;
+            case 'secret': {
+                const result = await endpoint.regenerateSecret.post({ expectedRevision, ...credentialOptions() });
+                applyResult(result?.current, result?.secret);
+                break;
+            }
+        }
+    } catch (error) {
+        if (!hasAccess()) return;
         if (!isCurrentOwner()) {
             emit('refresh');
             return;
         }
-        const status = handleFailure(error);
-        type FieldErrors = { additionalData?: Record<string, unknown> } & Record<string, unknown>;
-        const problem = error as { title?: string; errors?: FieldErrors; additionalData?: { errors?: FieldErrors; field?: string; errorCode?: string } };
-        const validation = problem.errors ?? problem.additionalData?.errors;
-        const errors = validation?.additionalData ?? validation ?? {};
-        for (const field of ['username', 'password', 'passwordMode']) {
-            const messages = errors[field] ?? errors[field[0]!.toUpperCase() + field.slice(1)];
-            if (messages) credentialErrors.value[field] = Array.isArray(messages) ? messages.join(' ') : String(messages);
-        }
-        if (status === 409 && problem.additionalData?.field === 'username' && problem.additionalData.errorCode === 'SOURCE_USERNAME_CONFLICT')
-            credentialErrors.value.username ??= problem.title || 'This username is already in use.';
-        const fieldRejected = (status === 400 || status === 409) && Object.keys(credentialErrors.value).length > 0;
-        conflict.value = status !== 400 && !fieldRejected;
-        feedback.value = fieldRejected ? 'Check the highlighted credential fields.' : status === 409 ? 'Configuration conflict. Reload saved settings before editing again.' : status === 400 ? 'Settings were not accepted. Check your entries.' : 'Outcome uncertain. Reread saved Sources before trying again. A lost generated password cannot be recovered; replace it deliberately.';
-        if (status !== 400 && !fieldRejected) emit('refresh');
-        if (fieldRejected) settingsTab.value = 'Connection';
+        applyCommandFailure(error);
         await nextTick();
-        if (accessGeneration() === generation && isCurrentOwner()) {
+        if (hasAccess() && isCurrentOwner()) {
             feedbackNotice.value?.focus({ preventScroll: true });
             feedbackNotice.value?.scrollIntoView({ block: 'center' });
         }
-    }
-    finally {
-        if (isCurrentOwner() && accessGeneration() === generation) customPassword.value = '';
-        if (isCurrentOwner() && accessGeneration() === generation) busy.value = false;
+    } finally {
+        if (isCurrentOwner() && hasAccess()) {
+            customPassword.value = '';
+            busy.value = false;
+        }
     }
 }
 async function reload() {
@@ -946,7 +1012,7 @@ function retryStatus() {
             </section>
             <div id="source-plain-warning" v-show="connectionProfile === 'PlainFtpLan'" class="source-security-warning source-profile-warning" role="note"><strong>Unencrypted transfers</strong><p>Credentials and photographs travel unencrypted. Use only on a trusted local network.</p></div>
             <div id="source-legacy-warning" v-show="connectionProfile === 'LegacyFtps'" class="source-security-warning source-profile-warning" role="note"><strong>Compatibility encryption</strong><p>Required by some cameras. Transfers remain encrypted, but protection is weaker than the default and lacks forward secrecy. A later server-key compromise could expose recorded transfers. Enable only when your camera requires it.</p><p class="muted">Installation eligibility is deployment-controlled. Saving opts in for this Source; it does not qualify public compatibility hosting.</p></div>
-            <div class="actions"><button class="primary" :disabled="busy || conflict || !canAssignProfile || (!source && !passwordPolicy)">{{ busy ? 'Saving…' : source ? 'Save settings' : 'Create Source' }}</button></div>
+            <div class="actions"><button type="submit" class="primary" :disabled="busy || conflict || !canAssignProfile || (!source && !passwordPolicy)">{{ busy ? 'Saving…' : source ? 'Save settings' : 'Create Source' }}</button></div>
         </form>
         <p v-if="feedback" ref="feedbackNotice" role="status" class="notice" tabindex="-1">
             {{ feedback }}

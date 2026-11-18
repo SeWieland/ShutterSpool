@@ -3,6 +3,7 @@ import { api, cancellable, handleFailure } from '../lib/api';
 import { accessGeneration, onAccessLost } from '../lib/session';
 import { mayAdminister, refreshWorkspaceAccess } from '../lib/workspace-access';
 import { workspaceChangeError, type WorkspaceRole } from '../lib/workspace-permissions';
+import type { WorkspaceInvitationChangeResponse } from '../api/models';
 const props = defineProps<{ online: boolean; generation: number }>();
 type Invitation = NonNullable<NonNullable<Awaited<ReturnType<typeof api.management.invitations.get>>>['items']>[number];
 const invitations = shallowRef<Invitation[]>([]);
@@ -46,41 +47,68 @@ async function read() {
         return false;
     } finally { if (request === sequence) loading.value = false; }
 }
+function requestChange(operation: Pending) {
+    const { operationId } = operation;
+    if (operation.kind === 'create')
+        return api.management.invitations.post({ operationId, email: operation.email, role: operation.role });
+
+    const endpoint = api.management.invitations.byId(operation.id);
+    const body = { operationId, expectedRevision: operation.expectedRevision };
+    if (operation.kind === 'renew') return endpoint.renew.post({ ...body, role: operation.role });
+    return endpoint.cancel.post(body);
+}
+function invitationFeedback(operation: Pending, result?: WorkspaceInvitationChangeResponse) {
+    if (result?.status === 'existingMember')
+        return 'This recipient already has a membership. Their role was not changed.';
+    if (operation.kind === 'cancel')
+        return 'Cancellation recorded. Review the current invitation status below; existing memberships are unchanged.';
+    if (result?.offer && result.offer.status !== 'pending')
+        return 'The invitation status has changed. Review it below before choosing another action.';
+    if (result?.setupEmailStatus === 'setup-email-failed')
+        return 'Invitation saved, but the account setup email could not be sent. Choose Retry account setup email.';
+    if (result?.setupEmailStatus === 'setup-email-sent')
+        return 'Invitation saved. Account setup email sent. The recipient must finish setup, sign in and choose Join workspace.';
+    return 'Invitation saved. Share this app’s address with the recipient. They can sign in and choose Join workspace.';
+}
+async function recoverChange(failure: unknown, isCurrent: () => boolean) {
+    const status = handleFailure(failure);
+    if (![400, 403, 404, 409].includes(status ?? 0)) {
+        feedback.value = workspaceChangeError(failure) ?? 'We could not confirm the invitation change. Choose Check invitation before trying another action.';
+        return;
+    }
+    pending.value = undefined;
+    feedback.value = workspaceChangeError(failure) ?? 'This invitation change could not be saved. Review the details before trying again.';
+    const code = (failure as { errorCode?: string })?.errorCode;
+    if (['invalid-email', 'account-unavailable', 'enrollment-rejected'].includes(code ?? '')) return;
+    if (status === 403) await refreshWorkspaceAccess();
+    if (status !== 400 && isCurrent()) await read();
+}
 async function submit(change?: Pending) {
     if (busy.value || loading.value || error.value || !props.online || !mayAdminister.value || pending.value && change) return;
     pending.value ??= change;
     const operation = pending.value;
     if (!operation) return;
     setupEmailRetry.value = undefined;
-    const access = accessGeneration(); busy.value = true; feedback.value = '';
+    const access = accessGeneration();
+    const isCurrent = () => !disposed && access === accessGeneration();
+    busy.value = true;
+    feedback.value = '';
     try {
-        const body = { operationId: operation.operationId };
-        const result = operation.kind === 'create' ? await api.management.invitations.post({ ...body, email: operation.email, role: operation.role })
-            : operation.kind === 'renew' ? await api.management.invitations.byId(operation.id).renew.post({ ...body, expectedRevision: operation.expectedRevision, role: operation.role })
-                : await api.management.invitations.byId(operation.id).cancel.post({ ...body, expectedRevision: operation.expectedRevision });
-        if (disposed || access !== accessGeneration()) return;
-        if (String(result?.operationId) !== operation.operationId || !['applied', 'existingMember'].includes(result?.status ?? '')) throw new Error('Invitation outcome unavailable');
+        const result = await requestChange(operation);
+        if (!isCurrent()) return;
+        if (String(result?.operationId) !== operation.operationId || !['applied', 'existingMember'].includes(result?.status ?? ''))
+            throw new Error('Invitation outcome unavailable');
         pending.value = undefined;
         if (result?.setupEmailStatus === 'setup-email-failed') setupEmailRetry.value = operation;
-        if (result?.status === 'existingMember') feedback.value = 'This recipient already has a membership. Their role was not changed.';
-        else if (operation.kind === 'cancel') feedback.value = 'Cancellation recorded. Review the current invitation status below; existing memberships are unchanged.';
-        else if (result?.offer && result.offer.status !== 'pending') feedback.value = 'The invitation status has changed. Review it below before choosing another action.';
-        else if (result?.setupEmailStatus === 'setup-email-failed') feedback.value = 'Invitation saved, but the account setup email could not be sent. Choose Retry account setup email.';
-        else if (result?.setupEmailStatus === 'setup-email-sent') feedback.value = 'Invitation saved. Account setup email sent. The recipient must finish setup, sign in and choose Join workspace.';
-        else feedback.value = 'Invitation saved. Share this app’s address with the recipient. They can sign in and choose Join workspace.';
-        if (operation.kind === 'create') { email.value = ''; role.value = 'Viewer'; }
+        feedback.value = invitationFeedback(operation, result);
+        if (operation.kind === 'create') {
+            email.value = '';
+            role.value = 'Viewer';
+        }
         await read();
     } catch (failure) {
-        if (disposed || access !== accessGeneration()) return;
-        const status = handleFailure(failure);
-        if ([400, 403, 404, 409].includes(status ?? 0)) {
-            pending.value = undefined;
-            feedback.value = workspaceChangeError(failure) ?? 'This invitation change could not be saved. Review the details before trying again.';
-            if (['invalid-email', 'account-unavailable', 'enrollment-rejected'].includes((failure as { errorCode?: string })?.errorCode ?? '')) return;
-            if (status === 403) await refreshWorkspaceAccess();
-            if (status !== 400 && !disposed && access === accessGeneration()) await read();
-        } else feedback.value = workspaceChangeError(failure) ?? 'We could not confirm the invitation change. Choose Check invitation before trying another action.';
-    } finally { if (!disposed && access === accessGeneration()) busy.value = false; }
+        if (isCurrent()) await recoverChange(failure, isCurrent);
+    } finally { if (isCurrent()) busy.value = false; }
 }
 function create() {
     if (!email.value.trim()) return;
