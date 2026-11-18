@@ -1345,17 +1345,17 @@ async function submitSingleTrash(id: string, expectedRevision: number) {
                         <div class="filter-category"><span class="filter-title">Favorite</span><button :aria-pressed="filter.favoritesOnly" @click="filter.favoritesOnly = !filter.favoritesOnly"><UIcon name="i-lucide-heart" />Favorites only</button></div>
                         <div class="filter-category">
                             <span id="workflow-filter-title" class="filter-title">Workflow</span>
-                            <div class="filter-group" role="group" aria-labelledby="workflow-filter-title">
+                            <fieldset class="filter-group" aria-labelledby="workflow-filter-title">
                                 <button :aria-pressed="!filter.workflows.length" @click="filter.workflows = []">All states</button>
                                 <button v-for="workflow in workflows" :key="workflow.name" :aria-pressed="filter.workflows.includes(workflow.name)" @click="toggleFilter('workflows', workflow.name)"><UIcon :name="workflow.icon" />{{ workflow.name }}</button>
-                            </div>
+                            </fieldset>
                         </div>
                         <div v-if="mayAdminister" class="filter-category">
                             <span id="source-filter-title" class="filter-title">Source</span>
-                            <div class="filter-group" role="group" aria-labelledby="source-filter-title">
+                            <fieldset class="filter-group" aria-labelledby="source-filter-title">
                                 <button :aria-pressed="!filter.sourceIds.length" @click="filter.sourceIds = []">All sources</button>
                                 <button v-for="source in sources" :key="String(source.id)" :aria-pressed="filter.sourceIds.includes(String(source.id))" :disabled="filter.sourceIds.length >= 30 && !filter.sourceIds.includes(String(source.id))" @click="toggleFilter('sourceIds', String(source.id))"><UIcon name="i-lucide-camera" />{{ source.name }}</button>
-                            </div>
+                            </fieldset>
                         </div>
                         <div class="filter-category">
                             <span id="rating-filter-title" class="filter-title">Rating</span>
@@ -1363,7 +1363,7 @@ async function submitSingleTrash(id: string, expectedRevision: number) {
                         </div>
                         <div class="filter-category">
                             <span id="color-filter-title" class="filter-title">Color label</span>
-                            <div class="filter-group color-filter" role="group" aria-labelledby="color-filter-title">
+                            <fieldset class="filter-group color-filter" aria-labelledby="color-filter-title">
                                 <button :aria-pressed="!filter.labels.length" @click="filter.labels = []">
                                     All colors
                                 </button>
@@ -1378,7 +1378,7 @@ async function submitSingleTrash(id: string, expectedRevision: number) {
                                     <UIcon v-else name="i-lucide-circle-slash" />
                                     {{ label }}
                                 </button>
-                            </div>
+                            </fieldset>
                         </div>
                         <div class="filter-category">
                             <label for="capture-filter-tag" class="filter-title">Tag</label>
@@ -1462,13 +1462,13 @@ async function submitSingleTrash(id: string, expectedRevision: number) {
         </section>
         <template v-else>
 
-            <div v-if="view === 'Gallery' && (selection.length || selecting)" class="bulk-bar" role="region" aria-label="Selected photographs">
+            <section v-if="view === 'Gallery' && (selection.length || selecting)" class="bulk-bar" aria-label="Selected photographs">
                 <strong>{{ selection.length }} selected · maximum 100</strong>
                 <button :disabled="bulkBusy" @click="selectLoaded">Select all loaded</button>
                 <button :disabled="bulkBusy" @click="selection = []; selecting = false">Select none</button>
                 <span class="muted">Downloads are not available in this alpha.</span>
                 <CollectionMove v-if="mayCurate" :ids="selection" :online="live.online.value" :disabled="bulkBusy || unresolved" @busy="bulkBusy = $event" @refresh="refresh(new Set($event))" @completed="selection = selection.filter(id => !$event.includes(id))" />
-            </div>
+            </section>
             <p v-if="view === 'Gallery' && bulkResult" class="notice" role="status">{{ bulkResult }}</p>
             <p v-if="pendingTrashIds.length || uncertainTrashIds.length" class="notice error" role="status">
                 <template v-if="pendingTrashIds.length">A Move to Trash request is still pending for {{ pendingTrashIds.length }} photograph{{ pendingTrashIds.length === 1 ? '' : 's' }}. Other controls stay locked until each request completes.</template>

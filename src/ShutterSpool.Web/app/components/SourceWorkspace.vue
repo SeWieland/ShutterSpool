@@ -868,7 +868,7 @@ function retryStatus() {
             </div>
         </button>
         <button class="source-status-control source-auth-control" :popovertarget="`source-status-${item.id}`" :aria-label="`Inspect Source status for ${item.name}`" :title="item.authentication.text" @click="toggleSourceStatus($event, item.id)"><span class="source-auth" :class="[`status-${item.authentication.state}`, { 'auth-pulse': motionEnabled && authPulses[item.id], 'auth-rejected': authPulses[item.id] === 'Rejected' }]" aria-hidden="true"><UIcon :name="item.authentication.icon" /></span></button>
-            <div :id="`source-status-${item.id}`" popover="auto" class="source-status-popover" role="region" :aria-labelledby="`source-status-title-${item.id}`" @toggle="statusToggled">
+            <section :id="`source-status-${item.id}`" popover="auto" class="source-status-popover" :aria-labelledby="`source-status-title-${item.id}`" @toggle="statusToggled">
                 <h3 :id="`source-status-title-${item.id}`">{{ item.name }} status</h3>
                 <p :id="`auth-${item.id}`">{{ item.authentication.text }}. Historical outcome; camera presence and upload success are separate.</p>
                 <p>{{ item.activitySummary }}<span v-if="phases.available && !phases.coverageComplete"> · Partial activity coverage</span></p>
@@ -884,7 +884,7 @@ function retryStatus() {
                     <p v-else-if="recentState[item.id] === 'ready' && !recent[item.id]?.length">No recent Captures.</p>
                     <template v-else-if="recentState[item.id] !== 'ready'"><p>Recent Captures not loaded.</p><button :aria-label="`Load recent Captures for ${item.name}`" @click="refreshRecent([item])">Load</button></template>
                 </div>
-            </div>
+            </section>
         </div>
         <div class="flow-connection source-activity" :class="[{ running: motionEnabled && connected && item.active }, `activity-${item.tone}`]" role="status" :aria-label="`${item.name}: ${item.activitySummary}`">
             <div class="flow-line"><span v-for="n in 3" :key="n" class="flow-dot" aria-hidden="true" /></div>

@@ -56,9 +56,8 @@ function click(event: MouseEvent) {
 </script>
 
 <template>
-    <div
+    <fieldset
         class="filter-group rating-interval"
-        role="group"
         aria-labelledby="rating-filter-title"
         @pointerdown="begin"
         @pointermove="move"
@@ -72,5 +71,5 @@ function click(event: MouseEvent) {
         <button v-for="value in 5" :key="value" :data-rating="value" :aria-label="`${value} stars; Shift selects interval`" :aria-pressed="selected(value)" @click="select(value, $event.shiftKey)">
             {{ value }}<RatingStar />
         </button>
-    </div>
+    </fieldset>
 </template>

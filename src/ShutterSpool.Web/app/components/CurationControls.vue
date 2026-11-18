@@ -23,21 +23,22 @@ const labels = ['Red', 'Yellow', 'Green', 'Blue', 'Purple'];
 <template>
     <div class="curation-controls" :aria-busy="busy">
         <fieldset class="curation-rating-controls" :disabled="disabled || busy">
-        <legend class="sr-only">Rating</legend>
-        <div class="signed-ratings" role="group" aria-label="Rating">
-            <button aria-label="Rejected" title="Rejected" :aria-pressed="rating === -1" @click="emit('rating', -1)"><UIcon name="i-lucide-star-off" /></button>
-            <button class="not-rated" aria-label="Not Rated" title="Not Rated" :aria-pressed="rating === 0" @click="emit('rating', 0)"><RatingStar /></button>
-            <button v-for="n in 5" :key="n" :aria-label="`${n} stars`" :title="`${n} stars`" :aria-pressed="rating != null && rating >= n" @click="emit('rating', n)"><RatingStar /></button>
-        </div>
+            <legend class="sr-only">Rating</legend>
+            <div class="signed-ratings">
+                <button aria-label="Rejected" title="Rejected" :aria-pressed="rating === -1" @click="emit('rating', -1)"><UIcon name="i-lucide-star-off" /></button>
+                <button class="not-rated" aria-label="Not Rated" title="Not Rated" :aria-pressed="rating === 0" @click="emit('rating', 0)"><RatingStar /></button>
+                <button v-for="n in 5" :key="n" :aria-label="`${n} stars`" :title="`${n} stars`" :aria-pressed="rating != null && rating >= n" @click="emit('rating', n)"><RatingStar /></button>
+            </div>
         </fieldset>
         <div class="curation-markers">
-        <fieldset class="curation-color-controls" :disabled="disabled || busy"><legend class="sr-only">Color label</legend>
-        <div class="color-controls" role="group" aria-label="Color label">
-            <button aria-label="None" title="None" :aria-pressed="label === null" @click="emit('label', null)"><UIcon name="i-lucide-circle-slash" /></button>
-            <button v-for="color in labels" :key="color" :aria-label="color" :title="color" :aria-pressed="label === color" @click="emit('label', color)"><span class="label-dot" :class="color.toLowerCase()" /></button>
-        </div>
-        </fieldset>
-        <slot name="favorite" />
+            <fieldset class="curation-color-controls" :disabled="disabled || busy">
+                <legend class="sr-only">Color label</legend>
+                <div class="color-controls">
+                    <button aria-label="None" title="None" :aria-pressed="label === null" @click="emit('label', null)"><UIcon name="i-lucide-circle-slash" /></button>
+                    <button v-for="color in labels" :key="color" :aria-label="color" :title="color" :aria-pressed="label === color" @click="emit('label', color)"><span class="label-dot" :class="color.toLowerCase()" /></button>
+                </div>
+            </fieldset>
+            <slot name="favorite" />
         </div>
         <fieldset class="curation-tag-controls" :disabled="disabled || busy"><legend class="sr-only">Tags and changes</legend>
         <p v-if="mixed" class="muted">Mixed values · changes apply to all selected photographs.</p>

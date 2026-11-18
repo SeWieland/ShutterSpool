@@ -87,7 +87,7 @@ body, .app-shell { font-family: Manrope, ui-sans-serif, system-ui, sans-serif; }
 .disclosure > .filter-content { position:absolute; top:100%; left:0; z-index:7; width:min(800px,100%); max-width:100%; max-height:calc(100dvh - 280px); overflow-y:auto; box-shadow:0 12px 24px #0005; }
 .filter-content label { display:flex; flex-direction:column; gap:8px; }
 .filter-categories { flex-direction:column; flex-wrap:nowrap; align-items:stretch; }.filter-categories > * { flex-shrink:0; }.filter-category { display:grid; grid-template-columns:100px minmax(0,1fr); align-items:start; gap:12px; }.filter-title { padding-block:12px; font-size:13px; color:var(--muted); }.filter-category input { width:100%; max-width:320px; }.filter-category button { max-width:100%; overflow-wrap:anywhere; }.filter-clear { padding-left:112px; }.appearance-reset { display:flex; flex-direction:column; align-items:start; gap:8px; font-size:13px; }
-.filter-group { gap:6px; }
+.filter-group { min-inline-size:0; margin:0; gap:6px; }
 .filter-group button { font-size:13px; }
 .rating-interval button { min-width:44px; }
 .label-dot { display:block; width:17px; height:17px; border:1px solid currentColor; border-radius:50%; }
@@ -498,7 +498,7 @@ body:has(.fullscreen-viewer) { overflow:hidden; }
 .collection-picker { min-width:0; width:100%; }
 .collection-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; }
 .collection-heading h2 { margin:0; }
-.collection-choices { display:flex; flex-wrap:wrap; gap:8px; margin-block:12px; }
+.collection-picker .collection-choices { display:flex; flex-wrap:wrap; gap:8px; margin-block:12px; }
 .collection-choices button { overflow-wrap:anywhere; text-align:left; }
 .collection-picker .actions input { min-width:0; flex:1; }
 .collection-picker-compact > .actions { margin-top:0; }
@@ -513,7 +513,7 @@ body:has(.fullscreen-viewer) { overflow:hidden; }
 .collection-move p { overflow-wrap:anywhere; }
 @media(max-width:480px) { .collection-manager { padding:16px; }.collection-manager .actions { flex-wrap:wrap; }.collection-manager .actions input[type="search"] { flex:1 0 100%; min-width:0; width:100%; }.collection-picker .actions input { width:100%; } }
 
-.collection-suggestions { display:grid; max-height:208px; overflow-y:auto; }
+.collection-picker .collection-suggestions { display:grid; min-inline-size:0; max-height:208px; overflow-y:auto; }
 .collection-move h3 { font-size:1rem; margin:0 0 8px; }
 .settings-home { display:grid; grid-template-columns:180px minmax(0,800px); gap:40px; align-items:start; }
 .settings-sections { display:grid; gap:8px; padding-top:4px; }
