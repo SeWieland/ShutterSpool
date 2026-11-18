@@ -36,6 +36,7 @@ public sealed class MetadataProcessingService(
             }
             catch (OperationCanceledException) when (leaseLost.IsCancellationRequested)
             {
+                // Join renewal before abandoning work whose lease could not be confirmed.
             }
             catch (Exception)
             {
@@ -48,7 +49,7 @@ public sealed class MetadataProcessingService(
             await renewal;
         }
 
-        if (cancellationToken.IsCancellationRequested) throw new OperationCanceledException(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         if (leaseLost.IsCancellationRequested) return true;
         if (failed) await store.RetryAsync(work, timeProvider.GetUtcNow(), cancellationToken);
         else await store.CompleteAsync(work, result!, cancellationToken);
@@ -71,6 +72,7 @@ public sealed class MetadataProcessingService(
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
+            // Processing has finished and no further lease renewals are needed.
         }
         catch
         {

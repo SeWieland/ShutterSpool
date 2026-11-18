@@ -42,6 +42,34 @@ public sealed class PreviewBackendTests
     }
 
     [Fact]
+    public async Task Cancelling_a_contended_disk_lock_allows_the_next_cache_operation()
+    {
+        string root = Directory.CreateTempSubdirectory("shutterspool-preview-").FullName;
+        try
+        {
+            var cache = new FileSystemPreviewCache(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ShutterSpool:Preview:CacheRootPath"] = root,
+            }).Build());
+            string key = $"{Guid.NewGuid():N}/{Guid.NewGuid():N}/grid-480x480.webp";
+            using var caller = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+            await using (File.Open(Path.Combine(root, ".shutterspool-preview-cache.lock"), FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
+            {
+                Task<bool> write = cache.WriteAsync(key, [1], caller.Token);
+                Assert.False(write.IsCompleted);
+                caller.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => write);
+            }
+
+            Assert.True(await cache.WriteAsync(key, [1], TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Memory_cache_has_bounded_LRU_entries_and_defensive_reads()
     {
         byte[] webp = Convert.FromBase64String("UklGRi4AAABXRUJQVlA4ICIAAABwAQCdASoCAAMAAUAmJZQCdAFAAAD+/DeBV/fU6D4r4AAA");

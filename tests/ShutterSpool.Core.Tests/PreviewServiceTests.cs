@@ -247,9 +247,37 @@ public sealed class PreviewServiceTests
         Assert.True(locks.LastLease!.Disposed);
     }
 
+    [Theory]
+    [InlineData(false, null, false, PreviewState.Missing)]
+    [InlineData(true, null, false, PreviewState.Pending)]
+    [InlineData(true, null, true, PreviewState.Unavailable)]
+    [InlineData(true, "spool/new", false, PreviewState.Pending)]
+    public async Task A_source_change_under_the_shared_lock_prevents_serving_the_old_preview(
+        bool captureExists, string? newKey, bool unavailable, PreviewState expected)
+    {
+        Guid captureId = Guid.NewGuid();
+        Guid assetId = Guid.NewGuid();
+        var locks = new FakeOriginalAssetLock();
+        var changed = new PreviewResolution(captureExists, newKey is null ? null : new PreviewSource(assetId, newKey, 3), unavailable);
+        var adapters = new FakePreviewAdapters
+        {
+            Resolution = new(true, new PreviewSource(assetId, "spool/old", 3)),
+            ResolveChange = () => locks.LastLease is { Disposed: false } ? changed : null
+        };
+        adapters.Cache[$"{captureId:N}/{assetId:N}/grid-480x480.webp"] = [1, 2, 3];
+        var service = new PreviewService(adapters, adapters, adapters, new PreviewSettings(), assetLock: locks);
+
+        PreviewResult result = await service.GetAsync(captureId, PreviewProfile.Grid, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(expected, result.State);
+        Assert.Null(result.Content);
+        Assert.Equal(0, adapters.GenerationCount);
+    }
+
     private sealed class FakePreviewAdapters : IPreviewSourceResolver, IPreviewCache, IPreviewGenerator
     {
         public PreviewResolution Resolution { get; set; } = new(false, null);
+        public Func<PreviewResolution?>? ResolveChange { get; init; }
         public Action? OnGenerate { get; set; }
         public bool FailGeneration { get; set; }
         public bool FailWrite { get; set; }
@@ -264,7 +292,7 @@ public sealed class PreviewServiceTests
         public Task<PreviewResolution> ResolveAsync(Guid captureId, CancellationToken cancellationToken)
         {
             ResolutionCount++;
-            return Task.FromResult(Resolution);
+            return Task.FromResult(ResolveChange?.Invoke() ?? Resolution);
         }
         public Task<byte[]?> ReadAsync(string key, PreviewSize size, CancellationToken cancellationToken) => Task.FromResult(Cache.GetValueOrDefault(key));
         public Task<bool> ContainsAsync(string key, PreviewSize size, CancellationToken cancellationToken) => Task.FromResult(Cache.ContainsKey(key));

@@ -18,6 +18,7 @@ internal sealed class MetadataExtractorMediaMetadataParser(ShutterSpool.Applicat
     private const int SonyArwCompression = 32767;
     private const int Uncompressed = 1;
     private const int ColorFilterArray = 32803;
+    private const string OtherRole = "OTHER";
 
     public async Task<AssetMetadata> ParseAsync(Stream original, string originalName, long size, CancellationToken cancellationToken)
     {
@@ -32,15 +33,15 @@ internal sealed class MetadataExtractorMediaMetadataParser(ShutterSpool.Applicat
         }
         catch (MediaSizeLimitException)
         {
-            return Result(MetadataOutcome.Unsupported, null, "OTHER", originalName, null, null, null, "size_limit_exceeded");
+            return TerminalResult(MetadataOutcome.Unsupported, originalName, "size_limit_exceeded");
         }
         catch (Exception error) when (error is MediaUnreadableException or EndOfStreamException)
         {
-            return Result(MetadataOutcome.Failed, null, "OTHER", originalName, null, null, null, "original_unreadable");
+            return TerminalResult(MetadataOutcome.Failed, originalName, "original_unreadable");
         }
         catch (MediaSizeMismatchException)
         {
-            return Result(MetadataOutcome.Failed, null, "OTHER", originalName, null, null, null, "original_size_mismatch");
+            return TerminalResult(MetadataOutcome.Failed, originalName, "original_size_mismatch");
         }
 
         await using (seekable)
@@ -59,7 +60,7 @@ internal sealed class MetadataExtractorMediaMetadataParser(ShutterSpool.Applicat
             FileType type = FileTypeDetector.DetectFileType(bounded, null);
             if (type is not (FileType.Jpeg or FileType.Arw or FileType.Tiff))
             {
-                return Result(MetadataOutcome.Unsupported, null, "OTHER", originalName, null, null, null, "unsupported_media_type");
+                return TerminalResult(MetadataOutcome.Unsupported, originalName, "unsupported_media_type");
             }
 
             bounded.Position = 0;
@@ -76,17 +77,9 @@ internal sealed class MetadataExtractorMediaMetadataParser(ShutterSpool.Applicat
                 .OfType<EmbeddedValue>().DistinctBy(value => value.Value, StringComparer.OrdinalIgnoreCase)];
             bool serialConflict = serials.Length > 1;
             EmbeddedValue? serial = serials.Length == 1 ? serials[0] : null;
-            CaptureTime?[] originalTimes =
-            [
-                .. subIfds
-                    .Where(directory => directory.ContainsTag(ExifSubIfdDirectory.TagDateTimeOriginal))
-                    .Select(ReadCaptureTime)
-            ];
-            CaptureTime? captureTime = originalTimes.FirstOrDefault();
-            if (originalTimes.Any(time => time is null || time.Local != captureTime?.Local || time.Offset != captureTime?.Offset || time.FractionalDigits != captureTime?.FractionalDigits))
-                captureTime = null;
+            CaptureTime? captureTime = ReadAgreedCaptureTime(subIfds);
             if (serialConflict && captureTime is not null) captureTime = captureTime with { IsUncertain = true };
-            string role = type switch { FileType.Jpeg => "JPEG", FileType.Arw => "RAW", _ => "OTHER" };
+            string role = type switch { FileType.Jpeg => "JPEG", FileType.Arw => "RAW", _ => OtherRole };
             string mediaType = type switch { FileType.Jpeg => "image/jpeg", FileType.Arw => "image/x-sony-arw", _ => "image/tiff" };
             bool mismatch = IsExtensionMismatch(originalName, role);
             MetadataOutcome outcome = captureTime is not null && !serialConflict && make is not null && model is not null
@@ -98,20 +91,20 @@ internal sealed class MetadataExtractorMediaMetadataParser(ShutterSpool.Applicat
         }
         catch (ImageProcessingException)
         {
-            return Result(MetadataOutcome.Failed, null, "OTHER", originalName, null, null, null, "malformed_media");
+            return TerminalResult(MetadataOutcome.Failed, originalName, "malformed_media");
         }
         // MetadataExtractor uses IOException for a truncated JPEG segment; other I/O faults remain retryable.
         catch (IOException error) when (error.Message == "End of data reached.")
         {
-            return Result(MetadataOutcome.Failed, null, "OTHER", originalName, null, null, null, "malformed_media");
+            return TerminalResult(MetadataOutcome.Failed, originalName, "malformed_media");
         }
         catch (ArgumentException)
         {
-            return Result(MetadataOutcome.Failed, null, "OTHER", originalName, null, null, null, "malformed_media");
+            return TerminalResult(MetadataOutcome.Failed, originalName, "malformed_media");
         }
         catch (OverflowException)
         {
-            return Result(MetadataOutcome.Failed, null, "OTHER", originalName, null, null, null, "malformed_metadata");
+            return TerminalResult(MetadataOutcome.Failed, originalName, "malformed_metadata");
         }
     }
 
@@ -127,6 +120,17 @@ internal sealed class MetadataExtractorMediaMetadataParser(ShutterSpool.Applicat
             && (compression == SonyArwCompression || compression == Uncompressed
                 && directory.TryGetInt32(ExifDirectoryBase.TagPhotometricInterpretation, out int photometric) && photometric == ColorFilterArray
                 && directory.TryGetInt32(TagSonyRawFileType, out int rawType) && rawType is 0 or 1));
+    }
+
+    private static CaptureTime? ReadAgreedCaptureTime(ExifSubIfdDirectory[] subIfds)
+    {
+        CaptureTime?[] originalTimes = [.. subIfds
+            .Where(directory => directory.ContainsTag(ExifSubIfdDirectory.TagDateTimeOriginal))
+            .Select(ReadCaptureTime)];
+        CaptureTime? first = originalTimes.FirstOrDefault();
+        if (first is null) return null;
+        return originalTimes.Skip(1).Any(time => time is null || time.Local != first.Local
+            || time.Offset != first.Offset || time.FractionalDigits != first.FractionalDigits) ? null : first;
     }
 
     private static CaptureTime? ReadCaptureTime(ExifSubIfdDirectory? directory)
@@ -173,8 +177,8 @@ internal sealed class MetadataExtractorMediaMetadataParser(ShutterSpool.Applicat
         return true;
     }
 
-    private static AssetMetadata Result(MetadataOutcome outcome, string? mediaType, string role, string name, CaptureTime? captureTime, EmbeddedValue? make, EmbeddedValue? model, string reason) =>
-        new(outcome, mediaType, role, captureTime, make, model, null, IsExtensionMismatch(name, role), reason);
+    private static AssetMetadata TerminalResult(MetadataOutcome outcome, string originalName, string reason) =>
+        new(outcome, null, OtherRole, null, null, null, null, IsExtensionMismatch(originalName, OtherRole), reason);
 
     private static bool IsExtensionMismatch(string name, string role)
     {
@@ -187,6 +191,7 @@ internal sealed class MetadataExtractorMediaMetadataParser(ShutterSpool.Applicat
         };
     }
 
+    // The parser borrows the seekable stream for the duration of this bounded view.
     private sealed class BoundedReadStream(Stream inner, long length) : Stream
     {
         public override bool CanRead => inner.CanRead;
@@ -212,6 +217,5 @@ internal sealed class MetadataExtractorMediaMetadataParser(ShutterSpool.Applicat
         }
         public override void SetLength(long value) => throw new NotSupportedException();
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-        protected override void Dispose(bool disposing) { }
     }
 }

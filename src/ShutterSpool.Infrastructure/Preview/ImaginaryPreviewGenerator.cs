@@ -54,33 +54,38 @@ internal sealed class ImaginaryPreviewGenerator(ICommittedOriginalReader origina
                 try { ValidateJpegDimensions(seekable.Stream); }
                 catch (InvalidDataException error) { throw new PreviewPermanentException("Invalid JPEG preview source.", error); }
 
-                using var request = new HttpRequestMessage(HttpMethod.Post, $"fit?width={size.Width}&height={size.Height}&type=webp&stripmeta=true");
-                request.Content = new StreamContent(new BoundedReadStream(seekable.Stream, MaximumInputBytes), 64 * 1024);
-                request.Content.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");
-                using HttpResponseMessage response = await imaginary.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
-                if ((int)response.StatusCode >= 500 || response.StatusCode is System.Net.HttpStatusCode.TooManyRequests or System.Net.HttpStatusCode.RequestTimeout)
-                    throw new HttpRequestException("Preview generator is temporarily unavailable.");
-                if (!response.IsSuccessStatusCode || response.Content.Headers.ContentLength > MaximumOutputBytes)
-                    throw new PreviewPermanentException("Preview generator rejected the source or exceeded its output limit.");
-
-                await using Stream output = await response.Content.ReadAsStreamAsync(deadline.Token);
-                using var buffer = new MemoryStream();
-                byte[] chunk = new byte[64 * 1024];
-                int count;
-                while ((count = await output.ReadAsync(chunk, deadline.Token)) != 0)
-                {
-                    if (buffer.Length > MaximumOutputBytes - count) throw new PreviewPermanentException("Preview output exceeds its limit.");
-                    buffer.Write(chunk, 0, count);
-                }
-                byte[] bytes = buffer.ToArray();
-                if (!PreviewMediaValidation.IsWebP(bytes, size)) throw new InvalidDataException("Preview generator returned invalid WebP.");
-                return bytes;
+                return await RequestWebPAsync(seekable.Stream, size, deadline.Token);
             }
         }
         finally
         {
             generationGate.Release();
         }
+    }
+
+    private async Task<byte[]> RequestWebPAsync(Stream jpeg, PreviewSize size, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"fit?width={size.Width}&height={size.Height}&type=webp&stripmeta=true");
+        request.Content = new StreamContent(new BoundedReadStream(jpeg, MaximumInputBytes), 64 * 1024);
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");
+        using HttpResponseMessage response = await imaginary.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        if ((int)response.StatusCode >= 500 || response.StatusCode is System.Net.HttpStatusCode.TooManyRequests or System.Net.HttpStatusCode.RequestTimeout)
+            throw new HttpRequestException("Preview generator is temporarily unavailable.");
+        if (!response.IsSuccessStatusCode || response.Content.Headers.ContentLength > MaximumOutputBytes)
+            throw new PreviewPermanentException("Preview generator rejected the source or exceeded its output limit.");
+
+        await using Stream output = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var buffer = new MemoryStream();
+        byte[] chunk = new byte[64 * 1024];
+        int count;
+        while ((count = await output.ReadAsync(chunk, cancellationToken)) != 0)
+        {
+            if (buffer.Length > MaximumOutputBytes - count) throw new PreviewPermanentException("Preview output exceeds its limit.");
+            buffer.Write(chunk, 0, count);
+        }
+        byte[] bytes = buffer.ToArray();
+        if (!PreviewMediaValidation.IsWebP(bytes, size)) throw new InvalidDataException("Preview generator returned invalid WebP.");
+        return bytes;
     }
 
     private static void ValidateJpegDimensions(Stream jpeg)
