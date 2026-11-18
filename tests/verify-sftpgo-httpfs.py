@@ -25,7 +25,9 @@ hold_hook.set()
 hook_started = threading.Event()
 
 class Handler(http.server.BaseHTTPRequestHandler):
-    def log_message(self, *args): pass
+    def log_message(self, *args):
+        # Mute routine request logs so the probe results stay visible.
+        pass
     def body(self):
         if self.headers.get('Transfer-Encoding') == 'chunked':
             chunks = []

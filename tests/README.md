@@ -76,15 +76,16 @@ Run checks from the repository root with Python 3.10+ unless noted. These use co
 | Check | Purpose and prerequisites |
 | --- | --- |
 | `python tests/verify-camera-ftp-client.py` | Exercise the shared `tests/camera_ftp.py` client's certificate/hostname validation, protected-data and no-plaintext-fallback behavior. |
-| `python tests/verify-edge-startup.py` | Reject absent, expired, wrong-host or wrong-key edge certificates; requires a POSIX shell and OpenSSL. |
+| `python tests/verify-edge-startup.py` | Check that the packaged edge entrypoint accepts a valid supplied certificate and refuses missing or expired certificates, hostname mismatches and mismatched private keys. Uses an SFTPGo stub and requires a POSIX shell and OpenSSL. |
 | `python tests/verify-release-build.py` | Check Compose package construction and refusal paths with controlled fixtures. |
-| `python tests/verify-ftps-edge.py` | Exercise the pinned disposable edge's protocol behavior and controlled certificate replacement; requires Docker and OpenSSL. Add `--legacy` for the separate RSA AES-CBC profile. |
+| `python tests/verify-ftps-edge.py` | Exercise the pinned disposable edge's protocol behavior and controlled certificate replacement. Requires OpenSSL and a Docker setup that lets the container reach the fixture callback at `host.docker.internal`, as Docker Desktop does. Add `--legacy` for the separate RSA AES-CBC profile. |
 | `python tests/verify-keycloak-theme.py` | Check native enrollment defaults/verified-email mapper and theme preflight, selection and fallback; shell cases use the pinned Keycloak image and a controlled administrative-command stub. Requires Docker; this optional check does not prove email delivery or account enrollment. |
 | `python tests/verify-sftpgo-httpfs.py` | Characterize synchronous completion, same-name uploads, rejected append/resume and hook-failure cleanup with synthetic bytes on a disposable loopback FTP endpoint; requires Docker. |
 
 `camera_ftp.py` is the reusable synthetic client, not a standalone acceptance run. It keeps the socket address separate from the TLS hostname and never falls back to plaintext after TLS failure.
 
-The FTPS edge check validates a synthetic replacement certificate's chain, hostname and key, rejects an invalid candidate without changing the served certificate, then verifies a controlled restart serves the replacement.
+In the pinned FTPS fixture, a protected upload completes and the session closes before the edge restarts with a second valid synthetic certificate.
+A fresh FTPS client validates the chain and hostname and checks that the served certificate fingerprint matches the replacement.
 It does not exercise ACME issuance, unattended renewal or a physical camera's trust store.
 The SFTPGo check removes its own uniquely named container and temporary callback listener; it characterizes the dependency rather than proving ShutterSpool's end-to-end durability.
 
