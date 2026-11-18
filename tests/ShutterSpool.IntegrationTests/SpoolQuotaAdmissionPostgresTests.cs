@@ -8,6 +8,29 @@ namespace ShutterSpool.IntegrationTests;
 public sealed class SpoolQuotaAdmissionPostgresTests
 {
     [Fact]
+    public async Task Reservation_can_fill_quota_but_must_leave_filesystem_headroom()
+    {
+        CancellationToken token = TestContext.Current.CancellationToken;
+        await using var fixture = await ArchitectureTestDatabase.CreateAsync();
+        await using var context = new ShutterSpoolDbContext(fixture.Options);
+        await context.Database.MigrateAsync(token);
+        var inventory = new SpoolQuotaInventory(DateTimeOffset.UtcNow, true, [], 200, 120, 20, StorageMarker: new('a', 32));
+        var quota = new EfSpoolQuotaStore(context, new FixedAccounting(inventory), TimeProvider.System);
+        SpoolQuotaSnapshot initial = await quota.GetSnapshotAsync(token);
+        Assert.NotNull(await quota.UpdateSettingsAsync(initial.Settings.Revision,
+            new(initial.Settings.Revision, true, 100, 80, 50), token));
+
+        Assert.True(await quota.TryReserveAsync(new(Guid.NewGuid(), null, 1, 0, [], 1), token));
+        var request = new SpoolQuotaReservation(Guid.NewGuid(), null, 99, 0, [], 99);
+        Assert.False(await quota.TryReserveAsync(request, token));
+        Assert.True(await quota.TryReserveAsync(request with { FilesystemReservedBytes = 98 }, token));
+        Assert.Equal("quota_capacity", (await quota.GetSnapshotAsync(token)).AdmissionBlockedReason);
+
+        Assert.True(await quota.UpdateReservationAsync(request.OperationId, null, [], 99, 0, 99, token));
+        Assert.Equal("filesystem_reserve", (await quota.GetSnapshotAsync(token)).AdmissionBlockedReason);
+    }
+
+    [Fact]
     public async Task Inactive_quota_keeps_a_bounded_reservation_when_inventory_is_unknown()
     {
         await using var fixture = await ArchitectureTestDatabase.CreateAsync();
@@ -206,5 +229,14 @@ public sealed class SpoolQuotaAdmissionPostgresTests
         Assert.Equal(media.Length * 2, after.UsedBytes);
         Assert.Equal(0, after.ReservedBytes);
         Assert.False(await quota.TryReserveAsync(new(Guid.NewGuid(), Guid.NewGuid(), 91, 0, [], 1), TestContext.Current.CancellationToken));
+    }
+
+    private sealed class FixedAccounting(SpoolQuotaInventory inventory) : ISpoolAccounting
+    {
+        public Task<SpoolQuotaInventory> ObserveAsync(IReadOnlySet<string> reservedSpoolKeys, string? expectedStorageMarker,
+            bool allowInitializeStorageMarker, CancellationToken cancellationToken) => Task.FromResult(inventory);
+
+        public Task<bool> EstablishStorageMarkerAsync(string marker, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 }
