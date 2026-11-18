@@ -35,6 +35,15 @@ test('filter decoding rejects nested values and retains missing or invalid workf
     }
     assert.equal(decodePreferences('{"filters":{"Curation":{"workflow":"All"}}}').value.filters.Curation.workflows.length, 0);
     assert.equal(decodePreferences('{"version":2,"filters":{"Curation":{"workflows":[]}}}').value.filters.Curation.workflows.length, 0);
+    for (const [filter, expected] of [
+        [{ workflows: [], workflow: 'Held' }, []],
+        [{ workflows: ['broken'], workflow: 'All' }, ['Waiting']],
+        [{ workflows: ['Held', 'broken', 'Released'], workflow: 'All' }, ['Held', 'Released']],
+    ]) {
+        const decoded = decodePreferences(JSON.stringify({ filters: { Curation: filter } }));
+        assert.deepEqual(Array.from(decoded.value.filters.Curation.workflows), expected);
+    }
+    assert.deepEqual(Array.from(decodePreferences('{"version":2,"filters":{"Curation":{"workflow":"All"}}}').value.filters.Curation.workflows), ['Waiting']);
 });
 test('preview dimensions commit only complete bounded integers', () => {
     for (const value of ['', ' ', '63', '4097', '512.5', 'Infinity', 'NaN', 9, 512.5]) assert.equal(previewDimension(value), undefined, String(value));

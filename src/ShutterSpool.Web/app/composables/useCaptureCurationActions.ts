@@ -4,10 +4,11 @@ import { api, cancellable, handleFailure } from '../lib/api';
 import { mapBounded } from './useCurationVisit';
 import { originalRemovalScope, retentionTiming } from '../lib/retention';
 import { values, type CurationSession } from '../lib/curation-session';
-import type { CaptureInboxItemResponse as Capture, CaptureCurationResponse, CaptureDetailResponse } from '../api/models';
+import type { CaptureInboxItemResponse as Capture, CaptureBulkItemResponse, CaptureCurationResponse, CaptureDetailResponse } from '../api/models';
 
 type BulkAction = 'rating' | 'label' | 'tag' | 'removeTag' | 'discard' | 'hold' | 'restore' | 'release' | 'reset';
 type ActionSession = Pick<CurationSession, 'intent' | 'opening' | 'settle' | 'unresolved' | 'external' | 'acceptBatch'>;
+type ConfirmedTrashItem = { id: string; expectedRevision: number; name: string };
 
 interface UseCaptureCurationActionsOptions {
     selection: Ref<string[]>;
@@ -56,6 +57,13 @@ export function useCaptureCurationActions(options: UseCaptureCurationActionsOpti
         return ids.length === options.selection.value.length && ids.every((id, index) => id === options.selection.value[index]);
     }
 
+    function selectedBatch() {
+        const ids = [...options.selection.value];
+        const access = accessGeneration(), visit = options.visit(), view = options.view.value;
+        const ownerCurrent = () => isCurrent(access, visit, view);
+        return { ids, ownerCurrent, current: () => ownerCurrent() && selectionCurrent(ids) };
+    }
+
     function cancelReads() {
         readController?.abort();
         readController = undefined;
@@ -63,7 +71,8 @@ export function useCaptureCurationActions(options: UseCaptureCurationActionsOpti
 
     function readSignal() {
         cancelReads();
-        return readController = new AbortController();
+        readController = new AbortController();
+        return readController;
     }
 
     function markTrashUncertain(id: string) {
@@ -115,7 +124,6 @@ export function useCaptureCurationActions(options: UseCaptureCurationActionsOpti
                 busy.value = false;
             }
         }
-        return false;
     }
 
     watch([options.view, options.selection], cancelReads, { deep: true, flush: 'sync' });
@@ -134,17 +142,45 @@ export function useCaptureCurationActions(options: UseCaptureCurationActionsOpti
         }
     }
 
+    function submitBulk(action: BulkAction, ids: string[], details: (CaptureDetailResponse | undefined)[]) {
+        const released = details.filter(detail => detail?.curation?.releasedAt);
+        if (released.length) {
+            result.value = `No batch submitted. Released Captures are read-only here: ${released.map(detail => detail?.displayName ?? 'Photograph').join(', ')}. Remove them from the selection and try again.`;
+            return;
+        }
+        for (const detail of details) {
+            if (!detail?.id || !detail.curation) throw new Error('Capture unavailable');
+            options.observe(String(detail.id), detail.curation);
+        }
+        if (action === 'discard' && ids.some(id => options.sessions.get(id)?.external))
+            throw new Error('Values changed elsewhere; review before restoring.');
+        const items = details.map((detail, index) => bulkItem(action, ids[index]!, detail!));
+        const batch = api.management.captures.batch;
+        if (action === 'hold' || action === 'restore' || action === 'release') return batch[action].post({ items });
+        return batch.curation.post({ items });
+    }
+
+    function recordBulkResult(ids: string[], details: (CaptureDetailResponse | undefined)[], items: CaptureBulkItemResponse[]) {
+        for (const item of items) {
+            const id = String(item.id);
+            if (ids.includes(id) && item.status === 'committed' && item.current) options.sessions.get(id)?.acceptBatch(item.current);
+        }
+        const receivedIds = new Set(items.map(item => String(item.id)));
+        if (items.length !== ids.length || receivedIds.size !== ids.length || items.some(item => !ids.includes(String(item.id)))) {
+            result.value = 'Some outcomes are unknown. Review the selected photographs before retrying.';
+            return false;
+        }
+        const failures = items.filter(item => item.status !== 'committed');
+        result.value = failures.map(item => `${details.find(detail => String(detail?.id) === String(item.id))?.displayName ?? 'Photograph'}: ${item.errorCode ?? item.status}`).join(' · ');
+        return !failures.length;
+    }
+
     async function run(action: BulkAction): Promise<boolean> {
         if (options.view.value !== 'Curation' || !options.online.value || !options.selection.value.length || busy.value)
             return false;
         if (action === 'release' && !options.confirm(`Release ${options.selection.value.length} explicitly selected Captures?`))
             return false;
-        const ids = [...options.selection.value];
-        const access = accessGeneration();
-        const visit = options.visit();
-        const view = options.view.value;
-        const ownerCurrent = () => isCurrent(access, visit, view);
-        const current = () => ownerCurrent() && selectionCurrent(ids);
+        const { ids, current, ownerCurrent } = selectedBatch();
         busy.value = true;
         result.value = '';
         try {
@@ -158,35 +194,11 @@ export function useCaptureCurationActions(options: UseCaptureCurationActionsOpti
             const details = await mapBounded(ids, 4, id => api.management.captures.byId(id).get({ options: [cancellable(controller.signal)] }));
             if (readController === controller) readController = undefined;
             if (controller.signal.aborted || !current()) return false;
-            const released = details.filter(detail => detail?.curation?.releasedAt);
-            if (released.length) {
-                result.value = `No batch submitted. Released Captures are read-only here: ${released.map(detail => detail?.displayName ?? 'Photograph').join(', ')}. Remove them from the selection and try again.`;
-                return false;
-            }
-            for (const detail of details) {
-                if (!detail?.id || !detail.curation) throw new Error('Capture unavailable');
-                options.observe(String(detail.id), detail.curation);
-            }
-            if (action === 'discard' && ids.some(id => options.sessions.get(id)?.external))
-                throw new Error('Values changed elsewhere; review before restoring.');
-            const items = details.map((detail, index) => bulkItem(action, ids[index]!, detail!));
-            const batch = api.management.captures.batch;
-            const response = ['reset', 'discard', 'rating', 'label', 'tag', 'removeTag'].includes(action)
-                ? await batch.curation.post({ items })
-                : await batch[action as 'hold' | 'restore' | 'release'].post({ items });
+            const pending = submitBulk(action, ids, details);
+            if (!pending) return false;
+            const response = await pending;
             if (!ownerCurrent()) return false;
-            const responseItems = response?.items ?? [];
-            const failures = responseItems.filter(item => item.status !== 'committed');
-            for (const item of responseItems)
-                if (item.status === 'committed' && item.current && ids.includes(String(item.id)))
-                    options.sessions.get(String(item.id))?.acceptBatch(item.current);
-            result.value = failures.map(item => `${details.find(detail => String(detail?.id) === String(item.id))?.displayName ?? 'Photograph'}: ${item.errorCode ?? item.status}`).join(' · ');
-            const completeSet = responseItems.length === ids.length
-                && new Set(responseItems.map(item => String(item.id))).size === ids.length
-                && responseItems.every(item => ids.includes(String(item.id)));
-            const fullyCommitted = completeSet && responseItems.every(item => item.status === 'committed');
-            if (!completeSet)
-                result.value = 'Some outcomes are unknown. Review the selected photographs before retrying.';
+            const fullyCommitted = recordBulkResult(ids, details, response?.items ?? []);
             await options.refresh(new Set(ids));
             return ownerCurrent() && fullyCommitted;
         } catch (failure) {
@@ -203,84 +215,103 @@ export function useCaptureCurationActions(options: UseCaptureCurationActionsOpti
 
     async function favorite(isFavorite: boolean) {
         if (busy.value || !options.selection.value.length || !options.online.value) return;
-        const ids = [...options.selection.value], access = accessGeneration(), visit = options.visit(), view = options.view.value;
-        const ownerCurrent = () => isCurrent(access, visit, view);
-        const current = () => ownerCurrent() && selectionCurrent(ids);
+        const { ids, current, ownerCurrent } = selectedBatch();
+        const outcomes: string[] = [];
         busy.value = true;
         result.value = '';
-        const outcomes: string[] = [];
         try {
             for (const id of ids) {
                 if (!current()) return;
-                try {
-                    const controller = readSignal();
-                    const detail = await api.management.captures.byId(id).get({ options: [cancellable(controller.signal)] });
-                    if (readController === controller) readController = undefined;
-                    if (!current()) return;
-                    if (detail?.retention?.captureRevision == null) throw new Error('Retention unavailable');
-                    await api.management.captures.byId(id).favorite.put({ expectedRevision: detail.retention.captureRevision, isFavorite });
-                } catch (failure) {
-                    if (!ownerCurrent()) return;
-                    const status = handleFailure(failure);
-                    outcomes.push(`${options.rows.value.find(row => String(row.id) === id)?.displayName ?? 'Photograph'}: ${status === 409 ? 'conflict; review current heart' : 'outcome unconfirmed; review before retrying'}`);
-                }
+                if (!await updateFavorite(id)) return;
             }
-            if (ownerCurrent()) {
-                result.value = outcomes.join(' · ') || `${ids.length} Favorites saved.`;
-                await options.refresh(new Set(ids));
-            }
+            if (!ownerCurrent()) return;
+            result.value = outcomes.join(' · ') || `${ids.length} Favorites saved.`;
+            await options.refresh(new Set(ids));
         } finally {
             cancelReads();
             busy.value = false;
         }
+
+        async function updateFavorite(id: string) {
+            try {
+                const controller = readSignal();
+                const detail = await api.management.captures.byId(id).get({ options: [cancellable(controller.signal)] });
+                if (readController === controller) readController = undefined;
+                if (!current()) return false;
+                if (detail?.retention?.captureRevision == null) throw new Error('Retention unavailable');
+                await api.management.captures.byId(id).favorite.put({ expectedRevision: detail.retention.captureRevision, isFavorite });
+            } catch (failure) {
+                if (!ownerCurrent()) return false;
+                const status = handleFailure(failure);
+                const name = options.rows.value.find(row => String(row.id) === id)?.displayName ?? 'Photograph';
+                outcomes.push(`${name}: ${status === 409 ? 'conflict; review current heart' : 'outcome unconfirmed; review before retrying'}`);
+            }
+            return true;
+        }
     }
 
-    async function trash() {
-        if (busy.value || !options.selection.value.length || !options.online.value) return;
+    function confirmTrashSelection() {
         const locked = new Set(uncertainTrashIds.value);
         if (options.selection.value.some(id => locked.has(id))) {
             result.value = 'Refresh and verify the previous Trash outcome before submitting these photographs again.';
             return;
         }
-        const scope = options.selection.value.map(id => options.rows.value.find(row => String(row.id) === id)).filter((row): row is Capture => !!row);
-        if (scope.length !== options.selection.value.length || scope.some(row => row.retention?.captureRevision == null || !originalRemovalScope(row.retention) || retentionTiming(row.retention, Date.now(), true).stale)) {
-            result.value = 'We could not check the selected originals. Refresh before moving them to Trash.';
-            return;
+        const scope: ConfirmedTrashItem[] = [];
+        const variants: string[] = [];
+        let favorites = 0;
+        for (const id of options.selection.value) {
+            const row = options.rows.value.find(candidate => String(candidate.id) === id);
+            const originals = originalRemovalScope(row?.retention);
+            if (row?.retention?.captureRevision == null || !originals || retentionTiming(row.retention, Date.now(), true).stale) {
+                result.value = 'We could not check the selected originals. Refresh before moving them to Trash.';
+                return;
+            }
+            const name = row.displayName ?? 'Photograph';
+            scope.push({ id, expectedRevision: row.retention.captureRevision, name });
+            variants.push(`${name}: ${originals}`);
+            if (row.retention.isFavorite) favorites++;
         }
-        const variants = scope.map(row => `${row.displayName ?? 'Photograph'}: ${originalRemovalScope(row.retention)}`).join('\n');
-        if (!options.confirm(`Move ${scope.length} selected photographs to Trash, including ${scope.filter(row => row.retention?.isFavorite).length} Favorites?\n\nOriginal variants:\n${variants}\nTheir recovery window starts once the move is safely recorded. Trash still uses storage. These may be your only copies; gallery promises and preservation holds still apply. Backups and delivered or downloaded copies remain separate.`)) return;
+        if (options.confirm(`Move ${scope.length} selected photographs to Trash, including ${favorites} Favorites?\n\nOriginal variants:\n${variants.join('\n')}\nTheir recovery window starts once the move is safely recorded. Trash still uses storage. These may be your only copies; gallery promises and preservation holds still apply. Backups and delivered or downloaded copies remain separate.`)) return scope;
+    }
+
+    async function trash() {
+        if (busy.value || !options.selection.value.length || !options.online.value) return;
+        const scope = confirmTrashSelection();
+        if (!scope) return;
         const access = accessGeneration(), visit = options.visit(), view = options.view.value;
+        const ownerCurrent = () => isCurrent(access, visit, view);
         const outcomes: string[] = [];
         busy.value = true;
         result.value = '';
         try {
-            for (const row of scope) {
-                if (!isCurrent(access, visit, view)) return;
-                const id = String(row.id);
-                pendingTrashIds.value = [...pendingTrashIds.value, id];
-                markTrashUncertain(id);
-                try {
-                    await api.management.captures.byId(id).trash.post({ expectedRevision: row.retention!.captureRevision! });
-                } catch (failure) {
-                    if (access !== accessGeneration()) return;
-                    pendingTrashIds.value = pendingTrashIds.value.filter(value => value !== id);
-                    const status = handleFailure(failure);
-                    if (access !== accessGeneration()) return;
-                    outcomes.push(`${row.displayName ?? 'Photograph'}: ${status === 409 ? 'conflict/protected' : 'outcome unconfirmed'}`);
-                    markTrashUncertain(id);
-                    if (!isCurrent(access, visit, view)) return;
-                    continue;
-                }
-                pendingTrashIds.value = pendingTrashIds.value.filter(value => value !== id);
-                if (isCurrent(access, visit, view)) settleTrash(id);
-                else trashVerificationMessage.value = 'A Trash request completed after leaving this view. Verify current details before using another control.';
+            for (const item of scope) {
+                if (!ownerCurrent()) return;
+                await moveToTrash(item);
             }
-            if (isCurrent(access, visit, view)) {
-                result.value = outcomes.join(' · ') || `${scope.length} selected photographs moved to Trash.`;
-                if (!uncertainTrashIds.value.length) await options.refresh(new Set(scope.map(row => String(row.id))));
-            }
+            if (!ownerCurrent()) return;
+            result.value = outcomes.join(' · ') || `${scope.length} selected photographs moved to Trash.`;
+            if (!uncertainTrashIds.value.length) await options.refresh(new Set(scope.map(item => item.id)));
         } finally {
             busy.value = false;
+        }
+
+        async function moveToTrash({ id, expectedRevision, name }: ConfirmedTrashItem) {
+            pendingTrashIds.value = [...pendingTrashIds.value, id];
+            markTrashUncertain(id);
+            try {
+                await api.management.captures.byId(id).trash.post({ expectedRevision });
+            } catch (failure) {
+                if (access !== accessGeneration()) return;
+                pendingTrashIds.value = pendingTrashIds.value.filter(value => value !== id);
+                const status = handleFailure(failure);
+                if (access !== accessGeneration()) return;
+                outcomes.push(`${name}: ${status === 409 ? 'conflict/protected' : 'outcome unconfirmed'}`);
+                markTrashUncertain(id);
+                return;
+            }
+            pendingTrashIds.value = pendingTrashIds.value.filter(value => value !== id);
+            if (ownerCurrent()) settleTrash(id);
+            else trashVerificationMessage.value = 'A Trash request completed after leaving this view. Verify current details before using another control.';
         }
     }
 

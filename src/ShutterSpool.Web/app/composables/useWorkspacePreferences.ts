@@ -3,7 +3,7 @@ import { decodePreferences, defaultPreferences } from '../lib/workspace-preferen
 
 type PreferenceIdentity = { profile?: { iss?: string | null; sub?: string | null } } | null;
 export type WorkspacePreferenceStorage = Pick<Storage, 'getItem' | 'setItem'>;
-type PreferenceDocument = ReturnType<typeof defaultPreferences>;
+export type WorkspacePreferences = ReturnType<typeof defaultPreferences>;
 
 /** Owns account-scoped workspace settings. Media drafts and credentials do not belong here. */
 export function useWorkspacePreferences(session: Readonly<Ref<PreferenceIdentity>>, storage?: WorkspacePreferenceStorage) {
@@ -81,5 +81,3 @@ export function useWorkspacePreferences(session: Readonly<Ref<PreferenceIdentity
 
     return { preferences, preferenceKey, preferenceNotice, hydratePreferences, queuePreferenceSave, cancelPreferenceSave, flushPreferenceSave, writable, hydrating };
 }
-
-export type WorkspacePreferences = PreferenceDocument;

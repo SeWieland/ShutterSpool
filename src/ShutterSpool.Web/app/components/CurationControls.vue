@@ -47,7 +47,7 @@ const labels = ['Red', 'Yellow', 'Green', 'Blue', 'Purple'];
         </div>
         <form class="tag-entry" @submit.prevent="emit('addTag')">
             <input :value="tag" aria-label="Add tag" maxlength="64" placeholder="Add a tag…" autocomplete="off" @input="emit('update:tag', ($event.target as HTMLInputElement).value)" />
-            <button :disabled="!tag.trim()" aria-label="Add tag" title="Add tag"><UIcon name="i-lucide-plus" /></button>
+            <button type="submit" :disabled="!tag.trim()" aria-label="Add tag" title="Add tag"><UIcon name="i-lucide-plus" /></button>
         </form>
         <div v-if="suggestions?.length" class="tag-suggestions"><button v-for="value in suggestions" :key="value" @click="emit('addTag', value)">{{ value }}</button></div>
         </fieldset>

@@ -38,12 +38,52 @@ test('conflicts preserve intent and restoration requires explicit review of exte
     assert.equal(edit.status, 'Conflict'); assert.equal(edit.intent.rating, 3); assert.equal(edit.server.rating, 5);
     edit.useServer(); edit.reset(false); await edit.settle(); assert.equal(edit.status, 'Conflict'); assert.equal(edit.intent.rating, 0);
 });
+test('a revision conflict still needs review when the reread matches the queued intent', async () => {
+    let rejectWrite;
+    let writes = 0;
+    const edit = new CurationSession(initial, () => {
+        writes++;
+        return new Promise((_, reject) => { rejectWrite = reject; });
+    }, async () => ({ ...initial, revision: 2, rating: 4 }));
+    edit.change({ rating: 3 });
+    edit.change({ rating: 4 });
+    rejectWrite({ responseStatusCode: 409 });
+    await edit.settle();
+    assert.equal(edit.status, 'Conflict');
+    assert.equal(edit.intent.rating, 4);
+    assert.equal(edit.server.revision, 2);
+    assert.equal(writes, 1);
+});
 test('lost responses reread without replay and cannot attribute the revision to this visit', async () => {
     let count = 0;
     const edit = new CurationSession(initial, async () => { count++; throw new Error('lost response'); }, async () => ({ ...initial, revision: 2, rating: 3 }));
     edit.change({ rating: 3 }); await edit.settle();
     assert.equal(count, 1); assert.equal(edit.status, 'Saved'); assert.equal(edit.external, true);
     edit.reset(false); assert.equal(edit.status, 'Conflict');
+});
+test('an observation just after a recovery reread supplies the revision for the next edit', async () => {
+    const writes = [];
+    // Keep the read in the session's realm so Promise adoption adds no extra microtask.
+    const reread = vm.runInContext('Promise.withResolvers()', context);
+    const started = Promise.withResolvers();
+    const edit = new CurationSession(initial, async body => {
+        writes.push(body);
+        if (writes.length === 1) throw new Error('lost response');
+        return { ...body, revision: body.expectedRevision + 1 };
+    }, () => {
+        started.resolve();
+        return reread.promise;
+    });
+    edit.change({ rating: 3 });
+    await started.promise;
+    reread.resolve({ ...initial, revision: 2, rating: 3 });
+    queueMicrotask(() => queueMicrotask(() => edit.observe({ ...initial, revision: 3, rating: 5 })));
+    await edit.settle();
+    assert.equal(edit.server.revision, 3);
+    assert.equal(edit.intent.rating, 5);
+    edit.change({ rating: 4 });
+    await edit.settle();
+    assert.deepEqual(writes.map(body => body.expectedRevision), [1, 3]);
 });
 test('release wins stop further autosave while retaining unresolved intent', async () => {
     const edit = new CurationSession(initial, async () => { throw { responseStatusCode: 409 }; }, async () => ({ ...initial, revision: 2, releasedAt: new Date() }));

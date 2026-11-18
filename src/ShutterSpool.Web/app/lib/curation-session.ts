@@ -17,9 +17,9 @@ export class CurationSession {
     private orderedReset = false;
     private observed?: CaptureCurationResponse;
     private paused = false;
-    constructor(server: CaptureCurationResponse, private write: (body: CurationValues & {
+    constructor(server: CaptureCurationResponse, private readonly write: (body: CurationValues & {
         expectedRevision: number;
-    }) => Promise<CaptureCurationResponse | undefined>, private read: () => Promise<CaptureCurationResponse>, private failure: (error: unknown) => void = () => { }) {
+    }) => Promise<CaptureCurationResponse | undefined>, private readonly read: () => Promise<CaptureCurationResponse>, private readonly failure: (error: unknown) => void = () => { }) {
         this.server = server;
         this.opening = values(server);
         this.intent = values(server);
@@ -59,63 +59,76 @@ export class CurationSession {
     }
     private async flush() {
         while (!this.stopped && !same(this.intent, values(this.server))) {
-            if (this.paused)
-                return;
-            if (this.server.releasedAt) {
-                this.status = 'Released · unresolved edits';
-                return;
-            }
-            const submitted = { ...this.intent, tags: [...this.intent.tags], expectedRevision: this.server.revision ?? 0 };
-            this.status = 'Saving';
+            const submitted = this.prepareWrite();
+            if (!submitted) return;
             try {
-                const result = await this.write(submitted);
-                if (this.stopped)
-                    return;
-                if (!result)
-                    throw new Error('Missing acknowledgement');
-                this.server = result;
-                if (this.observed && (this.observed.revision ?? 0) > (result.revision ?? 0)) {
-                    this.server = this.observed;
-                    this.external = true;
-                    this.paused = !same(this.intent, values(this.server));
-                    this.status = this.paused ? this.server.releasedAt ? 'Released · unresolved edits' : 'Conflict' : 'Saved';
-                }
-                this.observed = undefined;
-                if (this.paused)
-                    return;
-            }
-            catch (error) {
+                this.acknowledge(await this.write(submitted));
+                if (this.stopped || this.paused) return;
+            } catch (error) {
                 this.failure(error);
-                if (this.stopped)
-                    return;
-                const status = (error as {
-                    responseStatusCode?: number;
-                    status?: number;
-                }).responseStatusCode ?? (error as {
-                    status?: number;
-                }).status;
-                this.status = status === 400 ? 'Save failed' : 'Checking outcome';
+                if (this.stopped) return;
+                const status = this.beginOutcomeCheck(error);
                 try {
-                    let result = await this.read();
-                    if (this.stopped)
-                        return;
-                    if (this.observed && (this.observed.revision ?? 0) > (result.revision ?? 0))
-                        result = this.observed;
-                    this.observed = undefined;
-                    this.external = result.revision !== this.server.revision || this.external;
-                    this.server = result;
-                    this.status = result.releasedAt && !same(this.intent, values(result)) ? 'Released · unresolved edits'
-                        : status === 409 ? 'Conflict' : same(this.intent, values(result)) ? 'Saved' : 'Save failed';
-                    if (this.status === 'Saved') this.paused = false;
-                }
-                catch {
+                    this.reconcileFailedWrite(await this.read(), status);
+                } catch {
                     this.status = 'Checking outcome';
                 }
                 return;
             }
         }
-        if (!this.stopped)
-            this.status = 'Saved';
+        if (!this.stopped) this.status = 'Saved';
+    }
+
+    private prepareWrite() {
+        if (this.paused) return;
+        if (this.server.releasedAt) {
+            this.status = 'Released · unresolved edits';
+            return;
+        }
+        const submitted = { ...this.intent, tags: [...this.intent.tags], expectedRevision: this.server.revision ?? 0 };
+        this.status = 'Saving';
+        return submitted;
+    }
+
+    private takeNewerObservation(result: CaptureCurationResponse) {
+        const observed = this.observed;
+        this.observed = undefined;
+        if (observed && (observed.revision ?? 0) > (result.revision ?? 0)) return observed;
+    }
+
+    private acknowledge(result: CaptureCurationResponse | undefined) {
+        if (this.stopped) return;
+        if (!result) throw new Error('Missing acknowledgement');
+        const newer = this.takeNewerObservation(result);
+        this.server = newer ?? result;
+        if (!newer) return;
+        this.external = true;
+        this.status = this.reviewStatus();
+        this.paused = this.status !== 'Saved';
+    }
+
+    private reviewStatus() {
+        if (same(this.intent, values(this.server))) return 'Saved';
+        return this.server.releasedAt ? 'Released · unresolved edits' : 'Conflict';
+    }
+
+    private beginOutcomeCheck(error: unknown) {
+        const failure = error as { responseStatusCode?: number; status?: number };
+        const status = failure.responseStatusCode ?? failure.status;
+        this.status = status === 400 ? 'Save failed' : 'Checking outcome';
+        return status;
+    }
+
+    private reconcileFailedWrite(result: CaptureCurationResponse, status: number | undefined) {
+        if (this.stopped) return;
+        const latest = this.takeNewerObservation(result) ?? result;
+        this.external = latest.revision !== this.server.revision || this.external;
+        this.server = latest;
+        const matchesIntent = same(this.intent, values(latest));
+        if (latest.releasedAt && !matchesIntent) this.status = 'Released · unresolved edits';
+        else if (status === 409) this.status = 'Conflict';
+        else this.status = matchesIntent ? 'Saved' : 'Save failed';
+        if (this.status === 'Saved') this.paused = false;
     }
     async settle() { await this.running; }
     acceptBatch(server: CaptureCurationResponse) {
@@ -128,7 +141,7 @@ export class CurationSession {
         await this.settle();
         try {
             this.observe(await this.read());
-            this.status = same(this.intent, values(this.server)) ? 'Saved' : this.server.releasedAt ? 'Released · unresolved edits' : 'Conflict';
+            this.status = this.reviewStatus();
             if (this.status === 'Saved') this.paused = false;
         }
         catch (error) {

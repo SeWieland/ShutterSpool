@@ -28,8 +28,9 @@ function workspace(read, batch = async () => ({ items: [] }), browser = {}) {
     let generation = 0; let lost; let dispose;
     const permissions = { mayCurate: ref(browser.role !== 'Viewer'), mayAdminister: ref(!browser.role || ['Owner', 'Administrator'].includes(browser.role)), workspaceAccess: ref({ role: browser.role ?? 'Owner' }), refreshWorkspaceAccess: browser.refreshAccess ?? (async () => true) };
     const session = ref({ profile: { iss: 'synthetic', sub: 'operator' } });
+    const favorite = browser.favorite ?? (async () => {});
     const testApi = browser.api ?? { management: { captures: {
-        byId: id => ({ get: options => read(id, options), favorite: { put: browser.favorite ?? (async () => {}) }, trash: { post: browser.trash ?? (async () => {}) }, curation: { put: async body => ({ ...body, revision: body.expectedRevision + 1 }) } }),
+        byId: id => ({ get: options => read(id, options), favorite: { put: body => favorite(id, body) }, trash: { post: browser.trash ?? (async () => {}) }, curation: { put: async body => ({ ...body, revision: body.expectedRevision + 1 }) } }),
         batch: { curation: { post: batch }, hold: { post: batch }, restore: { post: batch }, release: { post: batch } },
     } } };
     class WorkspaceHTMLElement {}
@@ -457,6 +458,32 @@ test('bulk tag guard treats only successfully submitted text as clean', async ()
     await completed("bulk('tag')");
     assert.equal(completed('bulkTag.value'), '', 'the submitted draft is clean after a complete successful apply');
     assert.equal(completed('unresolved.value'), false);
+});
+
+test('a duplicate bulk acknowledgement leaves the missing photograph and tag unresolved', async () => {
+    const run = workspace(async id => ({ id, curation: { revision: 3, tags: [] } }), async () => ({
+        items: [{ id: 'a', status: 'committed' }, { id: 'a', status: 'committed' }],
+    }));
+    run("view.value='Curation'; selection.value=['a','b']; bulkTag.value='evening'");
+    await run("bulk('tag')");
+    assert.equal(run('bulkTag.value'), 'evening');
+    assert.match(run('bulkResult.value'), /outcomes are unknown/);
+    assert.deepEqual(Array.from(run('selection.value')), ['a', 'b']);
+});
+
+test('bulk Favorites use each fresh retention revision and continue after a conflict', async () => {
+    const operations = [];
+    const run = workspace(async id => {
+        operations.push(`read ${id}`);
+        return { id, curation: { revision: 2 }, retention: { captureRevision: id === 'a' ? 7 : 11 } };
+    }, undefined, { favorite: async (id, body) => {
+        operations.push(`Favorite ${id} ${body.isFavorite} at ${body.expectedRevision}`);
+        if (id === 'a') throw { responseStatusCode: 409 };
+    } });
+    run("rows.value=[{id:'a',displayName:'First',retention:{captureRevision:1}},{id:'b',retention:{captureRevision:1}}]; selection.value=['a','b']");
+    await run('bulkFavorite(true)');
+    assert.deepEqual(operations.slice(0, 4), ['read a', 'Favorite a true at 7', 'read b', 'Favorite b true at 11']);
+    assert.equal(run('bulkResult.value'), 'First: conflict; review current heart');
 });
 
 test('debounced tag text remains owned by the view where it was typed', async () => {
@@ -1036,6 +1063,22 @@ test('Shift-clicking Rejected or Not Rated and dragging across zero retain the i
     interval.props.onPointerup(); await Vue.nextTick();
     assert.equal(run('filter.value.rating'), 0); assert.equal(run('filter.value.ratingMaximum'), 4);
     tree.close();
+});
+
+test('queued Trash requests keep the revisions captured at confirmation', async () => {
+    const first = Promise.withResolvers();
+    const revisions = [];
+    const run = workspace(async id => ({ id }), undefined, { trash: async body => {
+        revisions.push(body.expectedRevision);
+        if (revisions.length === 1) await first.promise;
+    } });
+    run("rows.value=['a','b'].map((id, index) => ({id,retention:{captureRevision:index+7,isFavorite:false,availableOriginals:[],asOf:new Date()}})); selection.value=['a','b']");
+    const pending = run('bulkTrash()');
+    assert.deepEqual(revisions, [7]);
+    run('rows.value[1].retention.captureRevision=9');
+    first.resolve();
+    await pending;
+    assert.deepEqual(revisions, [7, 8]);
 });
 
 test('uncertain Trash stays locked until a complete explicit authoritative reread', async () => {
