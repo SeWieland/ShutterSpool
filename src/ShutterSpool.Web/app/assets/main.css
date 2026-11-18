@@ -67,9 +67,6 @@ select {
     min-height: 44px;
     align-items: center;
 }
-.back {
-    display: inline-flex;
-}
 a,
 button,
 input,
