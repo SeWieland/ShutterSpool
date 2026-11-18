@@ -87,10 +87,12 @@ public static class CaptureCurationPolicy
             : Changed(capture with { Revision = capture.Revision + 1, Held = held, ReleaseDueAt = dueAt });
     }
 
-    public static CaptureCurationDecision ReleaseNow(CaptureCurationSnapshot capture, int expectedRevision, DateTimeOffset now) =>
-        capture.ReleasedAt is not null ? Unchanged(capture)
-        : capture.Revision != expectedRevision ? Conflict(capture)
-        : Release(capture, now);
+    public static CaptureCurationDecision ReleaseNow(CaptureCurationSnapshot capture, int expectedRevision, DateTimeOffset now)
+    {
+        if (capture.ReleasedAt is not null) return Unchanged(capture);
+        if (capture.Revision != expectedRevision) return Conflict(capture);
+        return Release(capture, now);
+    }
 
     public static CaptureCurationDecision ReleaseDue(CaptureCurationSnapshot capture, DateTimeOffset now) =>
         IsDue(capture.Held, capture.ReleasedAt, capture.ReleaseDueAt, now) ? Release(capture, now) : Conflict(capture);

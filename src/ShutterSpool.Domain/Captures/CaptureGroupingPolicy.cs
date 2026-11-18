@@ -11,6 +11,8 @@ public sealed record GroupingDecision(Guid? CaptureId, Guid? RelatedAssetId, str
 
 public static class CaptureGroupingPolicy
 {
+    private const string OtherRole = "OTHER";
+
     public static string NormalizeStem(string name)
     {
         string basename = name.Replace('\\', '/');
@@ -21,32 +23,52 @@ public static class CaptureGroupingPolicy
     public static GroupingDecision Decide(GroupingAssetFacts incoming, IReadOnlyList<GroupingCaptureFacts> captures,
         IReadOnlyList<GroupingReplayFacts> priorTransfers)
     {
+        GroupingDecision? replay = RecognizeReplay(incoming, captures, priorTransfers);
+        if (replay is not null) return replay;
+
+        if (incoming.Role is not ("RAW" or "JPEG" or OtherRole)) return new(null, null, "unpaired_other");
+        GroupingCaptureFacts[] complementary = [.. captures.Where(capture => IsComplementary(incoming, capture))];
+        GroupingCaptureFacts[] compatible = [.. complementary.Where(capture => CanPair(incoming, capture.Primaries))];
+        if (compatible is [var candidate] && !HasCompetingPrimary(incoming, candidate, captures))
+            return new(candidate.Id, null, "paired_complement");
+        if (compatible.Length > 0) return new(null, null, "ambiguous_candidates");
+        if (captures.Any(capture => capture.Primaries.Any(primary => VariantNameConflicts(incoming, primary))))
+            return new(null, null, "variant_name_conflict");
+        if (complementary.Any(capture => !HasCertainTime(incoming)
+            || capture.Primaries.All(primary => !HasCertainTime(primary)))) return new(null, null, "missing_or_uncertain_time");
+        return new(null, null, complementary.Length > 0 ? "conflicting_facts" : "no_complementary_candidate");
+    }
+
+    private static GroupingDecision? RecognizeReplay(GroupingAssetFacts incoming, IReadOnlyList<GroupingCaptureFacts> captures,
+        IReadOnlyList<GroupingReplayFacts> priorTransfers)
+    {
         var byId = captures.ToDictionary(capture => capture.Id);
         var replays = priorTransfers.Where(item => byId.TryGetValue(item.CaptureId, out GroupingCaptureFacts? capture)
                 && !FactsConflict(incoming, item.Prior) && capture.Primaries.All(primary => !FactsConflict(incoming, primary)))
             .GroupBy(item => item.CaptureId).ToArray();
-        if (replays.Length == 1)
-            return new(replays[0].Key, replays[0].OrderBy(item => item.Prior.Id).First().Prior.Id, "recognized_replay");
+        if (replays is not [var group]) return null;
+        return new(group.Key, group.Min(item => item.Prior.Id), "recognized_replay");
+    }
 
-        if (incoming.Role is not ("RAW" or "JPEG" or "OTHER")) return new(null, null, "unpaired_other");
-        GroupingCaptureFacts[] complementary = [.. captures.Where(capture =>
-            !capture.Primaries.Any(primary => (incoming.Role != "OTHER" && primary.Role == incoming.Role)
-                || ((incoming.Role == "OTHER" || primary.Role == "OTHER")
-                    && SameSuppliedName(primary.OriginalName, incoming.OriginalName)))
-            && capture.Primaries.Any(primary => primary.Role is "RAW" or "JPEG" or "OTHER"))];
-        GroupingCaptureFacts[] compatible = [.. complementary.Where(capture => CanPair(incoming, capture.Primaries))];
-        GroupingCaptureFacts[] reciprocal = [.. compatible.Where(candidate => !captures.Where(capture => capture.Id != candidate.Id
-                && !capture.Primaries.Any(primary => primary.Role == "OTHER"
-                    && SameSuppliedName(primary.OriginalName, incoming.OriginalName)))
-            .SelectMany(capture => capture.Primaries.Where(competing => competing.Role == incoming.Role))
-            .Any(competing => CanPair(competing, candidate.Primaries)))];
-        if (compatible.Length == 1 && reciprocal.Length == 1) return new(reciprocal[0].Id, null, "paired_complement");
-        if (compatible.Length > 0) return new(null, null, "ambiguous_candidates");
-        if (captures.Any(capture => capture.Primaries.Any(primary => (incoming.Role == "OTHER" || primary.Role == "OTHER")
-            && SameSuppliedName(primary.OriginalName, incoming.OriginalName)))) return new(null, null, "variant_name_conflict");
-        if (complementary.Any(capture => !HasCertainTime(incoming)
-            || capture.Primaries.All(primary => !HasCertainTime(primary)))) return new(null, null, "missing_or_uncertain_time");
-        return new(null, null, complementary.Length > 0 ? "conflicting_facts" : "no_complementary_candidate");
+    private static bool VariantNameConflicts(GroupingAssetFacts incoming, GroupingAssetFacts primary) =>
+        (incoming.Role == OtherRole || primary.Role == OtherRole) && SameSuppliedName(primary.OriginalName, incoming.OriginalName);
+
+    private static bool IsComplementary(GroupingAssetFacts incoming, GroupingCaptureFacts capture) =>
+        !capture.Primaries.Any(primary => (incoming.Role != OtherRole && primary.Role == incoming.Role)
+            || VariantNameConflicts(incoming, primary))
+        && capture.Primaries.Any(primary => primary.Role is "RAW" or "JPEG" or OtherRole);
+
+    private static bool HasCompetingPrimary(GroupingAssetFacts incoming, GroupingCaptureFacts candidate,
+        IReadOnlyList<GroupingCaptureFacts> captures)
+    {
+        foreach (GroupingCaptureFacts capture in captures)
+        {
+            if (capture.Id == candidate.Id || capture.Primaries.Any(primary =>
+                primary.Role == OtherRole && SameSuppliedName(primary.OriginalName, incoming.OriginalName))) continue;
+            if (capture.Primaries.Any(primary => primary.Role == incoming.Role && CanPair(primary, candidate.Primaries)))
+                return true;
+        }
+        return false;
     }
 
     private static bool CanPair(GroupingAssetFacts asset, IReadOnlyList<GroupingAssetFacts> primaries) =>

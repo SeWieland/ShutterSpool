@@ -2,11 +2,13 @@ using ShutterSpool.Domain.Security;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.IdentityModel.Tokens;
 using OpenTelemetry;
 using OpenTelemetry.Trace;
@@ -14,6 +16,7 @@ using ShutterSpool.Application.Ingress;
 using ShutterSpool.Application.Preview;
 using ShutterSpool.Application.Security;
 using ShutterSpool.Infrastructure.Persistence;
+using ShutterSpool.Server.Api.Live;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IdentityModel.Tokens.Jwt;
@@ -225,6 +228,23 @@ public sealed class LiveChangesHubTests(WorkspaceWebApplicationFactory factory)
     }
 
     [Fact]
+    public async Task Failed_admin_resync_is_retried_with_the_same_epoch_on_the_next_batch()
+    {
+        Guid workspace = Guid.NewGuid();
+        var sends = new FailingGroupSends(LiveChangeNotifier.Group(workspace));
+        using WebApplicationFactory<Program> server = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services => services.AddSingleton<HubLifetimeManager<LiveChangesHub>>(sends)));
+        LiveChangeBuffer buffer = server.Services.GetRequiredService<LiveChangeBuffer>();
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+
+        buffer.CaptureChanged(workspace, Guid.NewGuid(), "curation");
+        Assert.Equal(buffer.Epoch, await sends.FailedResync.Task.WaitAsync(timeout.Token));
+        buffer.CaptureChanged(workspace, Guid.NewGuid(), "curation");
+        Assert.Equal(buffer.Epoch, await sends.RetriedResync.Task.WaitAsync(timeout.Token));
+    }
+
+    [Fact]
     public async Task Receiving_observation_registry_stays_bounded_and_marks_incomplete_coverage()
     {
         using WebApplicationFactory<Program> server = await CreateServerAsync();
@@ -423,7 +443,7 @@ public sealed class LiveChangesHubTests(WorkspaceWebApplicationFactory factory)
         client.ConfigureRequest = request =>
         {
             request.Headers[ShutterSpool.Server.Security.WorkspaceSelection.Header] = factory.Workspace.Id.ToString();
-            if (origin is not null) request.Headers["Origin"] = origin;
+            if (origin is not null) request.Headers.Origin = origin;
         };
         return client;
     }
@@ -530,6 +550,28 @@ public sealed class LiveChangesHubTests(WorkspaceWebApplicationFactory factory)
     {
         public ILogger CreateLogger(string categoryName) => new CapturedLogger(entries);
         public void Dispose() { }
+    }
+
+    private sealed class FailingGroupSends(string adminGroup)
+        : DefaultHubLifetimeManager<LiveChangesHub>(NullLogger<DefaultHubLifetimeManager<LiveChangesHub>>.Instance)
+    {
+        public TaskCompletionSource<string> FailedResync { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<string> RetriedResync { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override Task SendGroupAsync(string groupName, string methodName, object?[] args, CancellationToken cancellationToken = default)
+        {
+            if (groupName == adminGroup)
+            {
+                if (methodName == "captureChanged" && !FailedResync.Task.IsCompleted)
+                    throw new IOException("Synthetic hint send failure.");
+                if (methodName == "resyncRequired" && args is [ResyncRequiredHint hint])
+                {
+                    if (FailedResync.TrySetResult(hint.Epoch)) throw new IOException("Synthetic recovery send failure.");
+                    RetriedResync.TrySetResult(hint.Epoch);
+                }
+            }
+            return base.SendGroupAsync(groupName, methodName, args, cancellationToken);
+        }
     }
 
     private sealed class CapturedLogger(ConcurrentQueue<string> entries) : ILogger

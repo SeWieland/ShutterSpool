@@ -433,7 +433,7 @@ public sealed partial class WorkspaceTenancyHttpTests
         public async Task<WebSocket> ConnectAsync(WorkspaceDefinition workspace, string subject)
         {
             WebSocketClient client = Server.Server.CreateWebSocketClient();
-            client.ConfigureRequest = request => request.Headers["Origin"] = "http://localhost";
+            client.ConfigureRequest = request => request.Headers.Origin = "http://localhost";
             WebSocket socket = await client.ConnectAsync(new Uri($"ws://localhost/live/changes?workspace={workspace.Id:D}&access_token={Uri.EscapeDataString(Bearer(subject))}"), Token);
             await socket.SendAsync("{\"protocol\":\"json\",\"version\":1}\u001e"u8.ToArray(), WebSocketMessageType.Text, true, Token);
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(Token);
