@@ -189,11 +189,7 @@ static void ConfigureCameraIngress(IDistributedApplicationBuilder builder, IReso
         .WithEnvironment("ShutterSpool__CameraIngress__Enabled", "true")
         .WithEnvironment("ShutterSpool__CameraIngress__CallbackKey", callbackKey)
         .WithEnvironment("ShutterSpool__CameraIngress__CallbackBaseUrl", ReferenceExpression.Create($"http://host.docker.internal:{server.GetEndpoint("camera-internal").Property(EndpointProperty.Port)}/internal/camera"));
-    foreach (string option in new[] { "MaximumUploadBytes", "MaximumConcurrentTransfers", "MaximumSessionsPerSource", "UploadBandwidthKiBPerSecond", "TransferTimeoutSeconds" })
-    {
-        string? value = builder.Configuration[$"ShutterSpool:CameraIngress:{option}"];
-        if (value is not null) server.WithEnvironment($"ShutterSpool__CameraIngress__{option}", value);
-    }
+    ConfigureCameraIngressLimits(builder, server);
 
     foreach (var profile in profiles)
     {
@@ -201,6 +197,15 @@ static void ConfigureCameraIngress(IDistributedApplicationBuilder builder, IReso
         if (profile.RequiresTls)
             server.WithEnvironment($"ShutterSpool__CameraIngress__Profiles__{profile.Name}__CaRootPath", Path.Combine(settings.CertificateDirectory, "root.pem"));
         AddCameraEdge(builder, server, settings, profile, imagePins["camera-edge"], callbackKey);
+    }
+}
+
+static void ConfigureCameraIngressLimits(IDistributedApplicationBuilder builder, IResourceBuilder<ProjectResource> server)
+{
+    foreach (string option in new[] { "MaximumUploadBytes", "MaximumConcurrentTransfers", "MaximumSessionsPerSource", "UploadBandwidthKiBPerSecond", "TransferTimeoutSeconds" })
+    {
+        string? value = builder.Configuration[$"ShutterSpool:CameraIngress:{option}"];
+        if (value is not null) server.WithEnvironment($"ShutterSpool__CameraIngress__{option}", value);
     }
 }
 
