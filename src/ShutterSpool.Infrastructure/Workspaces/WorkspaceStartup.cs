@@ -58,7 +58,7 @@ internal static class WorkspaceStartup
             .RetentionPolicies.AsNoTracking().Where(policy => policy.Id == 1)
             .Select(policy => policy.PreviewCacheJson).SingleOrDefaultAsync(token);
         if (previewCacheJson is not null)
-            (JsonSerializer.Deserialize<PreviewCacheSettings>(previewCacheJson, new JsonSerializerOptions(JsonSerializerDefaults.Web))
+            (JsonSerializer.Deserialize<PreviewCacheSettings>(previewCacheJson, JsonSerializerOptions.Web)
                 ?? throw new InvalidOperationException("The saved preview cache settings are invalid."))
                 .ApplyTo(services.GetRequiredService<PreviewSettings>());
         await WorkspaceRuntime.RecoverTemporaryAsync(services, token);

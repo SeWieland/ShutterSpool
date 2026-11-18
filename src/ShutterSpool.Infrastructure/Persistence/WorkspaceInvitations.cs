@@ -7,6 +7,15 @@ namespace ShutterSpool.Infrastructure.Persistence;
 
 internal sealed partial class EfAccessGrantStore : IWorkspaceInvitationStore
 {
+    private const string Pending = "pending";
+    private const string Expired = "expired";
+    private const string Accepted = "accepted";
+    private const string Invalidated = "invalidated";
+    private const string ExistingMember = "existingMember";
+    private const string NotFound = "notFound";
+    private const string MembershipRemoved = "membershipRemoved";
+    private const string Cancelled = "cancelled";
+
     public async Task<WorkspaceInvitation[]> ListInvitationsAsync(CancellationToken cancellationToken) =>
         await InvitationQuery(await DatabaseNowAsync(cancellationToken)).ToArrayAsync(cancellationToken);
 
@@ -18,25 +27,12 @@ internal sealed partial class EfAccessGrantStore : IWorkspaceInvitationStore
         where (issuer == null || offer.RecipientIssuer == issuer && offer.RecipientSubject == subject) && (id == null || offer.Id == id)
         orderby offer.CreatedAt, offer.Id
         select new WorkspaceInvitation(offer.Id, offer.RecipientIssuer, offer.RecipientSubject, offer.RecipientLabel, offer.Role,
-            offer.Status == "pending" && offer.ExpiresAt <= now ? "expired" : offer.Status,
+            offer.Status == Pending && offer.ExpiresAt <= now ? Expired : offer.Status,
             offer.Revision, offer.CreatedAt, offer.ExpiresAt);
 
     public async Task<WorkspaceInvitationResult> ChangeInvitationAsync(WorkspaceInvitationChange change, CancellationToken cancellationToken)
     {
-        if (change.OperationId == Guid.Empty || !Bounded(change.ActorIssuer, 2048) || !Bounded(change.ActorSubject, 512))
-            throw new ArgumentException("Provide an operation ID and authenticated principal.");
-        (string Kind, Guid? Id, long Revision) action = change switch
-        {
-            WorkspaceInvitationCreate create when Bounded(create.Recipient.Issuer, 2048) && Bounded(create.Recipient.Subject, 512)
-                && Bounded(create.Recipient.Email, 256) && WorkspaceAccessPolicy.IsInvitationRole(create.Role) => ("create", (Guid?)null, 0),
-            WorkspaceInvitationRenew renew when WorkspaceAccessPolicy.IsInvitationRole(renew.Role) => ("renew", renew.InvitationId, renew.ExpectedRevision),
-            WorkspaceInvitationCancel cancel => ("cancel", cancel.InvitationId, cancel.ExpectedRevision),
-            WorkspaceInvitationAccept accept => ("accept", accept.InvitationId, accept.ExpectedRevision),
-            _ => throw new ArgumentException("Provide a valid invitation action, recipient and non-Owner role."),
-        };
-        (string kind, Guid? id, long revision) = action;
-        if (id == Guid.Empty || revision < 0) throw new ArgumentException("Provide an invitation ID and current revision.");
-
+        (string kind, Guid? id) = ValidateInvitationAction(change);
         await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         // Join and membership removal must share the existing access-change transaction boundary.
         await LockAsync(cancellationToken);
@@ -47,7 +43,7 @@ internal sealed partial class EfAccessGrantStore : IWorkspaceInvitationStore
             .SingleOrDefaultAsync(item => item.Id == change.OperationId, cancellationToken);
         if (recorded is not null)
         {
-            if (recorded.Kind != "invitation-" + kind || recorded.Request != request) return new(change.OperationId, "conflict");
+            if (recorded.Kind != "invitation-" + kind || recorded.Request != request) return new(change.OperationId, Conflict);
             return await ReplayInvitationAsync(change, JsonSerializer.Deserialize<WorkspaceInvitationResult>(recorded.Result)!, now, cancellationToken);
         }
 
@@ -81,6 +77,23 @@ internal sealed partial class EfAccessGrantStore : IWorkspaceInvitationStore
         return result;
     }
 
+    private static (string Kind, Guid? Id) ValidateInvitationAction(WorkspaceInvitationChange change)
+    {
+        if (change.OperationId == Guid.Empty || !Bounded(change.ActorIssuer, 2048) || !Bounded(change.ActorSubject, 512))
+            throw new ArgumentException("Provide an operation ID and authenticated principal.");
+        (string Kind, Guid? Id, long Revision) action = change switch
+        {
+            WorkspaceInvitationCreate create when Bounded(create.Recipient.Issuer, 2048) && Bounded(create.Recipient.Subject, 512)
+                && Bounded(create.Recipient.Email, 256) && WorkspaceAccessPolicy.IsInvitationRole(create.Role) => ("create", (Guid?)null, 0),
+            WorkspaceInvitationRenew renew when WorkspaceAccessPolicy.IsInvitationRole(renew.Role) => ("renew", renew.InvitationId, renew.ExpectedRevision),
+            WorkspaceInvitationCancel cancel => ("cancel", cancel.InvitationId, cancel.ExpectedRevision),
+            WorkspaceInvitationAccept accept => ("accept", accept.InvitationId, accept.ExpectedRevision),
+            _ => throw new ArgumentException("Provide a valid invitation action, recipient and non-Owner role."),
+        };
+        if (action.Id == Guid.Empty || action.Revision < 0) throw new ArgumentException("Provide an invitation ID and current revision.");
+        return (action.Kind, action.Id);
+    }
+
     private async Task<WorkspaceInvitationResult> ReplayInvitationAsync(WorkspaceInvitationChange change, WorkspaceInvitationResult prior,
         DateTimeOffset now, CancellationToken cancellationToken)
     {
@@ -89,18 +102,18 @@ internal sealed partial class EfAccessGrantStore : IWorkspaceInvitationStore
         WorkspaceMembership? member = issuer is null ? null : await GetAsync(issuer, subject!, cancellationToken);
         WorkspaceInvitation? current = prior.Offer is null ? null : await InvitationQuery(now, id: prior.Offer.Id).SingleOrDefaultAsync(cancellationToken);
         string status = prior.Status;
-        if (prior.Status is "applied" or "existingMember" && (change is WorkspaceInvitationAccept || prior.Status == "existingMember") && member?.IsActive != true)
-            status = "membershipRemoved";
+        if (prior.Status is Applied or ExistingMember && (change is WorkspaceInvitationAccept || prior.Status == ExistingMember) && member?.IsActive != true)
+            status = MembershipRemoved;
         else if (change is not WorkspaceInvitationAccept && prior.Offer is not null && current?.Revision != prior.Offer.Revision)
-            status = "conflict";
+            status = Conflict;
         return prior with { Status = status, Offer = current, Membership = member };
     }
 
     private async Task<WorkspaceInvitationResult> CreateInvitationAsync(WorkspaceInvitationCreate change, WorkspaceInvitationEntity? offer,
         AuthorizationGrant? member, DateTimeOffset now, CancellationToken cancellationToken)
     {
-        if (member?.IsActive == true) return InvitationResult(change, "existingMember", offer, member, now);
-        if (offer is not null && offer.Status is not ("accepted" or "invalidated")) return InvitationResult(change, "conflict", offer, member, now);
+        if (member?.IsActive == true) return InvitationResult(change, ExistingMember, offer, member, now);
+        if (offer is not null && offer.Status is not (Accepted or Invalidated)) return InvitationResult(change, Conflict, offer, member, now);
         if (offer is not null)
         {
             // Inviting a removed member requires a new offer identity; old offers never revive.
@@ -110,48 +123,48 @@ internal sealed partial class EfAccessGrantStore : IWorkspaceInvitationStore
         offer = new()
         {
             RecipientIssuer = change.Recipient.Issuer, RecipientSubject = change.Recipient.Subject, RecipientLabel = change.Recipient.Email,
-            Role = change.Role, Status = "pending", Revision = 1, CreatedAt = now, ExpiresAt = now.AddHours(24),
+            Role = change.Role, Status = Pending, Revision = 1, CreatedAt = now, ExpiresAt = now.AddHours(24),
         };
         database.Add(offer);
-        return InvitationResult(change, "applied", offer, member, now);
+        return InvitationResult(change, Applied, offer, member, now);
     }
 
     private static WorkspaceInvitationResult RenewInvitation(WorkspaceInvitationRenew change, WorkspaceInvitationEntity? offer,
         AuthorizationGrant? member, DateTimeOffset now)
     {
-        if (offer is null) return new(change.OperationId, "notFound");
-        if (offer.Status is "accepted" or "invalidated") return InvitationResult(change, offer.Status, offer, member, now);
-        if (offer.Revision != change.ExpectedRevision) return InvitationResult(change, "conflict", offer, member, now);
-        if (member?.IsActive == true) return InvitationResult(change, "existingMember", offer, member, now);
+        if (offer is null) return new(change.OperationId, NotFound);
+        if (offer.Status is Accepted or Invalidated) return InvitationResult(change, offer.Status, offer, member, now);
+        if (offer.Revision != change.ExpectedRevision) return InvitationResult(change, Conflict, offer, member, now);
+        if (member?.IsActive == true) return InvitationResult(change, ExistingMember, offer, member, now);
         offer.Revision++;
-        offer.Status = "pending";
+        offer.Status = Pending;
         offer.Role = change.Role;
         offer.CreatedAt = now;
         offer.ExpiresAt = now.AddHours(24);
-        return InvitationResult(change, "applied", offer, member, now);
+        return InvitationResult(change, Applied, offer, member, now);
     }
 
     private static WorkspaceInvitationResult CancelInvitation(WorkspaceInvitationCancel change, WorkspaceInvitationEntity? offer,
         AuthorizationGrant? member, DateTimeOffset now)
     {
-        if (offer is null) return new(change.OperationId, "notFound");
-        if (offer.Status is "accepted" or "invalidated") return InvitationResult(change, offer.Status, offer, member, now);
-        if (offer.Revision != change.ExpectedRevision) return InvitationResult(change, "conflict", offer, member, now);
-        offer.Status = "cancelled";
+        if (offer is null) return new(change.OperationId, NotFound);
+        if (offer.Status is Accepted or Invalidated) return InvitationResult(change, offer.Status, offer, member, now);
+        if (offer.Revision != change.ExpectedRevision) return InvitationResult(change, Conflict, offer, member, now);
+        offer.Status = Cancelled;
         offer.Revision++;
-        return InvitationResult(change, "applied", offer, member, now);
+        return InvitationResult(change, Applied, offer, member, now);
     }
 
     private WorkspaceInvitationResult AcceptInvitation(WorkspaceInvitationAccept change, WorkspaceInvitationEntity? offer,
         AuthorizationGrant? member, DateTimeOffset now)
     {
         if (offer is null || offer.RecipientIssuer != change.ActorIssuer || offer.RecipientSubject != change.ActorSubject)
-            return new(change.OperationId, "notFound");
+            return new(change.OperationId, NotFound);
         if (!change.EmailVerified) return new(change.OperationId, "verificationRequired");
-        if (offer.Status == "accepted") return InvitationResult(change, member?.IsActive == true ? "existingMember" : "membershipRemoved", offer, member, now);
-        if (offer.Revision != change.ExpectedRevision) return InvitationResult(change, "conflict", offer, member, now);
-        if (offer.Status != "pending") return InvitationResult(change, offer.Status, offer, member, now);
-        if (now >= offer.ExpiresAt) return InvitationResult(change, "expired", offer, member, now);
+        if (offer.Status == Accepted) return InvitationResult(change, member?.IsActive == true ? ExistingMember : MembershipRemoved, offer, member, now);
+        if (offer.Revision != change.ExpectedRevision) return InvitationResult(change, Conflict, offer, member, now);
+        if (offer.Status != Pending) return InvitationResult(change, offer.Status, offer, member, now);
+        if (now >= offer.ExpiresAt) return InvitationResult(change, Expired, offer, member, now);
         bool existing = member?.IsActive == true;
         if (!existing)
         {
@@ -162,16 +175,20 @@ internal sealed partial class EfAccessGrantStore : IWorkspaceInvitationStore
             }
             else { member.IsActive = true; member.Role = offer.Role; member.Revision++; }
         }
-        offer.Status = "accepted";
+        offer.Status = Accepted;
         offer.Revision++;
-        return InvitationResult(change, existing ? "existingMember" : "applied", offer, member, now);
+        return InvitationResult(change, existing ? ExistingMember : Applied, offer, member, now);
     }
 
     private static WorkspaceInvitationResult InvitationResult(WorkspaceInvitationChange change, string status,
-        WorkspaceInvitationEntity? offer, AuthorizationGrant? member, DateTimeOffset now) =>
-        new(change.OperationId, status, offer is null ? null : new(offer.Id, offer.RecipientIssuer, offer.RecipientSubject,
-            offer.RecipientLabel, offer.Role, offer.Status == "pending" && now >= offer.ExpiresAt ? "expired" : offer.Status,
-            offer.Revision, offer.CreatedAt, offer.ExpiresAt), member is null ? null : Membership(member));
+        WorkspaceInvitationEntity? offer, AuthorizationGrant? member, DateTimeOffset now)
+    {
+        WorkspaceMembership? membership = member is null ? null : Membership(member);
+        if (offer is null) return new(change.OperationId, status, null, membership);
+        string offerStatus = offer.Status == Pending && now >= offer.ExpiresAt ? Expired : offer.Status;
+        return new(change.OperationId, status, new(offer.Id, offer.RecipientIssuer, offer.RecipientSubject, offer.RecipientLabel,
+            offer.Role, offerStatus, offer.Revision, offer.CreatedAt, offer.ExpiresAt), membership);
+    }
 
     private Task<DateTimeOffset> DatabaseNowAsync(CancellationToken cancellationToken) =>
         database.Database.SqlQuery<DateTimeOffset>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(cancellationToken);
@@ -180,9 +197,9 @@ internal sealed partial class EfAccessGrantStore : IWorkspaceInvitationStore
     private async Task<Guid[]> InvalidateRemovedMemberInvitationsAsync(AuthorizationGrant target, CancellationToken cancellationToken)
     {
         if (target.IsActive) return [];
-        WorkspaceInvitationEntity[] offers = await database.Set<WorkspaceInvitationEntity>().Where(item => item.Status == "pending"
+        WorkspaceInvitationEntity[] offers = await database.Set<WorkspaceInvitationEntity>().Where(item => item.Status == Pending
             && item.RecipientIssuer == target.Issuer && item.RecipientSubject == target.Subject).ToArrayAsync(cancellationToken);
-        foreach (WorkspaceInvitationEntity offer in offers) { offer.Status = "invalidated"; offer.Revision++; }
+        foreach (WorkspaceInvitationEntity offer in offers) { offer.Status = Invalidated; offer.Revision++; }
         return [.. offers.Select(item => item.Id)];
     }
 }
