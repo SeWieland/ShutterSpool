@@ -36,14 +36,22 @@ public sealed partial class ConfigurationApiTests
         string directory = Path.Combine(fixture.Database.SpoolRoot, "synthetic-restore-evidence");
         Directory.CreateDirectory(directory);
         await File.WriteAllTextAsync(Path.Combine(directory, "manifest.json"),
-            JsonSerializer.Serialize(manifest, new JsonSerializerOptions(JsonSerializerDefaults.Web)), token);
+            JsonSerializer.Serialize(manifest, JsonSerializerOptions.Web), token);
 
         IConfiguration configuration = RestoreConfiguration(directory, Guid.NewGuid());
         await Assert.ThrowsAsync<InvalidOperationException>(() => SuppressionRestoreGate.ReconcileAsync(configuration, service, erasure, token));
         configuration = RestoreConfiguration(directory, manifest.SnapshotId);
         await Assert.ThrowsAsync<InvalidOperationException>(() => SuppressionRestoreGate.ReconcileAsync(configuration, service, erasure, token));
+
+        PrivacyErasureProtectedPage page = Assert.IsType<PrivacyErasureProtectedPage>(
+            await service.GetExportPageAsync(manifest.SnapshotId, 0, token));
+        await File.WriteAllTextAsync(Path.Combine(directory, "page-000000.json"),
+            JsonSerializer.Serialize(page with { PageIndex = 1 }, JsonSerializerOptions.Web), token);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => SuppressionRestoreGate.ReconcileAsync(configuration, service, erasure, token));
         await using var verify = new ShutterSpoolDbContext(fixture.Database.Options);
-        Assert.Null((await verify.PrivacyErasureImports.SingleAsync(token)).CompletedAt);
+        PrivacyErasureImportEntity import = await verify.PrivacyErasureImports.SingleAsync(token);
+        Assert.Equal(0, import.ReceivedPageCount);
+        Assert.Null(import.CompletedAt);
     }
 
     private static IConfiguration RestoreConfiguration(string directory, Guid snapshotId) =>

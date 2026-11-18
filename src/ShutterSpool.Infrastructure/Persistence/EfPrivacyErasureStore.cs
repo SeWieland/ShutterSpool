@@ -8,6 +8,9 @@ namespace ShutterSpool.Infrastructure.Persistence;
 internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, TimeProvider clock, PrivacyErasureSuppressionPersistence suppression) : IPrivacyErasureStore
 {
     private const int MaximumTransientKeys = 64;
+    private const string CompletedOperationState = "Completed";
+    private const string CompletedMemberState = "Completed";
+    private const string RemovedAssetState = "Removed";
 
     public async Task<PrivacyErasurePreview> PreviewAsync(IReadOnlyList<PrivacyErasureSelection> selections,
         CancellationToken cancellationToken)
@@ -51,17 +54,9 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
         if (await database.PrivacyErasureAssets.AnyAsync(item => selected.AssetIds.Contains(item.AssetId), cancellationToken))
             return await FinishBeginAsync(transaction, PrivacyErasureStatus.Conflict, "ERASURE_ALREADY_OWNS_ASSET", [], cancellationToken);
 
-        var capturesById = new Dictionary<Guid, CaptureEntity>(selected.CaptureIds.Length);
-        foreach (Guid captureId in selected.CaptureIds)
-        {
-            CaptureEntity? capture = await LockCaptureAsync(captureId, cancellationToken);
-            if (capture is null || capture.RetentionDisposition == "Purging")
-                return await FinishBeginAsync(transaction, PrivacyErasureStatus.Conflict, "CAPTURE_UNAVAILABLE", [], cancellationToken);
-            capturesById.Add(captureId, capture);
-            PrivacyErasureSelection selection = request.Selections.Single(item => item.CaptureId == captureId);
-            if (capture.Revision != selection.ExpectedRevision)
-                return await FinishBeginAsync(transaction, PrivacyErasureStatus.Conflict, "REVISION_CONFLICT", [], cancellationToken);
-        }
+        var (capturesById, captureConflict) = await LockSelectedCapturesAsync(selected.CaptureIds, request.Selections, cancellationToken);
+        if (captureConflict is not null)
+            return await FinishBeginAsync(transaction, PrivacyErasureStatus.Conflict, captureConflict, [], cancellationToken);
 
         AssetEntity[] assets = await database.Assets.Where(asset => selected.AssetIds.Contains(asset.Id))
             .OrderBy(asset => asset.Id).ToArrayAsync(cancellationToken);
@@ -71,7 +66,7 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
         AssetRemovalOperationEntity[] removalOperations = await database.AssetRemovalOperations.AsNoTracking()
             .Where(item => selected.AssetIds.Contains(item.AssetId)).ToArrayAsync(cancellationToken);
         var removalsByAsset = removalOperations.GroupBy(item => item.AssetId).ToDictionary(group => group.Key, group => group.ToArray());
-        bool hasLiveCapture = capturesById.Values.Any(capture => capture.RetentionDisposition != "Purged");
+        bool hasLiveCapture = capturesById.Values.Any(capture => capture.RetentionDisposition != nameof(RetentionDisposition.Purged));
         string? marker = hasLiveCapture
             ? await database.SpoolQuotaObservations.AsNoTracking().Where(item => item.Id == 1)
                 .Select(item => item.StorageMarker).SingleOrDefaultAsync(cancellationToken)
@@ -95,7 +90,7 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
         await PrivacyErasureSuppressionPersistence.RevokeGalleryAccessAsync(database, selected.AssetIds, now, cancellationToken);
         if (blocker is null)
         {
-            await RedactWorkflowAsync(selected.AssetIds, selected.CaptureIds, now, cancellationToken);
+            await RedactWorkflowAsync(selected.AssetIds, selected.CaptureIds, cancellationToken);
             await MarkAuthorizedCapturesPurgingAsync(selected.CaptureIds, cancellationToken);
         }
         await database.SaveChangesAsync(cancellationToken);
@@ -112,7 +107,7 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
         PrivacyErasureOperationEntity? operation = await database.PrivacyErasureOperations
             .FromSqlInterpolated($"SELECT * FROM privacy_erasures WHERE \"Id\" = {operationId} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
-        if (operation is null || operation.State == "Completed")
+        if (operation is null || operation.State == CompletedOperationState)
         {
             await transaction.CommitAsync(cancellationToken);
             return [];
@@ -133,7 +128,7 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
         }
 
         DateTimeOffset now = clock.GetUtcNow();
-        await RedactAuthorizedWorkflowAsync(assetIds, captureIds, now, cancellationToken);
+        await RedactAuthorizedWorkflowAsync(assetIds, captureIds, cancellationToken);
         PrivacyErasureAssetEntity[] pending = await AuthorizePendingWorkAsync(operation, operationId, maximumCount,
             now, cancellationToken);
         await database.SaveChangesAsync(cancellationToken);
@@ -150,7 +145,7 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
         PrivacyErasureAssetEntity? item = await database.PrivacyErasureAssets
             .FromSqlInterpolated($"SELECT * FROM privacy_erasure_assets WHERE \"OperationId\" = {operationId} AND \"AssetId\" = {assetId} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
-        if (item is null || item.State == "Completed")
+        if (item is null || item.State == CompletedMemberState)
         {
             await transaction.CommitAsync(cancellationToken);
             return false;
@@ -202,7 +197,7 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
     {
         PrivacyErasureAssetEntity? item = await database.PrivacyErasureAssets.SingleOrDefaultAsync(asset =>
             asset.OperationId == operationId && asset.AssetId == assetId, cancellationToken);
-        if (item is null || item.State == "Completed") return;
+        if (item is null || item.State == CompletedMemberState) return;
         item.State = "Failed";
         string safeError = FixedFailureCode(errorCode);
         if (surface == "derivatives") item.DerivativesErrorCode = safeError;
@@ -234,7 +229,7 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
     {
         if (maximumCount is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(maximumCount));
         IQueryable<PrivacyErasureOperationEntity> query = database.PrivacyErasureOperations.AsNoTracking()
-            .Where(item => item.State != "Completed");
+            .Where(item => item.State != CompletedOperationState);
         if (afterOperationId is Guid cursor) query = query.Where(item => item.Id.CompareTo(cursor) > 0);
         return await query.OrderBy(item => item.Id).Take(maximumCount).Select(item => item.Id)
             .ToArrayAsync(cancellationToken);
@@ -245,7 +240,7 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
     {
         if (maximumCount is < 1 or > 101) throw new ArgumentOutOfRangeException(nameof(maximumCount));
         IQueryable<PrivacyErasureOperationEntity> query = database.PrivacyErasureOperations.AsNoTracking();
-        if (pendingOnly) query = query.Where(item => item.State != "Completed");
+        if (pendingOnly) query = query.Where(item => item.State != CompletedOperationState);
         if (beforeRequestedAt is DateTimeOffset requestedAt && beforeOperationId is Guid operationId)
             query = query.Where(item => item.RequestedAt < requestedAt
                 || item.RequestedAt == requestedAt && item.Id.CompareTo(operationId) < 0);
@@ -254,7 +249,7 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
             {
                 item.Id, item.State, item.RequestedAt, item.ErrorCode,
                 AssetCount = database.PrivacyErasureAssets.Count(asset => asset.OperationId == item.Id),
-                CompletedCount = database.PrivacyErasureAssets.Count(asset => asset.OperationId == item.Id && asset.State == "Completed"),
+                CompletedCount = database.PrivacyErasureAssets.Count(asset => asset.OperationId == item.Id && asset.State == CompletedMemberState),
             }).ToArrayAsync(cancellationToken);
         return operations.Select(item => new PrivacyErasureOperationSummary(item.Id, ParseStatus(item.State),
             item.RequestedAt, item.AssetCount, item.CompletedCount, item.AssetCount - item.CompletedCount,
@@ -317,6 +312,21 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
         return stored.SequenceEqual(requested);
     }
 
+    private async Task<(Dictionary<Guid, CaptureEntity> Captures, string? Conflict)> LockSelectedCapturesAsync(
+        Guid[] captureIds, IReadOnlyList<PrivacyErasureSelection> selections, CancellationToken cancellationToken)
+    {
+        var captures = new Dictionary<Guid, CaptureEntity>(captureIds.Length);
+        foreach (Guid captureId in captureIds)
+        {
+            CaptureEntity? capture = await LockCaptureAsync(captureId, cancellationToken);
+            if (capture is null || capture.RetentionDisposition == "Purging") return (captures, "CAPTURE_UNAVAILABLE");
+            captures.Add(captureId, capture);
+            PrivacyErasureSelection selection = selections.Single(item => item.CaptureId == captureId);
+            if (capture.Revision != selection.ExpectedRevision) return (captures, "REVISION_CONFLICT");
+        }
+        return (captures, null);
+    }
+
     private async Task<string?> FindBlockerAsync(Guid[] assetIds, CancellationToken cancellationToken)
     {
         if (await database.PreservationHoldAssets.AnyAsync(member => assetIds.Contains(member.AssetId)
@@ -337,15 +347,14 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
         return null;
     }
 
-    private async Task RedactAuthorizedWorkflowAsync(Guid[] assetIds, Guid[] captureIds, DateTimeOffset now,
-        CancellationToken cancellationToken)
+    private async Task RedactAuthorizedWorkflowAsync(Guid[] assetIds, Guid[] captureIds, CancellationToken cancellationToken)
     {
-        await RedactWorkflowAsync(assetIds, captureIds, now, cancellationToken);
+        await RedactWorkflowAsync(assetIds, captureIds, cancellationToken);
         foreach (Guid captureId in captureIds)
         {
             CaptureEntity? capture = await database.Captures.SingleOrDefaultAsync(item => item.Id == captureId, cancellationToken);
             if (capture is null) continue;
-            if (capture.RetentionDisposition != "Purged") capture.RetentionDisposition = "Purging";
+            if (capture.RetentionDisposition != nameof(RetentionDisposition.Purged)) capture.RetentionDisposition = "Purging";
             capture.RetentionPaused = true;
         }
     }
@@ -358,7 +367,7 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
         foreach (AssetEntity asset in assets)
         {
             CaptureEntity capture = capturesById[selections.Single(selection => selection.AssetIds.Contains(asset.Id)).CaptureId];
-            if (capture.RetentionDisposition == "Purged")
+            if (capture.RetentionDisposition == nameof(RetentionDisposition.Purged))
             {
                 bool hasCompletedExactRemoval = removalsByAsset.TryGetValue(asset.Id, out AssetRemovalOperationEntity[]? removalSet)
                     && removalSet.Length == 1
@@ -369,7 +378,7 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
                     && removalSet[0].ExpectedSize == asset.Size
                     && Guid.TryParseExact(removalSet[0].StorageMarker, "N", out _)
                     && removalSet[0].KnownTransientKeys.Length <= MaximumTransientKeys;
-                if (asset.State != "Removed" || !hasCompletedExactRemoval)
+                if (asset.State != RemovedAssetState || !hasCompletedExactRemoval)
                     return (PrivacyErasureStatus.Blocked, "ORIGINAL_REMOVAL_NOT_AUTHORIZED");
             }
             else if (asset.State != "Spooled" || removalsByAsset.ContainsKey(asset.Id))
@@ -390,7 +399,7 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
         foreach (AssetEntity asset in assets)
         {
             CaptureEntity capture = capturesById[selections.Single(selection => selection.AssetIds.Contains(asset.Id)).CaptureId];
-            AssetRemovalOperationEntity? completedRemoval = capture.RetentionDisposition == "Purged"
+            AssetRemovalOperationEntity? completedRemoval = capture.RetentionDisposition == nameof(RetentionDisposition.Purged)
                 ? removalsByAsset[asset.Id][0]
                 : null;
             string[] transientKeys = completedRemoval?.KnownTransientKeys ?? await ReadTransientKeysAsync(asset, cancellationToken);
@@ -427,7 +436,7 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
         foreach (Guid captureId in captureIds)
         {
             CaptureEntity capture = await database.Captures.SingleAsync(item => item.Id == captureId, cancellationToken);
-            if (capture.RetentionDisposition != "Purged") capture.RetentionDisposition = "Purging";
+            if (capture.RetentionDisposition != nameof(RetentionDisposition.Purged)) capture.RetentionDisposition = "Purging";
             capture.RetentionPaused = true;
         }
     }
@@ -436,14 +445,14 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
         Guid operationId, int maximumCount, DateTimeOffset now, CancellationToken cancellationToken)
     {
         PrivacyErasureAssetEntity[] pending = await database.PrivacyErasureAssets
-            .Where(item => item.OperationId == operationId && item.State != "Completed")
+            .Where(item => item.OperationId == operationId && item.State != CompletedMemberState)
             .OrderBy(item => item.AssetId).Take(maximumCount).ToArrayAsync(cancellationToken);
         foreach (PrivacyErasureAssetEntity item in pending)
         {
             item.MetadataRedactedAt ??= now;
             item.State = "Authorized";
         }
-        operation.State = pending.Length == 0 ? "Completed" : "Pending";
+        operation.State = pending.Length == 0 ? CompletedOperationState : "Pending";
         if (pending.Length == 0) operation.CompletedAt ??= now;
         operation.ErrorCode = null;
         return pending;
@@ -452,7 +461,7 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
     private async Task CompleteErasedAssetAsync(PrivacyErasureAssetEntity item, Guid operationId, Guid assetId,
         DateTimeOffset now, CancellationToken cancellationToken)
     {
-        item.State = "Completed";
+        item.State = CompletedMemberState;
         item.CompletedAt ??= now;
         await CompleteCaptureErasureAsync(item.CaptureId, assetId, cancellationToken);
         await MarkAssetRemovedAsync(assetId, cancellationToken);
@@ -466,12 +475,12 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
             .Where(member => member.CaptureId == captureId).Select(member => member.AssetId).ToArrayAsync(cancellationToken);
         Guid[] completedAssetIds = captureAssetIds.Length == 0 ? [] : await database.PrivacyErasureAssets
             .AsNoTracking().Where(erasureAsset => erasureAsset.CaptureId == captureId
-                && captureAssetIds.Contains(erasureAsset.AssetId) && erasureAsset.State == "Completed")
+                && captureAssetIds.Contains(erasureAsset.AssetId) && erasureAsset.State == CompletedMemberState)
             .Select(erasureAsset => erasureAsset.AssetId).ToArrayAsync(cancellationToken);
         bool allAssetsErased = capture is not null && captureAssetIds.Length > 0
             && captureAssetIds.All(memberAssetId => memberAssetId == assetId || completedAssetIds.Contains(memberAssetId));
-        if (!allAssetsErased || capture!.RetentionDisposition == "Purged") return;
-        capture.RetentionDisposition = "Purged";
+        if (!allAssetsErased || capture!.RetentionDisposition == nameof(RetentionDisposition.Purged)) return;
+        capture.RetentionDisposition = nameof(RetentionDisposition.Purged);
         capture.RetentionPaused = true;
         capture.Revision++;
     }
@@ -479,23 +488,23 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
     private async Task MarkAssetRemovedAsync(Guid assetId, CancellationToken cancellationToken)
     {
         if (database.Assets.Local.SingleOrDefault(asset => asset.Id == assetId) is { } tracked)
-            tracked.State = "Removed";
+            tracked.State = RemovedAssetState;
         else
             await database.Assets.Where(asset => asset.Id == assetId)
-                .ExecuteUpdateAsync(update => update.SetProperty(asset => asset.State, "Removed"), cancellationToken);
+                .ExecuteUpdateAsync(update => update.SetProperty(asset => asset.State, RemovedAssetState), cancellationToken);
     }
 
     private async Task CompleteOperationIfDoneAsync(Guid operationId, Guid assetId, DateTimeOffset now,
         CancellationToken cancellationToken)
     {
         int remaining = await database.PrivacyErasureAssets.CountAsync(asset => asset.OperationId == operationId
-            && asset.AssetId != assetId && asset.State != "Completed", cancellationToken);
+            && asset.AssetId != assetId && asset.State != CompletedMemberState, cancellationToken);
         PrivacyErasureOperationEntity? operation = await database.PrivacyErasureOperations
             .SingleOrDefaultAsync(candidate => candidate.Id == operationId, cancellationToken);
         if (operation is null) return;
         if (remaining == 0)
         {
-            operation.State = "Completed";
+            operation.State = CompletedOperationState;
             operation.CompletedAt ??= now;
             operation.ErrorCode = null;
         }
@@ -506,8 +515,7 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
         }
     }
 
-    private async Task RedactWorkflowAsync(Guid[] assetIds, Guid[] captureIds, DateTimeOffset now,
-        CancellationToken cancellationToken)
+    private async Task RedactWorkflowAsync(Guid[] assetIds, Guid[] captureIds, CancellationToken cancellationToken)
     {
         await database.Assets.Where(asset => assetIds.Contains(asset.Id)).ExecuteUpdateAsync(update => update
             .SetProperty(asset => asset.SourceId, Guid.Empty)
@@ -659,16 +667,18 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
 
     private static PrivacyErasureStatus ParseStatus(string value) => value switch
     {
-        "Completed" => PrivacyErasureStatus.Completed,
+        CompletedOperationState => PrivacyErasureStatus.Completed,
         "Blocked" => PrivacyErasureStatus.Blocked,
         "Conflict" => PrivacyErasureStatus.Conflict,
         "NotFound" => PrivacyErasureStatus.NotFound,
         _ => PrivacyErasureStatus.Pending,
     };
 
-    private static PrivacyErasureSurfaceStatus SurfaceStatus(DateTimeOffset? completedAt, string? errorCode) =>
-        completedAt is not null ? PrivacyErasureSurfaceStatus.Completed
-        : errorCode is not null ? PrivacyErasureSurfaceStatus.Blocked : PrivacyErasureSurfaceStatus.Pending;
+    private static PrivacyErasureSurfaceStatus SurfaceStatus(DateTimeOffset? completedAt, string? errorCode)
+    {
+        if (completedAt is not null) return PrivacyErasureSurfaceStatus.Completed;
+        return errorCode is not null ? PrivacyErasureSurfaceStatus.Blocked : PrivacyErasureSurfaceStatus.Pending;
+    }
 
     private static string FixedFailureCode(string code) => code switch
     {

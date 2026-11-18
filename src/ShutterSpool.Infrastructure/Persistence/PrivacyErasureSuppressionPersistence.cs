@@ -307,7 +307,7 @@ internal sealed class PrivacyErasureSuppressionPersistence(ShutterSpoolDbContext
         .Where(item => item.SnapshotId == snapshotId && item.PageIndex == pageIndex)
         .OrderBy(item => item.Ordinal).ToArrayAsync(cancellationToken);
 
-    private async Task<PrivacyErasureImportStatus> FinishImportAsync(IDbContextTransaction transaction,
+    private static async Task<PrivacyErasureImportStatus> FinishImportAsync(IDbContextTransaction transaction,
         PrivacyErasureImportEntity? import, string? errorCode, CancellationToken cancellationToken)
     {
         var result = new PrivacyErasureImportStatus(import?.SnapshotId ?? Guid.Empty, import?.PageCount ?? 0,
