@@ -15,14 +15,14 @@ class ImagePinTests(unittest.TestCase):
     def test_reads_future_synthetic_pin(self):
         content = ('services:\n'
                    '  camera-edge:\n'
-                   '    image: registry.example/sftpgo:v99.1@sha256:' + 'c' * 64 + '\n'
+                   '    image: registry.example:5000/cameras/sftpgo:v99.1@sha256:' + 'c' * 64 + '\n'
                    '  imaginary:\n'
-                   '    image: registry.example/imaginary:9.8.7@sha256:' + 'd' * 64 + '\n')
+                   '    image: registry.example/imaginary:9.8.7@sha256:' + 'd' * 64)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'compose.yaml'
             path.write_text(content, encoding='utf-8')
             pins = load_image_pins(path)
-        self.assertEqual(pins['camera-edge'], 'registry.example/sftpgo:v99.1@sha256:' + 'c' * 64)
+        self.assertEqual(pins['camera-edge'], 'registry.example:5000/cameras/sftpgo:v99.1@sha256:' + 'c' * 64)
         self.assertEqual(pins['imaginary'], 'registry.example/imaginary:9.8.7@sha256:' + 'd' * 64)
 
     def test_rejects_missing_service_pin(self):

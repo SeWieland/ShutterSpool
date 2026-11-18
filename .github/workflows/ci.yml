@@ -67,7 +67,7 @@ jobs:
           cache: npm
           cache-dependency-path: src/ShutterSpool.Web/package-lock.json
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
         working-directory: src/ShutterSpool.Web
       - name: Check frontend types
         run: npm run typecheck
