@@ -205,7 +205,7 @@ public sealed class PreviewService(IPreviewSourceResolver sources, IPreviewCache
         }
         finally
         {
-            renewal.Cancel();
+            await renewal.CancelAsync();
             try { await renewals; }
             catch (OperationCanceledException) when (renewal.IsCancellationRequested)
             {

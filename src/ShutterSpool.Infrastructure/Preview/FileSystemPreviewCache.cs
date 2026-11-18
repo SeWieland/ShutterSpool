@@ -108,15 +108,15 @@ internal sealed class FileSystemPreviewCache : IPreviewCache, IPreviewAssetCache
                 AssetIdFromKey(key), MaximumOutputBytes, 0, [quotaKey], MaximumOutputBytes,
                 SpoolQuotaReservationCategory.DiskPreview), cancellationToken);
             if (reserved) return new(reservationId, scope, quota, true, false);
-
-            scope.Dispose();
-            return new(reservationId, null, quota, false, true);
         }
         catch
         {
             scope.Dispose();
             throw;
         }
+
+        scope.Dispose();
+        return new(reservationId, null, null, false, true);
     }
 
     public async Task RemoveAssetAsync(Guid assetId, CancellationToken cancellationToken)

@@ -113,7 +113,7 @@ public sealed class DeliveryProcessingService(IDeliveryWorkStore workStore, ICom
         }
         finally
         {
-            ownership.Cancel();
+            await ownership.CancelAsync();
             try { await renewal; }
             catch (OperationCanceledException)
             {
@@ -132,7 +132,7 @@ public sealed class DeliveryProcessingService(IDeliveryWorkStore workStore, ICom
                 await Task.Delay(TimeSpan.FromSeconds(settings.LeaseRenewalSeconds), clock, ownership.Token);
                 if (!await workStore.RenewAsync(work.DeliveryId, work.ClaimToken, ownership.Token))
                 {
-                    ownership.Cancel();
+                    await ownership.CancelAsync();
                     return;
                 }
             }
@@ -141,7 +141,7 @@ public sealed class DeliveryProcessingService(IDeliveryWorkStore workStore, ICom
         {
             // The write finished or the caller cancelled, so the lease no longer needs renewal.
         }
-        catch (Exception) { ownership.Cancel(); }
+        catch (Exception) { await ownership.CancelAsync(); }
     }
 
     private async Task<Stream> OpenVerifiedOriginalAsync(DeliveryAsset asset, CancellationToken cancellationToken)

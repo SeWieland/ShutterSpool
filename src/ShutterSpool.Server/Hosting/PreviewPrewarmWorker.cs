@@ -3,7 +3,7 @@ using ShutterSpool.Server.Api.Live;
 
 namespace ShutterSpool.Server.Hosting;
 
-internal sealed class PreviewPrewarmWorker(IServiceScopeFactory scopes, ILogger<PreviewPrewarmWorker> logger) : BackgroundService
+internal sealed partial class PreviewPrewarmWorker(IServiceScopeFactory scopes, ILogger<PreviewPrewarmWorker> logger) : BackgroundService
 {
     private readonly WorkspaceWorkerCursor tenants = new(scopes);
 
@@ -30,12 +30,15 @@ internal sealed class PreviewPrewarmWorker(IServiceScopeFactory scopes, ILogger<
             {
                 break;
             }
-            catch (Exception)
+            catch (Exception exception)
             {
-                logger.LogWarning("Preview prewarming pass failed; retrying.");
+                LogPreviewPrewarmingFailure(logger, exception.GetType().Name);
             }
 
             if (!processed) await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
         }
     }
+
+    [LoggerMessage(EventId = 6001, Level = LogLevel.Warning, Message = "Preview prewarming pass failed ({ExceptionType}). Retrying.")]
+    private static partial void LogPreviewPrewarmingFailure(ILogger logger, string exceptionType);
 }

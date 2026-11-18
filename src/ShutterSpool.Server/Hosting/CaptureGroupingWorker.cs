@@ -3,7 +3,7 @@ using ShutterSpool.Server.Api.Live;
 
 namespace ShutterSpool.Server.Hosting;
 
-internal sealed class CaptureGroupingWorker(IServiceScopeFactory scopes, ILogger<CaptureGroupingWorker> logger) : BackgroundService
+internal sealed partial class CaptureGroupingWorker(IServiceScopeFactory scopes, ILogger<CaptureGroupingWorker> logger) : BackgroundService
 {
     private readonly WorkspaceWorkerCursor tenants = new(scopes);
 
@@ -27,12 +27,15 @@ internal sealed class CaptureGroupingWorker(IServiceScopeFactory scopes, ILogger
             {
                 break;
             }
-            catch (Exception)
+            catch (Exception exception)
             {
-                logger.LogWarning("Capture grouping pass failed; retrying.");
+                LogCaptureGroupingFailure(logger, exception.GetType().Name);
             }
 
             if (!processed) await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
         }
     }
+
+    [LoggerMessage(EventId = 4001, Level = LogLevel.Warning, Message = "Capture grouping pass failed ({ExceptionType}). Retrying.")]
+    private static partial void LogCaptureGroupingFailure(ILogger logger, string exceptionType);
 }

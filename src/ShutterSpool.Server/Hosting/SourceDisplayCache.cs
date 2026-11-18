@@ -49,16 +49,19 @@ public sealed class SourceDisplayCache(ISourceDisplayStore store, HybridCache ca
                 try { value = await store.ReadAsync(id, token); }
                 catch { factoryFailed = true; throw; }
                 if (value is not null && value.Name.Length > 256)
-                    throw new OversizedDisplay(value);
+                    throw new OversizedDisplayException(value);
                 return new CachedDisplay(value, started);
             }, Options, cancellationToken: cancellationToken);
             // A slow or racing fill cannot restart the display staleness clock.
             if (clock.GetElapsedTime(entry.Started) < Lifetime) return entry.Value;
             await InvalidateAsync(id, cancellationToken);
         }
-        catch (OversizedDisplay oversized) { return oversized.Value; }
+        catch (OversizedDisplayException oversized) { return oversized.Value; }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (Exception) when (!factoryFailed) { }
+        catch (Exception) when (!factoryFailed)
+        {
+            // Fall back to a direct store read when this call's factory has not reported a store failure.
+        }
         return await store.ReadAsync(id, cancellationToken);
     }
 
@@ -70,7 +73,7 @@ public sealed class SourceDisplayCache(ISourceDisplayStore store, HybridCache ca
     }
 
     private sealed record CachedDisplay(SourceDisplay? Value, long Started);
-    private sealed class OversizedDisplay(SourceDisplay value) : Exception
+    private sealed class OversizedDisplayException(SourceDisplay value) : Exception
     {
         public SourceDisplay Value { get; } = value;
     }

@@ -13,5 +13,5 @@ await using var app = builder.Build();
 if (System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name != "GetDocument.Insider")
     await app.InitializeShutterSpoolServerAsync();
 app.MapShutterSpoolServer();
-app.Run();
+await app.RunAsync();
 return 0;

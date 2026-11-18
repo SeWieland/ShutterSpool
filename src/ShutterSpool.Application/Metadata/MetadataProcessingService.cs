@@ -45,7 +45,7 @@ public sealed class MetadataProcessingService(
         }
         finally
         {
-            stopRenewal.Cancel();
+            await stopRenewal.CancelAsync();
             await renewal;
         }
 
@@ -65,7 +65,7 @@ public sealed class MetadataProcessingService(
                 await Task.Delay(_leaseRenewalInterval, timeProvider, stoppingToken);
                 if (!await store.RenewAsync(work, timeProvider.GetUtcNow(), stoppingToken))
                 {
-                    leaseLost.Cancel();
+                    await leaseLost.CancelAsync();
                     return;
                 }
             }
@@ -76,7 +76,7 @@ public sealed class MetadataProcessingService(
         }
         catch
         {
-            leaseLost.Cancel();
+            await leaseLost.CancelAsync();
             throw;
         }
     }
