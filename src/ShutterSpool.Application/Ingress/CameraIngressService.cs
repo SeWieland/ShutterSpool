@@ -194,7 +194,10 @@ public sealed class CameraIngressService(
             while (await heartbeat.WaitForNextTickAsync(cancellationToken))
                 PublishReceiving(admission);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Cancelling the upload also ends its receiving notifications.
+        }
     }
 
     public async Task<bool> FailUploadAsync(Guid loginId, string username, string sessionId, string virtualPath, long timestamp,
@@ -264,20 +267,7 @@ public sealed class CameraIngressService(
     public async Task RecoverAsync(int transferTimeoutSeconds, CancellationToken cancellationToken)
     {
         IReadOnlyList<CameraUploadAdmission> beforeCleanup = await store.GetRecoverableAsync(cancellationToken);
-        var completedDuringRecovery = new HashSet<Guid>();
-        foreach (CameraUploadAdmission admission in beforeCleanup)
-        {
-            if (admission.State is not (CameraTransferState.Received or CameraTransferState.Handoff)
-                || admission.CompletionTimestamp is not long completedAt) continue;
-
-            string expectedName = admission.VirtualPath[(admission.VirtualPath.LastIndexOf('/') + 1)..];
-            IngestResult? committed = await ingest.RecoverAdmittedAsync(admission.Id, admission.SourceId, expectedName,
-                admission.Size ?? -1, cancellationToken);
-            if (committed is null) continue;
-
-            await store.CompleteAsync(admission.Id, committed.Asset, completedAt, cancellationToken);
-            completedDuringRecovery.Add(admission.Id);
-        }
+        HashSet<Guid> completedDuringRecovery = await CompleteRecoverableHandoffsAsync(beforeCleanup, cancellationToken);
 
         long now = checked(timeProvider.GetUtcNow().ToUnixTimeMilliseconds() * 1_000_000);
         long staleBefore = now - checked(transferTimeoutSeconds * 1_000_000_000L);
@@ -297,11 +287,31 @@ public sealed class CameraIngressService(
         }
     }
 
+    private async Task<HashSet<Guid>> CompleteRecoverableHandoffsAsync(IReadOnlyList<CameraUploadAdmission> admissions,
+        CancellationToken cancellationToken)
+    {
+        var completed = new HashSet<Guid>();
+        foreach (CameraUploadAdmission admission in admissions)
+        {
+            if (admission.State is not (CameraTransferState.Received or CameraTransferState.Handoff)
+                || admission.CompletionTimestamp is not long completedAt) continue;
+
+            string expectedName = admission.VirtualPath[(admission.VirtualPath.LastIndexOf('/') + 1)..];
+            IngestResult? committed = await ingest.RecoverAdmittedAsync(admission.Id, admission.SourceId, expectedName,
+                admission.Size ?? -1, cancellationToken);
+            if (committed is null) continue;
+
+            await store.CompleteAsync(admission.Id, committed.Asset, completedAt, cancellationToken);
+            completed.Add(admission.Id);
+        }
+        return completed;
+    }
+
     private static void ValidateVirtualPath(string path, bool allowDirectory)
     {
         if (path.Length > 1_024 || path.Length == 0 || path[0] != '/' || path.Contains('\\') || path.Contains('\0') || path.Contains("//", StringComparison.Ordinal))
             throw new CameraIngressRejectedException("The virtual path is invalid.");
-        if (!allowDirectory && path.EndsWith("/", StringComparison.Ordinal))
+        if (!allowDirectory && path.EndsWith('/'))
             throw new CameraIngressRejectedException("A file path is required.");
         if (path.Split('/').Any(segment => segment is "." or ".." || segment.Contains(':')))
             throw new CameraIngressRejectedException("The virtual path is invalid.");

@@ -195,6 +195,29 @@ public sealed class DurableIngestTests : IDisposable
     }
 
     [Fact]
+    public async Task Recovery_repairs_same_size_corruption_from_a_matching_partial_and_retains_the_corrupt_bytes()
+    {
+        Directory.CreateDirectory(_root);
+        var journal = new MemoryJournal();
+        var service = new IngestService(journal, CreateSpool(), TimeProvider.System);
+        CancellationToken token = TestContext.Current.CancellationToken;
+        byte[] original = [1, 2, 3];
+        byte[] corrupt = [3, 2, 1];
+        IngestResult result = await service.AcceptAsync(new(Guid.NewGuid(), "camera.jpg", new MemoryStream(original)), token);
+        IngestOperation operation = journal.Operations[result.Asset.RecoveryCorrelation];
+        string finalPath = Path.Combine(_root, result.Asset.SpoolKey);
+        await File.WriteAllBytesAsync(finalPath, corrupt, token);
+
+        await service.RecoverAsync(token);
+
+        Assert.Equal(IngestOperationState.Committed, journal.Operations[operation.Id].State);
+        Assert.Equal(original, await File.ReadAllBytesAsync(finalPath, token));
+        Assert.Equal(original, await File.ReadAllBytesAsync(Path.Combine(_root, operation.PartialKey), token));
+        string quarantined = Assert.Single(Directory.EnumerateFiles(Path.Combine(_root, "quarantine"), "*.media"));
+        Assert.Equal(corrupt, await File.ReadAllBytesAsync(quarantined, token));
+    }
+
+    [Fact]
     public async Task Does_not_acknowledge_an_upload_that_exceeds_its_declared_maximum()
     {
         Directory.CreateDirectory(_root);

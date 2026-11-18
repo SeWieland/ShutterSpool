@@ -9,7 +9,7 @@ namespace ShutterSpool.Infrastructure.Persistence;
 internal sealed class EfCameraIngressStore(ShutterSpoolDbContext database, TimeProvider timeProvider, IWorkspaceRegistry? registry = null) : ICameraIngressStore
 {
     public async Task<CameraLogin?> CreateLoginAsync(Guid sourceId, string username, long credentialGeneration,
-        SourceConnectionProfile connectionProfile, CancellationToken cancellationToken)
+        SourceConnectionProfile connectionProfile = SourceConnectionProfile.ModernFtps, CancellationToken cancellationToken = default)
     {
         await using var transaction = database.Database.IsRelational() ? await database.Database.BeginTransactionAsync(cancellationToken) : null;
         SourceCredentialEntity? credential = await LockCredentialByUsernameAsync(username, cancellationToken);
@@ -49,15 +49,8 @@ internal sealed class EfCameraIngressStore(ShutterSpoolDbContext database, TimeP
             await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(hashtextextended('shutterspool-camera-admission', 0))", cancellationToken);
         long staleBeforeTimestamp = timestamp - checked(transferTimeoutSeconds * 1_000_000_000L);
         await QuarantineStaleAsync(staleBeforeTimestamp, cancellationToken);
-        CameraLoginEntity? knownLogin = await database.CameraLogins.AsNoTracking().SingleOrDefaultAsync(item => item.Id == loginId, cancellationToken);
-        if (knownLogin is null || knownLogin.Username != username) return null;
-        SourceCredentialEntity? credential = await LockCredentialAsync(knownLogin.SourceId, cancellationToken);
-        if (credential is null || !credential.IsIngressEnabled || credential.CredentialGeneration != knownLogin.CredentialGeneration) return null;
-        SourceEntity? source = await LockSourceAsync(knownLogin.SourceId, cancellationToken);
-        if (source is null || source.IsArchived || knownLogin.ConnectionProfile != source.ConnectionProfile) return null;
-        CameraLoginEntity? login = await LockLoginAsync(loginId, cancellationToken);
-        if (login is null || login.Username != username || login.CredentialGeneration != credential.CredentialGeneration
-            || login.ConnectionProfile != knownLogin.ConnectionProfile || login.ConnectionProfile != source.ConnectionProfile) return null;
+        CameraLoginEntity? login = await LockCurrentLoginAsync(loginId, username, cancellationToken);
+        if (login is null) return null;
 
         CameraUploadAdmissionEntity? retry = await database.CameraUploadAdmissions.SingleOrDefaultAsync(item =>
             item.LoginId == loginId && item.SessionId == sessionId && item.VirtualPath == virtualPath && item.AdmissionTimestamp == timestamp, cancellationToken);
@@ -85,6 +78,20 @@ internal sealed class EfCameraIngressStore(ShutterSpoolDbContext database, TimeP
         await database.SaveChangesAsync(cancellationToken);
         if (transaction is not null) await transaction.CommitAsync(cancellationToken);
         return Map(admission);
+    }
+
+    private async Task<CameraLoginEntity?> LockCurrentLoginAsync(Guid loginId, string username, CancellationToken cancellationToken)
+    {
+        CameraLoginEntity? knownLogin = await database.CameraLogins.AsNoTracking().SingleOrDefaultAsync(item => item.Id == loginId, cancellationToken);
+        if (knownLogin is null || knownLogin.Username != username) return null;
+        SourceCredentialEntity? credential = await LockCredentialAsync(knownLogin.SourceId, cancellationToken);
+        if (credential is null || !credential.IsIngressEnabled || credential.CredentialGeneration != knownLogin.CredentialGeneration) return null;
+        SourceEntity? source = await LockSourceAsync(knownLogin.SourceId, cancellationToken);
+        if (source is null || source.IsArchived || knownLogin.ConnectionProfile != source.ConnectionProfile) return null;
+        CameraLoginEntity? login = await LockLoginAsync(loginId, cancellationToken);
+        if (login is null || login.Username != username || login.CredentialGeneration != credential.CredentialGeneration
+            || login.ConnectionProfile != knownLogin.ConnectionProfile || login.ConnectionProfile != source.ConnectionProfile) return null;
+        return login;
     }
 
     public async Task QuarantineStaleAsync(long beforeTimestamp, CancellationToken cancellationToken)
@@ -276,67 +283,69 @@ internal sealed class EfCameraIngressStore(ShutterSpoolDbContext database, TimeP
             .ToArrayAsync(cancellationToken);
         bool hasMore = page.Length > limit;
         CameraUploadAdmissionEntity[] transfers = [.. page.Take(limit)];
-        Guid[] selectedTransferIds = [.. transfers.Select(item => item.Id)];
-        var committedOperations = await database.Operations.AsNoTracking()
-            .Where(item => selectedTransferIds.Contains(item.Id) && item.State == nameof(IngestOperationState.Committed))
-            .Select(item => new { item.Id, item.AssetId }).ToDictionaryAsync(item => item.Id, item => item.AssetId, cancellationToken);
-        Guid[] assetIds = [.. transfers.Select(item => committedOperations.TryGetValue(item.Id, out Guid committedAsset)
-                ? committedAsset : item.AssetId.GetValueOrDefault())
-            .Where(item => item != Guid.Empty).Distinct()];
-        var captureIds = await database.CaptureAssets.AsNoTracking().Where(item => assetIds.Contains(item.AssetId))
-            .Select(item => new { item.AssetId, item.CaptureId, item.IsPrimary }).ToArrayAsync(cancellationToken);
-        var previewJobs = await database.PreviewPrewarms.AsNoTracking().Where(item => assetIds.Contains(item.AssetId)
-                && item.Profile == "Grid")
-            .Select(item => new { item.AssetId, item.CaptureId, item.State, item.RetryAt, item.LeaseUntil }).ToArrayAsync(cancellationToken);
-        DateTimeOffset staleBefore = observedBefore.AddSeconds(-60);
-        CameraTransferActivity[] items = [.. transfers.Select(transfer =>
-        {
-            Guid mappedAssetId = committedOperations.TryGetValue(transfer.Id, out Guid committedAsset)
-                ? committedAsset : transfer.AssetId.GetValueOrDefault();
-            Guid? assetId = mappedAssetId == Guid.Empty ? null : mappedAssetId;
-            DateTimeOffset observedAt = DateTimeOffset.FromUnixTimeMilliseconds(transfer.AdmissionTimestamp / 1_000_000);
-            Guid? captureId = assetId is Guid linkedAssetId
-                ? captureIds.Where(item => item.AssetId == linkedAssetId && item.IsPrimary).Select(item => (Guid?)item.CaptureId).FirstOrDefault()
-                    ?? captureIds.Where(item => item.AssetId == linkedAssetId).Select(item => (Guid?)item.CaptureId).FirstOrDefault()
-                : null;
-            bool isCurrentPrimary = assetId is Guid candidateAsset && captureId is Guid candidateCapture
-                && captureIds.Any(item => item.AssetId == candidateAsset && item.CaptureId == candidateCapture && item.IsPrimary);
-            bool accepted = assetId is not null && (transfer.State == CameraTransferState.Completed
-                || committedOperations.ContainsKey(transfer.Id));
-            bool failed = transfer.State is CameraTransferState.Failed or CameraTransferState.Quarantined;
-            bool stale = transfer.State is CameraTransferState.Receiving or CameraTransferState.Received or CameraTransferState.Handoff
-                && observedAt < staleBefore;
-            var job = isCurrentPrimary ? previewJobs.FirstOrDefault(item => item.AssetId == assetId && item.CaptureId == captureId) : null;
-            CameraTransferPhase phase = ProjectPhase(transfer.State, accepted, failed, stale, captureId,
-                job?.State, job?.RetryAt, job?.LeaseUntil, observedBefore, out bool previewReady);
-            if (phase == CameraTransferPhase.PreparingPreview) observedAt = observedBefore;
-            return new CameraTransferActivity(transfer.Id, transfer.SourceId, assetId, captureId, phase,
-                observedAt, 0, accepted, previewReady, isCurrentPrimary);
-        })];
+        CameraTransferActivity[] items = await ProjectActivityAsync(transfers, observedBefore, cancellationToken);
         CameraUploadAdmissionEntity? last = hasMore ? transfers[^1] : null;
         return new(items, hasMore, last?.AdmissionTimestamp, last?.Id);
     }
 
-    private static CameraTransferPhase ProjectPhase(CameraTransferState transferState, bool accepted, bool failed,
-        bool stale, Guid? captureId, string? jobState, DateTimeOffset? retryAt, DateTimeOffset? leaseUntil,
-        DateTimeOffset observedBefore, out bool previewReady)
+    private sealed record CaptureLink(Guid AssetId, Guid CaptureId, bool IsPrimary);
+    private sealed record GridPreview(Guid AssetId, Guid CaptureId, string State, DateTimeOffset? RetryAt, DateTimeOffset? LeaseUntil);
+
+    private async Task<CameraTransferActivity[]> ProjectActivityAsync(CameraUploadAdmissionEntity[] transfers,
+        DateTimeOffset observedBefore, CancellationToken cancellationToken)
     {
-        previewReady = false;
-        if (accepted && captureId is null) return CameraTransferPhase.AcceptedAwaitingGrouping;
-        if (failed) return CameraTransferPhase.FailedUnavailable;
-        if (stale) return CameraTransferPhase.Stale;
+        Guid[] selectedTransferIds = [.. transfers.Select(item => item.Id)];
+        var committedOperations = await database.Operations.AsNoTracking()
+            .Where(item => selectedTransferIds.Contains(item.Id) && item.State == nameof(IngestOperationState.Committed))
+            .Select(item => new { item.Id, item.AssetId }).ToDictionaryAsync(item => item.Id, item => item.AssetId, cancellationToken);
+        Guid[] assetIds = [.. transfers.Select(item => committedOperations.GetValueOrDefault(item.Id, item.AssetId.GetValueOrDefault()))
+            .Where(item => item != Guid.Empty).Distinct()];
+        var captureLinks = await database.CaptureAssets.AsNoTracking().Where(item => assetIds.Contains(item.AssetId))
+            .Select(item => new CaptureLink(item.AssetId, item.CaptureId, item.IsPrimary)).ToArrayAsync(cancellationToken);
+        var previewJobs = await database.PreviewPrewarms.AsNoTracking().Where(item => assetIds.Contains(item.AssetId)
+                && item.Profile == "Grid")
+            .Select(item => new GridPreview(item.AssetId, item.CaptureId, item.State, item.RetryAt, item.LeaseUntil)).ToArrayAsync(cancellationToken);
+        DateTimeOffset staleBefore = observedBefore.AddSeconds(-60);
+        return [.. transfers.Select(transfer =>
+        {
+            bool committed = committedOperations.TryGetValue(transfer.Id, out Guid committedAsset);
+            Guid mappedAssetId = committed ? committedAsset : transfer.AssetId.GetValueOrDefault();
+            Guid? assetId = mappedAssetId == Guid.Empty ? null : mappedAssetId;
+            DateTimeOffset observedAt = DateTimeOffset.FromUnixTimeMilliseconds(transfer.AdmissionTimestamp / 1_000_000);
+            CaptureLink? capture = captureLinks.FirstOrDefault(item => item.AssetId == assetId && item.IsPrimary)
+                ?? captureLinks.FirstOrDefault(item => item.AssetId == assetId);
+            bool accepted = assetId is not null && (transfer.State == CameraTransferState.Completed || committed);
+            GridPreview? job = capture is { IsPrimary: true }
+                ? previewJobs.FirstOrDefault(item => item.AssetId == capture.AssetId && item.CaptureId == capture.CaptureId)
+                : null;
+            CameraTransferPhase phase = ProjectPhase(transfer.State, accepted, observedAt < staleBefore, capture, job, observedBefore);
+            if (phase == CameraTransferPhase.PreparingPreview) observedAt = observedBefore;
+            return new CameraTransferActivity(transfer.Id, transfer.SourceId, assetId, capture?.CaptureId, phase,
+                observedAt, 0, accepted, phase == CameraTransferPhase.Ready, capture?.IsPrimary == true);
+        })];
+    }
+
+    private static CameraTransferPhase ProjectPhase(CameraTransferState transferState, bool accepted, bool pastStaleThreshold,
+        CaptureLink? capture, GridPreview? job, DateTimeOffset observedBefore)
+    {
+        if (accepted && capture is null) return CameraTransferPhase.AcceptedAwaitingGrouping;
+        if (transferState is CameraTransferState.Failed or CameraTransferState.Quarantined) return CameraTransferPhase.FailedUnavailable;
+        if (pastStaleThreshold && transferState is CameraTransferState.Receiving or CameraTransferState.Received or CameraTransferState.Handoff)
+            return CameraTransferPhase.Stale;
         if (!accepted)
             return transferState == CameraTransferState.Receiving
                 ? CameraTransferPhase.Receiving
                 : CameraTransferPhase.Stale;
 
-        if (jobState == "Invalid") return CameraTransferPhase.FailedUnavailable;
-        if (jobState == "Pending" && retryAt > observedBefore) return CameraTransferPhase.FailedUnavailable;
-        if (jobState == "Processing" && leaseUntil <= observedBefore) return CameraTransferPhase.Stale;
-        previewReady = jobState == "Complete";
-        return previewReady ? CameraTransferPhase.Ready
-            : jobState is "Pending" or "Processing" ? CameraTransferPhase.PreparingPreview
-            : CameraTransferPhase.AcceptedAwaitingGrouping;
+        return job?.State switch
+        {
+            "Invalid" => CameraTransferPhase.FailedUnavailable,
+            "Pending" when job.RetryAt > observedBefore => CameraTransferPhase.FailedUnavailable,
+            "Processing" when job.LeaseUntil <= observedBefore => CameraTransferPhase.Stale,
+            "Complete" => CameraTransferPhase.Ready,
+            "Pending" or "Processing" => CameraTransferPhase.PreparingPreview,
+            _ => CameraTransferPhase.AcceptedAwaitingGrouping,
+        };
     }
 
     private Task<SourceCredentialEntity?> LockCredentialByUsernameAsync(string username, CancellationToken cancellationToken) => database.Database.IsRelational()
