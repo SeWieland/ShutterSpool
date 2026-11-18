@@ -1,5 +1,6 @@
 using ShutterSpool.Application.Delivery;
 using ShutterSpool.Domain.Delivery;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 
@@ -9,29 +10,35 @@ namespace ShutterSpool.Infrastructure.Destinations.Local;
 internal static class LocalFileDelivery
 {
     private const int BufferSize = 64 * 1024;
+    private const string MountIdentityUnknown = "MOUNT_IDENTITY_UNKNOWN";
+    private const string TargetConflict = "TARGET_CONFLICT";
+    private const string TargetUnverifiable = "TARGET_UNVERIFIABLE";
+    private const string PermissionDenied = "PERMISSION_DENIED";
+    private const string UnsafePath = "UNSAFE_PATH";
+    private const string InvalidRoot = "INVALID_ROOT";
 
     public static async Task<DeliveryResult> WriteAsync(string root, DeliveryRequest request, Stream original,
         CancellationToken cancellationToken)
     {
-        if (!TryResolve(root, request.TargetPath, out string? target, out string? error))
-            return new(error == "MOUNT_IDENTITY_UNKNOWN" ? DeliveryResultKind.Uncertain : DeliveryResultKind.ConfigurationFailure,
+        if (!TryResolveMountedTarget(root, request, out string? target, out string? error))
+            return new(error == MountIdentityUnknown ? DeliveryResultKind.Uncertain : DeliveryResultKind.ConfigurationFailure,
                 ErrorCode: error);
-        if (!HasRootMarker(root, request.DestinationId))
-            return new(DeliveryResultKind.Uncertain, ErrorCode: "MOUNT_IDENTITY_UNKNOWN");
-        string partial = PartialPath(target!, request.AttemptId);
+        return await WriteResolvedTargetAsync(root, target, request, original, cancellationToken);
+    }
+
+    private static async Task<DeliveryResult> WriteResolvedTargetAsync(string root, string target, DeliveryRequest request,
+        Stream original, CancellationToken cancellationToken)
+    {
+        string partial = PartialPath(target, request.AttemptId);
         bool publicationAttempted = false;
         bool partialOwned = false;
         try
         {
-            if (TryGetAttributes(target!, out FileAttributes attributes))
-                return (attributes & FileAttributes.Directory) != 0
-                    ? HasRootMarker(root, request.DestinationId)
-                        ? new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "TARGET_CONFLICT")
-                        : new(DeliveryResultKind.Uncertain, ErrorCode: "MOUNT_IDENTITY_UNKNOWN")
-                    : await ReadBackAsync(root, target!, request, cancellationToken);
+            if (TryGetAttributes(target, out FileAttributes attributes))
+                return await ReadBackAsync(root, target, request, attributes, cancellationToken);
             string parent = Path.GetDirectoryName(target)!;
             Directory.CreateDirectory(parent);
-            EnsureSafePath(root, target!);
+            EnsureSafePath(root, target);
             ProbeNoReplace(parent);
 
             await using (var output = new FileStream(partial, FileMode.CreateNew, FileAccess.Write, FileShare.None,
@@ -42,17 +49,11 @@ internal static class LocalFileDelivery
                     return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "ORIGINAL_CHANGED");
             }
 
-            EnsureSafePath(root, target!);
+            EnsureSafePath(root, target);
             if (!HasRootMarker(root, request.DestinationId))
-                return new(DeliveryResultKind.Uncertain, ErrorCode: "MOUNT_IDENTITY_UNKNOWN");
+                return new(DeliveryResultKind.Uncertain, ErrorCode: MountIdentityUnknown);
             publicationAttempted = true;
-            try { CreateHardLink(target!, partial); }
-            catch (IOException) when (File.Exists(target)) { return await ReadBackAsync(root, target!, request, cancellationToken); }
-
-            DeliveryResult result = await ReadBackAsync(root, target!, request, cancellationToken);
-            if (result.ErrorCode == "TARGET_UNVERIFIABLE")
-                return new(DeliveryResultKind.Uncertain, ErrorCode: "READ_BACK_UNKNOWN");
-            return result.Kind == DeliveryResultKind.Confirmed ? result with { BytesSent = request.Size } : result;
+            return await PublishAndReadBackAsync(root, target, partial, request, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -60,17 +61,17 @@ internal static class LocalFileDelivery
         }
         catch (UnauthorizedAccessException)
         {
-            return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "PERMISSION_DENIED");
+            return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: PermissionDenied);
         }
         catch (InvalidDataException)
         {
-            return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "UNSAFE_PATH");
+            return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: UnsafePath);
         }
         catch (IOException)
         {
-            bool uncertain = publicationAttempted || !partialOwned && File.Exists(partial);
-            return new(uncertain ? DeliveryResultKind.Uncertain : DeliveryResultKind.TransientFailure,
-                ErrorCode: uncertain ? "PUBLICATION_UNKNOWN" : "LOCAL_IO_FAILED");
+            if (publicationAttempted || !partialOwned && File.Exists(partial))
+                return new(DeliveryResultKind.Uncertain, ErrorCode: "PUBLICATION_UNKNOWN");
+            return new(DeliveryResultKind.TransientFailure, ErrorCode: "LOCAL_IO_FAILED");
         }
         catch (PlatformNotSupportedException)
         {
@@ -82,47 +83,45 @@ internal static class LocalFileDelivery
         }
     }
 
+    private static async Task<DeliveryResult> PublishAndReadBackAsync(string root, string target, string partial,
+        DeliveryRequest request, CancellationToken cancellationToken)
+    {
+        try { CreateHardLink(target, partial); }
+        catch (IOException) when (File.Exists(target))
+        {
+            return await ReadBackAsync(root, target, request, default, cancellationToken);
+        }
+
+        DeliveryResult result = await ReadBackAsync(root, target, request, default, cancellationToken);
+        if (result.ErrorCode == TargetUnverifiable)
+            return new(DeliveryResultKind.Uncertain, ErrorCode: "READ_BACK_UNKNOWN");
+        return result.Kind == DeliveryResultKind.Confirmed ? result with { BytesSent = request.Size } : result;
+    }
+
     public static async Task<DeliveryReconciliation> ReconcileAsync(string root, DeliveryRequest request,
         CancellationToken cancellationToken)
     {
-        if (!TryResolve(root, request.TargetPath, out string? target, out string? error))
-            return new(error is "INVALID_TARGET" or "INVALID_ROOT" or "UNSAFE_PATH" or "PERMISSION_DENIED"
+        if (!TryResolveMountedTarget(root, request, out string? target, out string? error))
+            return new(error is "INVALID_TARGET" or InvalidRoot or UnsafePath or PermissionDenied
                 ? DeliveryReconciliationKind.Conflict : DeliveryReconciliationKind.Uncertain, ErrorCode: error);
-        if (!HasRootMarker(root, request.DestinationId))
-            return new(DeliveryReconciliationKind.Uncertain, ErrorCode: "MOUNT_IDENTITY_UNKNOWN");
         try
         {
-            if (TryGetAttributes(target!, out FileAttributes attributes))
+            if (!TryGetAttributes(target, out FileAttributes attributes))
+                return ReconcileMissingTarget(root, target, request);
+
+            DeliveryResult result = await ReadBackAsync(root, target, request, attributes, cancellationToken);
+            return result switch
             {
-                if ((attributes & FileAttributes.Directory) != 0)
-                    return HasRootMarker(root, request.DestinationId)
-                        ? new(DeliveryReconciliationKind.Conflict, ErrorCode: "TARGET_CONFLICT")
-                        : new(DeliveryReconciliationKind.Uncertain, ErrorCode: "MOUNT_IDENTITY_UNKNOWN");
-                DeliveryResult result = await ExistingAsync(target!, request, cancellationToken);
-                if (!HasRootMarker(root, request.DestinationId))
-                    return new(DeliveryReconciliationKind.Uncertain, ErrorCode: "MOUNT_IDENTITY_UNKNOWN");
-                return result.Kind == DeliveryResultKind.Confirmed
-                    ? new(DeliveryReconciliationKind.Confirmed, DeliveryConfirmationEvidenceLevel.ReadBackHash)
-                    : result.ErrorCode == "TARGET_UNVERIFIABLE"
-                        ? new(DeliveryReconciliationKind.Uncertain, ErrorCode: result.ErrorCode)
-                        : new(DeliveryReconciliationKind.Conflict, ErrorCode: result.ErrorCode);
-            }
-            if (!Directory.Exists(root)) return new(DeliveryReconciliationKind.Uncertain, ErrorCode: "ROOT_UNAVAILABLE");
-            string partial = PartialPath(target!, request.AttemptId);
-            EnsureSafePath(root, partial);
-            if (File.Exists(partial))
-            {
-                using (new FileStream(partial, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }
-                File.Delete(partial);
-            }
-            if (!HasRootMarker(root, request.DestinationId))
-                return new(DeliveryReconciliationKind.Uncertain, ErrorCode: "MOUNT_IDENTITY_UNKNOWN");
-            return new(DeliveryReconciliationKind.NotPublished, SafeToRepeat: true);
+                { Kind: DeliveryResultKind.Confirmed } => new(DeliveryReconciliationKind.Confirmed, result.Evidence),
+                { Kind: DeliveryResultKind.Uncertain } or { ErrorCode: TargetUnverifiable } =>
+                    new(DeliveryReconciliationKind.Uncertain, ErrorCode: result.ErrorCode),
+                _ => new(DeliveryReconciliationKind.Conflict, ErrorCode: result.ErrorCode),
+            };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (InvalidDataException)
         {
-            return new(DeliveryReconciliationKind.Conflict, ErrorCode: "UNSAFE_PATH");
+            return new(DeliveryReconciliationKind.Conflict, ErrorCode: UnsafePath);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -130,18 +129,36 @@ internal static class LocalFileDelivery
         }
     }
 
+    private static DeliveryReconciliation ReconcileMissingTarget(string root, string target, DeliveryRequest request)
+    {
+        if (!Directory.Exists(root)) return new(DeliveryReconciliationKind.Uncertain, ErrorCode: "ROOT_UNAVAILABLE");
+        string partial = PartialPath(target, request.AttemptId);
+        EnsureSafePath(root, partial);
+        if (File.Exists(partial))
+        {
+            using (new FileStream(partial, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                // Require an exclusive open, then release the handle before deleting the attempt's partial file.
+            }
+            File.Delete(partial);
+        }
+        if (!HasRootMarker(root, request.DestinationId))
+            return new(DeliveryReconciliationKind.Uncertain, ErrorCode: MountIdentityUnknown);
+        return new(DeliveryReconciliationKind.NotPublished, SafeToRepeat: true);
+    }
+
     public static (bool Writable, string? ErrorCode) TestRoot(string root, Guid destinationId)
     {
-        if (!Path.IsPathFullyQualified(root)) return (false, "INVALID_ROOT");
+        if (!Path.IsPathFullyQualified(root)) return (false, InvalidRoot);
         try
         {
             EnsureSafePath(root, Path.Combine(root, "shutterspool-probe"));
-            if (!HasRootMarker(root, destinationId)) return (false, "MOUNT_IDENTITY_UNKNOWN");
+            if (!HasRootMarker(root, destinationId)) return (false, MountIdentityUnknown);
             ProbeNoReplace(root);
             return (true, null);
         }
-        catch (UnauthorizedAccessException) { return (false, "PERMISSION_DENIED"); }
-        catch (InvalidDataException) { return (false, "UNSAFE_PATH"); }
+        catch (UnauthorizedAccessException) { return (false, PermissionDenied); }
+        catch (InvalidDataException) { return (false, UnsafePath); }
         catch (PlatformNotSupportedException) { return (false, "UNSUPPORTED_PUBLICATION"); }
         catch (IOException) { return (false, "ROOT_UNAVAILABLE"); }
     }
@@ -188,16 +205,16 @@ internal static class LocalFileDelivery
         {
             await using var file = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.Read,
                 BufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
-            if (file.Length != request.Size) return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "TARGET_CONFLICT");
+            if (file.Length != request.Size) return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: TargetConflict);
             byte[] hash = await SHA256.HashDataAsync(file, token);
             return HashMatches(hash, request.Sha256)
                 ? new(DeliveryResultKind.Confirmed, DeliveryConfirmationEvidenceLevel.ReadBackHash)
-                : new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "TARGET_CONFLICT");
+                : new(DeliveryResultKind.ConfigurationFailure, ErrorCode: TargetConflict);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: "TARGET_UNVERIFIABLE");
+            return new(DeliveryResultKind.ConfigurationFailure, ErrorCode: TargetUnverifiable);
         }
     }
 
@@ -221,11 +238,13 @@ internal static class LocalFileDelivery
     }
 
     private static async Task<DeliveryResult> ReadBackAsync(string root, string target, DeliveryRequest request,
-        CancellationToken token)
+        FileAttributes attributes, CancellationToken cancellationToken)
     {
-        DeliveryResult result = await ExistingAsync(target, request, token);
+        DeliveryResult result = (attributes & FileAttributes.Directory) != 0
+            ? new(DeliveryResultKind.ConfigurationFailure, ErrorCode: TargetConflict)
+            : await ExistingAsync(target, request, cancellationToken);
         return HasRootMarker(root, request.DestinationId) ? result
-            : new(DeliveryResultKind.Uncertain, ErrorCode: "MOUNT_IDENTITY_UNKNOWN");
+            : new(DeliveryResultKind.Uncertain, ErrorCode: MountIdentityUnknown);
     }
 
     private static bool HashMatches(byte[] actual, string expected)
@@ -235,20 +254,28 @@ internal static class LocalFileDelivery
         catch (FormatException) { return false; }
     }
 
-    private static bool TryResolve(string root, string relative, out string? target, out string? error)
+    private static bool TryResolveMountedTarget(string root, DeliveryRequest request,
+        [NotNullWhen(true)] out string? target, [NotNullWhen(false)] out string? error)
     {
         target = null;
-        error = "INVALID_TARGET";
-        if (!Path.IsPathFullyQualified(root)) { error = "INVALID_ROOT"; return false; }
+        if (!Path.IsPathFullyQualified(root)) { error = InvalidRoot; return false; }
+        string relative = request.TargetPath;
         if (string.IsNullOrWhiteSpace(relative) || relative.Length > 2048 || relative.Contains('\\') || relative.StartsWith('/')
             || relative.Split('/').Any(segment => segment.Length is 0 or > 255 || segment is "." or ".."
                 || segment.Any(char.IsControl) || segment.IndexOfAny(['?', '*', '"', '<', '>', '|', ':']) >= 0
-                || segment.EndsWith('.') || segment.EndsWith(' ') || IsReservedDeviceName(segment))) return false;
-        target = Path.Combine(Path.GetFullPath(root), relative.Replace('/', Path.DirectorySeparatorChar));
-        try { EnsureSafePath(root, target); }
-        catch (InvalidDataException) { error = "UNSAFE_PATH"; return false; }
-        catch (UnauthorizedAccessException) { error = "PERMISSION_DENIED"; return false; }
-        catch (IOException) { error = "MOUNT_IDENTITY_UNKNOWN"; return false; }
+                || segment.EndsWith('.') || segment.EndsWith(' ') || IsReservedDeviceName(segment)))
+        {
+            error = "INVALID_TARGET";
+            return false;
+        }
+        string fullPath = Path.Combine(Path.GetFullPath(root), relative.Replace('/', Path.DirectorySeparatorChar));
+        try { EnsureSafePath(root, fullPath); }
+        catch (InvalidDataException) { error = UnsafePath; return false; }
+        catch (UnauthorizedAccessException) { error = PermissionDenied; return false; }
+        catch (IOException) { error = MountIdentityUnknown; return false; }
+        if (!HasRootMarker(root, request.DestinationId)) { error = MountIdentityUnknown; return false; }
+        target = fullPath;
+        error = null;
         return true;
     }
 
@@ -303,7 +330,10 @@ internal static class LocalFileDelivery
                 second.WriteByte(2);
             }
             try { CreateHardLink(existing, source); throw new IOException("No-replace hard link replaced a target."); }
-            catch (IOException) when (File.ReadAllBytes(existing).SequenceEqual(new byte[] { 2 })) { }
+            catch (IOException) when (File.ReadAllBytes(existing).SequenceEqual(new byte[] { 2 }))
+            {
+                // The occupied target must still contain its original probe byte after the rejected link.
+            }
             string linked = source + ".linked";
             bool linkedOwned = false;
             try { CreateHardLink(linked, source); linkedOwned = true; }
@@ -319,7 +349,10 @@ internal static class LocalFileDelivery
     private static void TryDeletePartial(string partial)
     {
         try { if (File.Exists(partial)) File.Delete(partial); }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Cleanup is best effort and only covers the partial created by this write.
+        }
     }
 
     private static void CreateHardLink(string link, string source)
@@ -339,5 +372,6 @@ internal static class LocalFileDelivery
     private static extern bool CreateHardLinkWindows(string link, string source, IntPtr securityAttributes);
 
     [DllImport("libc", EntryPoint = "link", SetLastError = true)]
-    private static extern int LinkUnix(string source, string link);
+    private static extern int LinkUnix([MarshalAs(UnmanagedType.LPUTF8Str)] string source,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string link);
 }

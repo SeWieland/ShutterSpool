@@ -92,18 +92,35 @@ public sealed class LocalFileDeliveryTests
     [Fact]
     public async Task Identical_occupied_target_confirms_without_replacement_but_different_content_conflicts()
     {
-        using var fixture = new LocalRoot();
+        using var fixture = new LocalRoot(prefix: "shutterspool-Zielordner-ä");
+        const string fileName = "撮影.raw";
         byte[] bytes = [4, 2, 8];
-        string target = System.IO.Path.Combine(fixture.Path, "original.raw");
-        await File.WriteAllBytesAsync(target, bytes, TestContext.Current.CancellationToken);
+        string target = System.IO.Path.Combine(fixture.Path, fileName);
+        DeliveryRequest request = Request(fixture, fileName, bytes);
+        DeliveryResult published = await LocalFileDelivery.WriteAsync(fixture.Path, request,
+            new MemoryStream(bytes), TestContext.Current.CancellationToken);
+        Assert.Equal(DeliveryResultKind.Confirmed, published.Kind);
+        Assert.Equal(DeliveryConfirmationEvidenceLevel.ReadBackHash, published.Evidence);
+        Assert.Equal(request.Size, published.BytesSent);
+        Assert.Equal(bytes, await File.ReadAllBytesAsync(target, TestContext.Current.CancellationToken));
+        File.SetLastWriteTimeUtc(target, new DateTime(2001, 2, 3, 4, 5, 6, DateTimeKind.Utc));
         DateTime before = File.GetLastWriteTimeUtc(target);
 
-        DeliveryResult identical = await LocalFileDelivery.WriteAsync(fixture.Path, Request(fixture, "original.raw", bytes),
+        DeliveryResult identical = await LocalFileDelivery.WriteAsync(fixture.Path, request with { AttemptId = Guid.NewGuid() },
             new MemoryStream(bytes), TestContext.Current.CancellationToken);
-        DeliveryResult conflict = await LocalFileDelivery.WriteAsync(fixture.Path, Request(fixture, "original.raw", [8, 2, 4]),
-            new MemoryStream([8, 2, 4]), TestContext.Current.CancellationToken);
-
         Assert.Equal(DeliveryResultKind.Confirmed, identical.Kind);
+        Assert.Equal(DeliveryConfirmationEvidenceLevel.ReadBackHash, identical.Evidence);
+        Assert.Null(identical.BytesSent);
+        Assert.Equal(before, File.GetLastWriteTimeUtc(target));
+
+        byte[] differentBytes = [8, 2, 4];
+        DeliveryRequest different = request with
+        {
+            AttemptId = Guid.NewGuid(),
+            Sha256 = Convert.ToHexStringLower(SHA256.HashData(differentBytes)),
+        };
+        DeliveryResult conflict = await LocalFileDelivery.WriteAsync(fixture.Path, different,
+            new MemoryStream(differentBytes), TestContext.Current.CancellationToken);
         Assert.Equal(DeliveryResultKind.ConfigurationFailure, conflict.Kind);
         Assert.Equal("TARGET_CONFLICT", conflict.ErrorCode);
         Assert.Equal(bytes, await File.ReadAllBytesAsync(target, TestContext.Current.CancellationToken));
@@ -351,10 +368,10 @@ public sealed class LocalFileDeliveryTests
     private sealed class LocalRoot : IDisposable
     {
         public string Path { get; }
-        public LocalRoot(string? root = null)
+        public LocalRoot(string? root = null, string prefix = "shutterspool-local")
         {
             Path = System.IO.Path.Combine(root ?? Environment.GetEnvironmentVariable("SHUTTERSPOOL_LOCAL_MOUNT_TEST_ROOT")
-                ?? System.IO.Path.GetTempPath(), $"shutterspool-local-{Guid.NewGuid():N}");
+                ?? System.IO.Path.GetTempPath(), $"{prefix}-{Guid.NewGuid():N}");
             Directory.CreateDirectory(Path);
         }
         public void Dispose() => Directory.Delete(Path, recursive: true);

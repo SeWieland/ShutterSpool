@@ -297,7 +297,7 @@ internal sealed class EfDestinationConfigurationStore(ShutterSpoolDbContext data
         }
     }
 
-    public Task<DestinationConfiguration[]> ListAsync(int limit, Guid? afterId, CancellationToken token)
+    public Task<DestinationConfiguration[]> ListAsync(int limit, Guid? afterId, CancellationToken cancellationToken)
     {
         var query = from destination in database.Destinations.AsNoTracking()
             join local in database.LocalDestinations.AsNoTracking() on destination.Id equals local.DestinationId into locals
@@ -310,50 +310,50 @@ internal sealed class EfDestinationConfigurationStore(ShutterSpoolDbContext data
                 destination.ConfigurationRevision, local == null ? null : local.RootPath,
                 webdav == null ? null : webdav.CollectionUrl, webdav == null ? null : webdav.Username,
                 database.DestinationCredentials.Any(credential => credential.DestinationId == destination.Id), destination.IsArchived);
-        return query.Take(limit + 1).ToArrayAsync(token);
+        return query.Take(limit + 1).ToArrayAsync(cancellationToken);
     }
 
     public Task<DestinationConfiguration?> GetAsync(Guid id, CancellationToken cancellationToken) => DestinationQuery(id)
         .SingleOrDefaultAsync(cancellationToken);
 
     public async Task<DestinationConfigurationWrite> UpdateNameAsync(Guid id, long expectedRevision, string name,
-        CancellationToken token)
+        CancellationToken cancellationToken)
     {
-        await using var transaction = await database.Database.BeginTransactionAsync(token);
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         DestinationEntity? destination = await database.Destinations.FromSqlInterpolated($"SELECT * FROM destinations WHERE \"Id\" = {id} FOR UPDATE")
-            .SingleOrDefaultAsync(token);
+            .SingleOrDefaultAsync(cancellationToken);
         if (destination is null) return new(false, null);
         if (destination.IsArchived || destination.ConfigurationRevision != expectedRevision)
         {
-            await transaction.CommitAsync(token);
-            return new(false, await GetAsync(id, token));
+            await transaction.CommitAsync(cancellationToken);
+            return new(false, await GetAsync(id, cancellationToken));
         }
         destination.Name = name;
         destination.ConfigurationRevision++;
-        try { await database.SaveChangesAsync(token); }
+        try { await database.SaveChangesAsync(cancellationToken); }
         catch (DbUpdateException exception) when (exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
         { throw new ConfigurationConflictException(); }
-        await transaction.CommitAsync(token);
-        return new(true, await GetAsync(id, token));
+        await transaction.CommitAsync(cancellationToken);
+        return new(true, await GetAsync(id, cancellationToken));
     }
 
-    public async Task<DestinationRemovalWrite> RemoveAsync(Guid id, long expectedRevision, CancellationToken token)
+    public async Task<DestinationRemovalWrite> RemoveAsync(Guid id, long expectedRevision, CancellationToken cancellationToken)
     {
-        await using var transaction = await database.Database.BeginTransactionAsync(token);
-        await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(hashtextextended('shutterspool-routing', 0))", token);
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(hashtextextended('shutterspool-routing', 0))", cancellationToken);
         DestinationEntity? destination = await database.Destinations.FromSqlInterpolated($"SELECT * FROM destinations WHERE \"Id\" = {id} FOR UPDATE")
-            .SingleOrDefaultAsync(token);
+            .SingleOrDefaultAsync(cancellationToken);
         if (destination is null) return new(false, false, null);
         if (destination.ConfigurationRevision != expectedRevision)
         {
-            await transaction.CommitAsync(token);
-            return new(false, false, await GetAsync(id, token));
+            await transaction.CommitAsync(cancellationToken);
+            return new(false, false, await GetAsync(id, cancellationToken));
         }
 
         bool used = destination.IsArchived
-            || await database.RoutingDecisions.AnyAsync(item => item.DestinationId == id, token)
-            || await database.Deliveries.AnyAsync(item => item.DestinationId == id, token)
-            || await database.RoutingActions.AnyAsync(item => item.DestinationId == id, token);
+            || await database.RoutingDecisions.AnyAsync(item => item.DestinationId == id, cancellationToken)
+            || await database.Deliveries.AnyAsync(item => item.DestinationId == id, cancellationToken)
+            || await database.RoutingActions.AnyAsync(item => item.DestinationId == id, cancellationToken);
         if (!used)
         {
             string snapshotNeedle = JsonSerializer.Serialize(new[] { new { DestinationId = id } });
@@ -362,7 +362,7 @@ internal sealed class EfDestinationConfigurationStore(ShutterSpoolDbContext data
                     SELECT 1 FROM captures
                     WHERE "RoutingSnapshotJson" @> {snapshotNeedle}::jsonb
                 ) AS "Value"
-                """).SingleAsync(token);
+                """).SingleAsync(cancellationToken);
         }
         if (used)
         {
@@ -373,16 +373,16 @@ internal sealed class EfDestinationConfigurationStore(ShutterSpoolDbContext data
                 destination.ConfigurationRevision++;
                 await database.Deliveries.Where(item => item.DestinationId == id
                     && (item.State == DeliveryState.Pending || item.State == DeliveryState.RetryWait))
-                    .ExecuteUpdateAsync(updates => updates.SetProperty(item => item.State, DeliveryState.Disabled), token);
-                await database.SaveChangesAsync(token);
+                    .ExecuteUpdateAsync(updates => updates.SetProperty(item => item.State, DeliveryState.Disabled), cancellationToken);
+                await database.SaveChangesAsync(cancellationToken);
             }
-            await transaction.CommitAsync(token);
-            return new(true, false, await GetAsync(id, token));
+            await transaction.CommitAsync(cancellationToken);
+            return new(true, false, await GetAsync(id, cancellationToken));
         }
 
         database.Destinations.Remove(destination);
-        await database.SaveChangesAsync(token);
-        await transaction.CommitAsync(token);
+        await database.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
         return new(true, true, null);
     }
 
