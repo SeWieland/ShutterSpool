@@ -217,17 +217,24 @@ public sealed class RetentionRemovalService(IRetentionRemovalStore store, ISpool
             if (authorization.Result.Status != RetentionOperationStatus.Pending || authorization.Work.Count == 0)
                 continue;
             plannedBytes = checked(plannedBytes + candidate.OriginalBytes);
-            foreach (AuthorizedAssetRemoval removal in authorization.Work)
-            {
-                RemovalAttempt attempt = await ProcessOneAsync(removal, cancellationToken);
-                pass = pass with
-                {
-                    Completed = pass.Completed + (attempt.Completed ? 1 : 0),
-                    Failed = pass.Failed + (attempt.Failed ? 1 : 0),
-                    RemovedBytes = checked(pass.RemovedBytes + attempt.RemovedBytes),
-                };
-            }
+            pass = await ProcessAuthorizedBatchAsync(authorization.Work, pass, cancellationToken);
             await store.FinalizeCaptureAsync(candidate.CaptureId, clock.GetUtcNow(), cancellationToken);
+        }
+        return pass;
+    }
+
+    private async Task<RetentionRemovalPassResult> ProcessAuthorizedBatchAsync(
+        IReadOnlyList<AuthorizedAssetRemoval> work, RetentionRemovalPassResult pass, CancellationToken cancellationToken)
+    {
+        foreach (AuthorizedAssetRemoval removal in work)
+        {
+            RemovalAttempt attempt = await ProcessOneAsync(removal, cancellationToken);
+            pass = pass with
+            {
+                Completed = pass.Completed + (attempt.Completed ? 1 : 0),
+                Failed = pass.Failed + (attempt.Failed ? 1 : 0),
+                RemovedBytes = checked(pass.RemovedBytes + attempt.RemovedBytes),
+            };
         }
         return pass;
     }

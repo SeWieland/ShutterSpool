@@ -42,22 +42,12 @@ internal sealed class FileSystemExactOriginalRemoval : IExactOriginalRemoval
 
             // Validate every exact object before deleting any of them. A mismatch leaves the whole set untouched.
             foreach (AuthorizedPath path in paths)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                ValidateStorageMarker(request.StorageMarker);
-                long? actualSize = InspectFile(path.FullPath);
-                if (path.ExpectedSize is long expected && actualSize is long found && found != expected)
-                    throw new StorageBlockedException("original_size_mismatch");
-            }
+                InspectAuthorizedPath(path, request.StorageMarker, cancellationToken);
 
             foreach (AuthorizedPath path in paths)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                ValidateStorageMarker(request.StorageMarker);
-                long? size = InspectFile(path.FullPath);
+                long? size = InspectAuthorizedPath(path, request.StorageMarker, cancellationToken);
                 if (size is null) continue;
-                if (path.ExpectedSize is long expected && size != expected)
-                    throw new StorageBlockedException("original_size_mismatch");
                 File.Delete(path.FullPath);
                 removedBytes = checked(removedBytes + size.Value);
                 removedAny = true;
@@ -79,6 +69,16 @@ internal sealed class FileSystemExactOriginalRemoval : IExactOriginalRemoval
         {
             return new(ExactOriginalRemovalStatus.Failed, removedBytes, "filesystem_removal_failed");
         }
+    }
+
+    private long? InspectAuthorizedPath(AuthorizedPath path, string marker, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ValidateStorageMarker(marker);
+        long? size = InspectFile(path.FullPath);
+        if (path.ExpectedSize is long expected && size is long found && found != expected)
+            throw new StorageBlockedException("original_size_mismatch");
+        return size;
     }
 
     private static void ValidateRequest(ExactOriginalRemovalRequest request)
@@ -147,13 +147,7 @@ internal sealed class FileSystemExactOriginalRemoval : IExactOriginalRemoval
 
     private void ValidateRootAndParents(string path)
     {
-        DirectoryInfo? root = new(_root);
-        if (!root.Exists || root.Attributes.HasFlag(FileAttributes.ReparsePoint))
-            throw new StorageBlockedException("storage_root_unavailable");
-
-        for (DirectoryInfo? directory = root; directory is not null; directory = directory.Parent)
-            if (directory.Exists && directory.Attributes.HasFlag(FileAttributes.ReparsePoint))
-                throw new StorageBlockedException("storage_path_crosses_link");
+        ValidateRootAndAncestors();
 
         string? parent = Path.GetDirectoryName(path);
         if (parent is null || !IsSameOrChild(parent, _root)) throw new StorageBlockedException("storage_path_outside_root");
@@ -171,6 +165,17 @@ internal sealed class FileSystemExactOriginalRemoval : IExactOriginalRemoval
             if (attributes.HasFlag(FileAttributes.ReparsePoint)) throw new StorageBlockedException("storage_path_crosses_link");
             if (!attributes.HasFlag(FileAttributes.Directory)) throw new StorageBlockedException("storage_parent_is_file");
         }
+    }
+
+    private void ValidateRootAndAncestors()
+    {
+        var root = new DirectoryInfo(_root);
+        if (!root.Exists || root.Attributes.HasFlag(FileAttributes.ReparsePoint))
+            throw new StorageBlockedException("storage_root_unavailable");
+
+        for (DirectoryInfo? directory = root; directory is not null; directory = directory.Parent)
+            if (directory.Exists && directory.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                throw new StorageBlockedException("storage_path_crosses_link");
     }
 
     private static bool IsYear(string value) => value.Length == 4
