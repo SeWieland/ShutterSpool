@@ -46,13 +46,12 @@ public sealed class CaptureReadPostgresTests
         database.Destinations.Add(new DestinationEntity { Id = destinationId, Name = "synthetic-attention", Kind = "local" });
         DateTimeOffset anchor = DateTimeOffset.UtcNow.AddHours(-1);
         var expected = new Dictionary<Guid, bool>();
-        Guid failedCaptureId = Guid.Empty, failedDeliveryId = Guid.Empty, secondaryInvalidCaptureId = Guid.Empty;
+        Guid failedCaptureId = Guid.Empty, failedDeliveryId = Guid.Empty;
         for (int index = 0; index < scenarios.Length; index++)
         {
             AttentionScenario scenario = scenarios[index];
             Guid captureId = Guid.NewGuid(), assetId = Guid.NewGuid(), decisionId = Guid.NewGuid();
             expected[captureId] = scenario.Expected;
-            if (scenario.Name == "secondary-invalid") secondaryInvalidCaptureId = captureId;
             database.Captures.Add(new CaptureEntity
             {
                 Id = captureId, SourceId = sourceId, NormalizedStem = scenario.Name,
@@ -99,8 +98,19 @@ public sealed class CaptureReadPostgresTests
 
         var store = new CaptureReadStore(database);
         CaptureInboxPage summaryPage = await store.GetInboxAsync(scenarios.Length, null, null, new(), token);
-        CaptureRead secondaryInvalid = Assert.Single(summaryPage.Items, item => item.Id == secondaryInvalidCaptureId);
-        Assert.True(secondaryInvalid.DeliverySummary.Attention > 0);
+        var summaries = summaryPage.Items.ToDictionary(item => item.DisplayName, item => item.DeliverySummary);
+        var empty = new CaptureDeliverySummary(0, 0, 0, 0, 0, 0, 0);
+        Assert.Equal(empty with { Queued = 1 }, summaries["pending.jpg"]);
+        Assert.Equal(empty with { Running = 1 }, summaries["running.jpg"]);
+        Assert.Equal(empty with { RetryScheduled = 1 }, summaries["retry.jpg"]);
+        Assert.Equal(empty with { Confirmed = 1 }, summaries["delivered.jpg"]);
+        Assert.Equal(empty with { Attention = 1 }, summaries["failed.jpg"]);
+        Assert.Equal(empty with { Attention = 1 }, summaries["ambiguous.jpg"]);
+        Assert.Equal(empty with { Attention = 1 }, summaries["disabled-work.jpg"]);
+        Assert.Equal(empty with { Attention = 1 }, summaries["secondary-failed.jpg"]);
+        Assert.Equal(empty with { Attention = 1 }, summaries["secondary-invalid.jpg"]);
+        Assert.Equal(empty, summaries["superseded.jpg"]);
+        Assert.Equal(empty, summaries["matched.jpg"]);
 
         foreach (bool attention in new[] { true, false })
         {
@@ -187,6 +197,21 @@ public sealed class CaptureReadPostgresTests
                     AssetId = assets[index].Id, CaptureId = captures[index].Id, Role = "JPEG",
                     IsPrimary = true, GroupingReason = "synthetic",
                 });
+            // Seven secondaries tie on ingest time. The lowest ID arrives later and belongs only in detail.
+            for (int number = 8; number >= 1; number--)
+            {
+                Guid sidecarId = Guid.Parse($"10000000-0000-0000-0000-{number:D12}");
+                database.Assets.Add(new AssetEntity
+                {
+                    Id = sidecarId, SourceId = sourceId, OriginalName = $"sidecar-{number}.jpg", SpoolKey = $"spool/{sidecarId:N}",
+                    Size = 4, Sha256 = new string('0', 64), State = "Spooled", RecoveryCorrelation = Guid.NewGuid(),
+                    IngestedAt = number == 1 ? acceptedAt.AddSeconds(1) : acceptedAt,
+                });
+                database.CaptureAssets.Add(new CaptureAssetEntity
+                {
+                    AssetId = sidecarId, CaptureId = captures[2].Id, Role = "JPEG", GroupingReason = "synthetic",
+                });
+            }
             database.Assets.Add(new AssetEntity
             {
                 Id = Guid.NewGuid(), SourceId = sourceId, OriginalName = "ungrouped.jpg",
@@ -203,7 +228,16 @@ public sealed class CaptureReadPostgresTests
             Assert.Equal("same-name.jpg", first.Items[0].DisplayName);
             Assert.Equal(3, first.Items[0].Curation.Rating);
             Assert.Equal("tag-2", first.Items[0].Curation.Tags[0]);
-            Assert.Equal(assets[2].Id, first.Items[0].Assets.Single().Id);
+            string[] expectedAssets = ["same-name.jpg", "sidecar-2.jpg", "sidecar-3.jpg", "sidecar-4.jpg",
+                "sidecar-5.jpg", "sidecar-6.jpg", "sidecar-7.jpg", "sidecar-8.jpg", "sidecar-1.jpg"];
+            Assert.Equal(9, first.Items[0].AssetsAvailable);
+            Assert.True(first.Items[0].AssetsTruncated);
+            Assert.Equal(expectedAssets[..8], first.Items[0].Assets.Select(item => item.OriginalName));
+            Assert.Equal(assets[1].Id, Assert.Single(first.Items[1].Assets).Id);
+            CaptureRead? detail = await reads.GetAsync(captures[2].Id, token);
+            Assert.NotNull(detail);
+            Assert.False(detail.AssetsTruncated);
+            Assert.Equal(expectedAssets, detail.Assets.Select(item => item.OriginalName));
             Assert.NotNull(first.NextBefore);
 
             CaptureInboxPage second = await reads.GetInboxAsync(2, first.NextBefore, first.NextBeforeId, new(), token);

@@ -122,47 +122,76 @@ public static class CaptureReadEndpoints
         int pageSize = limit ?? 30;
         if (pageSize is < 1 or > 100) return Invalid("limit", "Provide a page size from 1 to 100.");
         if (cursor is not null && startAt.HasValue) return Invalid("startAt", "Use startAt only on the first Capture page.");
-        CaptureSelection? selected = null;
-        if (selection is not null)
-        {
-            if (!Enum.TryParse(selection, out CaptureSelection parsed) || !Enum.IsDefined(parsed)
-                || !string.Equals(selection, parsed.ToString(), StringComparison.Ordinal))
-                return Invalid("selection", "Provide Neutral, Picked or Rejected.");
-            selected = parsed;
-        }
-        bool hasLabels = labels is { Length: > 0 };
-        if (label is not null && hasLabels) return Invalid("labels", "Use either label or labels, not both.");
-        string[]? selectedLabels = (hasLabels ? labels : label is null ? null : [label])?.Distinct(StringComparer.Ordinal).Order().ToArray();
+        IResult? error = ParseCurationChoices(selection, label, labels, out CaptureSelection? selected, out string[]? selectedLabels);
+        if (error is not null) return error;
         if (sourceId.HasValue && sourceIds is { Length: > 0 }) return Invalid("sourceIds", "Use either sourceId or sourceIds, not both.");
         if (sourceIds is { Length: > 30 }) return Invalid("sourceIds", "Provide at most 30 sources.");
         if (collectionIds is { Length: > 30 }) return Invalid("collectionIds", "Provide at most 30 Collections.");
-        if (workflows is { Length: > 4 }) return Invalid("workflows", "Provide at most four workflow choices.");
-        if (workflows is { Length: > 0 } && (released.HasValue || held.HasValue || attention.HasValue))
-            return Invalid("workflows", "Use either workflows or the legacy released, held and attention filters.");
-        CaptureWorkflowFilter[] selectedWorkflows = [];
-        if (workflows is { Length: > 0 })
-        {
-            selectedWorkflows = new CaptureWorkflowFilter[workflows.Length];
-            for (int index = 0; index < workflows.Length; index++)
-            {
-                if (!Enum.TryParse(workflows[index], ignoreCase: false, out selectedWorkflows[index])
-                    || !Enum.IsDefined(selectedWorkflows[index])
-                    || !string.Equals(workflows[index], selectedWorkflows[index].ToString(), StringComparison.Ordinal))
-                    return Invalid("workflows", "Provide Waiting, Held, Released or Attention.");
-            }
-        }
+        error = ParseWorkflows(workflows, released.HasValue || held.HasValue || attention.HasValue, out var selectedWorkflows);
+        if (error is not null) return error;
         Guid[]? selectedSources = sourceIds is { Length: > 0 } ? [.. sourceIds.Distinct().Order()] : null;
         Guid[]? selectedCollections = collectionIds is { Length: > 0 } ? [.. collectionIds.Distinct().Order()] : null;
-        selectedWorkflows = [.. selectedWorkflows.Distinct().Order()];
         var filter = new CaptureReadFilter(sourceId, rating, selected, tag, selectedLabels, released, held, attention,
             ratingMaximum, selectedSources, selectedWorkflows, oldestFirst ?? false, favoritesOnly ?? false,
             selectedCollections, startAt);
-        DateTimeOffset before = default;
-        Guid beforeId = default;
-        if (cursor is not null && !TryDecodeCursor(cursor, FilterKey(filter), out before, out beforeId))
-            return Invalid("cursor", "The Capture page cursor is invalid.");
-        DateTimeOffset? boundary = cursor is null ? null : before;
-        Guid? boundaryId = cursor is null ? null : beforeId;
+        return await ReadPageAsync(pageSize, cursor, filter, reads, retention, access, cancellationToken);
+    }
+
+    private static IResult? ParseCurationChoices(string? selection, string? label, string[]? labels,
+        out CaptureSelection? selected, out string[]? selectedLabels)
+    {
+        selected = null;
+        selectedLabels = null;
+        if (selection is not null)
+        {
+            if (!TryParseNamedValue(selection, out CaptureSelection parsed))
+                return Invalid("selection", "Provide Neutral, Picked or Rejected.");
+            selected = parsed;
+        }
+
+        if (labels is { Length: > 0 })
+        {
+            if (label is not null) return Invalid("labels", "Use either label or labels, not both.");
+            selectedLabels = [.. labels.Distinct(StringComparer.Ordinal).Order()];
+        }
+        else if (label is not null) selectedLabels = [label];
+        return null;
+    }
+
+    private static IResult? ParseWorkflows(string[]? workflows, bool hasLegacyFilters, out CaptureWorkflowFilter[] selected)
+    {
+        selected = [];
+        if (workflows is not { Length: > 0 }) return null;
+        if (workflows.Length > 4) return Invalid("workflows", "Provide at most four workflow choices.");
+        if (hasLegacyFilters)
+            return Invalid("workflows", "Use either workflows or the legacy released, held and attention filters.");
+
+        var parsed = new CaptureWorkflowFilter[workflows.Length];
+        for (int index = 0; index < workflows.Length; index++)
+        {
+            if (!TryParseNamedValue(workflows[index], out parsed[index]))
+                return Invalid("workflows", "Provide Waiting, Held, Released or Attention.");
+        }
+        selected = [.. parsed.Distinct().Order()];
+        return null;
+    }
+
+    private static bool TryParseNamedValue<T>(string value, out T parsed) where T : struct, Enum =>
+        Enum.TryParse(value, ignoreCase: false, out parsed) && Enum.IsDefined(parsed)
+        && string.Equals(value, parsed.ToString(), StringComparison.Ordinal);
+
+    private static async Task<IResult> ReadPageAsync(int pageSize, string? cursor, CaptureReadFilter filter,
+        CaptureReadService reads, ICaptureRetentionReadStore retention,
+        ShutterSpool.Application.Security.WorkspaceAccessContext access, CancellationToken cancellationToken)
+    {
+        DateTimeOffset? boundary = null;
+        Guid? boundaryId = null;
+        if (cursor is not null)
+        {
+            if (!TryDecodeCursor(cursor, FilterKey(filter), out DateTimeOffset before, out Guid beforeId))
+                return Invalid("cursor", "The Capture page cursor is invalid.");
+            (boundary, boundaryId) = (before, beforeId);
+        }
         CaptureInboxPage page;
         try { page = await reads.GetInboxAsync(pageSize, boundary, boundaryId, filter, cancellationToken); }
         catch (ArgumentException exception) { return Invalid("filter", exception.Message); }
@@ -202,7 +231,7 @@ public static class CaptureReadEndpoints
     private static bool TryDecodeCursor(string value, string filterKey, out DateTimeOffset before, out Guid id)
     {
         before = default;
-        id = default;
+        id = Guid.Empty;
         if (value.Length is 0 or > 512) return false;
         try
         {

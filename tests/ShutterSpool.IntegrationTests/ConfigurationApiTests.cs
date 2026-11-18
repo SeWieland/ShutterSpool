@@ -471,11 +471,22 @@ public sealed partial class ConfigurationApiTests
         Assert.Empty(body.RootElement.GetProperty("items").EnumerateArray());
         Assert.True(body.RootElement.GetProperty("epoch").GetString()!.Length > 0);
 
-        using HttpResponseMessage duplicate = await fixture.Client.GetAsync(
-            $"/management/activity/transfers?sourceIds={sourceId}&sourceIds={sourceId}", token);
-        Assert.Equal(HttpStatusCode.BadRequest, duplicate.StatusCode);
-        using HttpResponseMessage missing = await fixture.Client.GetAsync("/management/activity/transfers", token);
-        Assert.Equal(HttpStatusCode.BadRequest, missing.StatusCode);
+        const string invalidIds = "Provide either 1 to 100 Source IDs or 1 to 100 transfer IDs, plus a page size from 1 to 100.";
+        await AssertErrorAsync("", "sourceIds", invalidIds);
+        await AssertErrorAsync($"sourceIds={sourceId}&transferIds={sourceId}", "sourceIds", invalidIds);
+        await AssertErrorAsync($"transferIds={sourceId}&transferIds={sourceId}&transferIds=invalid&cursor=invalid",
+            "sourceIds", invalidIds);
+        await AssertErrorAsync($"sourceIds={sourceId}&sourceIds={sourceId}&cursor=invalid",
+            "sourceIds", "Requested IDs must be distinct.");
+        await AssertErrorAsync($"transferIds={sourceId}&cursor=invalid", "cursor", "The activity cursor is invalid.");
+
+        async Task AssertErrorAsync(string query, string field, string expected)
+        {
+            using HttpResponseMessage response = await fixture.Client.GetAsync($"/management/activity/transfers?{query}", token);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            using JsonDocument problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
+            Assert.Equal(expected, problem.RootElement.GetProperty("errors").GetProperty(field)[0].GetString());
+        }
     }
 
     [Fact]
@@ -575,6 +586,12 @@ public sealed partial class ConfigurationApiTests
         JsonElement oldReady = await ReadTransferAsync(oldTransferId);
         Assert.Equal("Ready", oldReady.GetProperty("phase").GetString());
         Assert.True(oldReady.GetProperty("previewReady").GetBoolean());
+
+        using JsonDocument byTransfer = JsonDocument.Parse(await fixture.Client.GetStringAsync(
+            $"/management/activity/transfers?transferIds={oldTransferId}", token));
+        JsonElement requested = Assert.Single(byTransfer.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal(oldTransferId, requested.GetProperty("transferId").GetGuid());
+        Assert.True(byTransfer.RootElement.GetProperty("coverageComplete").GetBoolean());
 
         await using (var database = new ShutterSpoolDbContext(fixture.Database.Options))
         {

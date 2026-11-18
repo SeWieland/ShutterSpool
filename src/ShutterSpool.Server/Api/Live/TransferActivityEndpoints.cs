@@ -29,51 +29,21 @@ public static class TransferActivityEndpoints
         CancellationToken cancellationToken)
     {
         int pageSize = limit ?? 30;
-        bool bySource = sourceIds is { Length: > 0 } && transferIds is not { Length: > 0 };
-        bool byTransfer = transferIds is { Length: > 0 } && sourceIds is not { Length: > 0 };
-        string[]? selectedIds = bySource ? sourceIds : byTransfer ? transferIds : null;
-        if (selectedIds is null || selectedIds.Length > 100 || pageSize is < 1 or > 100
-            || selectedIds.Any(value => !Guid.TryParse(value, out _)))
-            return Results.ValidationProblem(new Dictionary<string, string[]>
-            {
-                ["sourceIds"] = ["Provide either 1 to 100 Source IDs or 1 to 100 transfer IDs, plus a page size from 1 to 100."],
-            });
-
-        Guid[] ids = [.. selectedIds.Select(Guid.Parse).Distinct()];
-        if (ids.Length != selectedIds.Length)
-            return Results.ValidationProblem(new Dictionary<string, string[]>
-            {
-                ["sourceIds"] = ["Requested IDs must be distinct."],
-            });
-
+        string? idError = ParseActivityIds(sourceIds, transferIds, pageSize, out bool bySource, out Guid[] ids);
+        if (idError is not null)
+            return Results.ValidationProblem(new Dictionary<string, string[]> { ["sourceIds"] = [idError] });
         if (!TryDecodeCursor(cursor, out long? beforeTimestamp, out Guid? beforeTransferId))
             return Results.ValidationProblem(new Dictionary<string, string[]> { ["cursor"] = ["The activity cursor is invalid."] });
 
         ICameraIngressStore? transfers = services.GetService<ICameraIngressStore>();
         if (transfers is null) return Results.Ok(new TransferActivitySnapshotResponse(false, changes.Epoch, [], null));
-        CameraTransferActivityPage page = await transfers.GetActivityAsync(bySource ? ids : null, byTransfer ? ids : null,
+        CameraTransferActivityPage page = await transfers.GetActivityAsync(bySource ? ids : null, bySource ? null : ids,
             pageSize, beforeTimestamp, beforeTransferId, clock.GetUtcNow(), cancellationToken);
         CameraTransferActivity[] items = page.Items;
         DateTimeOffset observedNow = clock.GetUtcNow();
         for (int index = 0; index < items.Length; index++)
-        {
-            CameraTransferActivity activity = items[index];
-            if (settings.PrewarmMode == PreviewPrewarmMode.Off && activity.Phase == CameraTransferPhase.PreparingPreview)
-                items[index] = activity = activity with { Phase = CameraTransferPhase.AcceptedAwaitingGrouping };
-            if (activity.Phase is CameraTransferPhase.Stale or CameraTransferPhase.Receiving
-                && changes.GetRecentReceiving(activity.TransferId, observedNow) is { } receiving)
-                items[index] = activity = receiving;
-            if (!activity.Accepted || !activity.IsCurrentPreviewAsset || activity.AssetId is not Guid assetId
-                || activity.CaptureId is not Guid captureId) continue;
-            string key = $"{captureId:N}/{assetId:N}/grid-{settings.GridWidth}x{settings.GridHeight}.webp";
-            bool published = await previews.ContainsAsync(key, new PreviewSize(settings.GridWidth, settings.GridHeight), cancellationToken);
-            if (published) items[index] = activity with { Phase = CameraTransferPhase.Ready, ObservedAt = observedNow,
-                PreviewReady = true };
-            else if (changes.GetRecentPreviewPreparation(captureId, assetId, PreviewProfile.Grid, observedNow) is { } preparation)
-                items[index] = activity with { Phase = CameraTransferPhase.PreparingPreview,
-                    ObservedAt = preparation.ObservedAt, Version = preparation.Version, PreviewReady = false };
-            else if (activity.PreviewReady) items[index] = activity with { Phase = CameraTransferPhase.AcceptedAwaitingGrouping, PreviewReady = false };
-        }
+            items[index] = await EnrichActivityAsync(items[index], observedNow, changes, previews, settings, cancellationToken);
+
         string? nextCursor = page.HasMore && page.NextAdmissionTimestamp is long nextTime && page.NextTransferId is Guid nextId
             ? EncodeCursor(nextTime, nextId) : null;
         TransferActivitySnapshotItem[] responseItems = [.. items.Select(activity => new TransferActivitySnapshotItem(
@@ -81,6 +51,47 @@ public static class TransferActivityEndpoints
             activity.ObservedAt, activity.Version, activity.Accepted, activity.PreviewReady))];
         return Results.Ok(new TransferActivitySnapshotResponse(!page.HasMore && changes.ActivityCoverageComplete,
             changes.Epoch, responseItems, nextCursor));
+    }
+
+    private static string? ParseActivityIds(string[]? sourceIds, string[]? transferIds, int pageSize, out bool bySource, out Guid[] ids)
+    {
+        const string invalid = "Provide either 1 to 100 Source IDs or 1 to 100 transfer IDs, plus a page size from 1 to 100.";
+        ids = [];
+        bySource = sourceIds is { Length: > 0 };
+        string[]? selectedIds = bySource ? sourceIds : transferIds;
+        if (bySource && transferIds is { Length: > 0 } || selectedIds is not { Length: > 0 and <= 100 }
+            || pageSize is < 1 or > 100) return invalid;
+
+        ids = new Guid[selectedIds.Length];
+        for (int index = 0; index < selectedIds.Length; index++)
+        {
+            if (!Guid.TryParse(selectedIds[index], out ids[index])) return invalid;
+        }
+        return ids.Distinct().Count() == ids.Length ? null : "Requested IDs must be distinct.";
+    }
+
+    private static async Task<CameraTransferActivity> EnrichActivityAsync(CameraTransferActivity activity,
+        DateTimeOffset observedNow, LiveChangeNotifier changes, IPreviewCache previews, PreviewSettings settings,
+        CancellationToken cancellationToken)
+    {
+        if (settings.PrewarmMode == PreviewPrewarmMode.Off && activity.Phase == CameraTransferPhase.PreparingPreview)
+            activity = activity with { Phase = CameraTransferPhase.AcceptedAwaitingGrouping };
+        if (activity.Phase is CameraTransferPhase.Stale or CameraTransferPhase.Receiving
+            && changes.GetRecentReceiving(activity.TransferId, observedNow) is { } receiving)
+            activity = receiving;
+        if (!activity.Accepted || !activity.IsCurrentPreviewAsset || activity.AssetId is not Guid assetId
+            || activity.CaptureId is not Guid captureId) return activity;
+
+        var size = new PreviewSize(settings.GridWidth, settings.GridHeight);
+        string key = $"{captureId:N}/{assetId:N}/grid-{settings.GridWidth}x{settings.GridHeight}.webp";
+        if (await previews.ContainsAsync(key, size, cancellationToken))
+            return activity with { Phase = CameraTransferPhase.Ready, ObservedAt = observedNow, PreviewReady = true };
+        if (changes.GetRecentPreviewPreparation(captureId, assetId, PreviewProfile.Grid, observedNow) is { } preparation)
+            return activity with { Phase = CameraTransferPhase.PreparingPreview, ObservedAt = preparation.ObservedAt,
+                Version = preparation.Version, PreviewReady = false };
+        return activity.PreviewReady
+            ? activity with { Phase = CameraTransferPhase.AcceptedAwaitingGrouping, PreviewReady = false }
+            : activity;
     }
 
     private static string EncodeCursor(long admissionTimestamp, Guid transferId) => WebEncoders.Base64UrlEncode(
