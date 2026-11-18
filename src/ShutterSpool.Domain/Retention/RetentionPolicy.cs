@@ -77,59 +77,37 @@ public static class RetentionPolicy
         if (!facts.HasAvailableOriginal || facts.IsUnknownOrQuarantined)
             return new(null, null, null, facts.ProtectedUntil, "unavailable-or-unknown");
 
-        RetentionTier tier;
-        DateTimeOffset origin;
-        RetentionLifetime lifetime;
-        string reason;
-        if (facts.Favorite && facts.HasDeliveryIntent && facts.HasPositiveConfirmationForEveryIntendedDelivery
-            && facts.FinalIntendedDeliveryConfirmedAt is DateTimeOffset favoriteConfirmedAt)
+        DateTimeOffset? confirmedStart = ConfirmedIntervalStart(facts);
+        if (facts.Favorite && confirmedStart is DateTimeOffset favoriteStart)
         {
-            origin = facts.IsRecognizedReplay && facts.AcceptedAt > favoriteConfirmedAt
-                ? facts.AcceptedAt : favoriteConfirmedAt;
-            return new(RetentionTier.ConfirmedFavorite, origin + (confirmed ?? RetentionLifetime.Confirmed).PressureAge,
-                null, facts.ProtectedUntil, "confirmed-favorite") { IntervalStartedAt = origin };
+            return new(RetentionTier.ConfirmedFavorite, favoriteStart + (confirmed ?? RetentionLifetime.Confirmed).PressureAge,
+                null, facts.ProtectedUntil, "confirmed-favorite") { IntervalStartedAt = favoriteStart };
         }
-
         if (facts.Favorite && facts.FavoriteQualificationLostAt is DateTimeOffset qualificationLostAt)
-        {
-            tier = RetentionTier.HeldOrUnfinished;
-            origin = qualificationLostAt;
-            lifetime = heldOrUnfinished ?? RetentionLifetime.HeldOrUnfinished;
-            reason = "favorite-became-incomplete";
-        }
-        else if (facts.Held || facts.HasDeliveryIntent
-            && (!facts.HasPositiveConfirmationForEveryIntendedDelivery || facts.FinalIntendedDeliveryConfirmedAt is null))
-        {
-            tier = RetentionTier.HeldOrUnfinished;
-            origin = facts.AcceptedAt;
-            lifetime = heldOrUnfinished ?? RetentionLifetime.HeldOrUnfinished;
-            reason = facts.Held ? "held" : "delivery-unfinished";
-        }
-        else if (facts.HasDeliveryIntent && facts.HasPositiveConfirmationForEveryIntendedDelivery
-            && facts.FinalIntendedDeliveryConfirmedAt is DateTimeOffset confirmedAt)
-        {
-            tier = RetentionTier.ConfirmedDelivery;
-            origin = facts.IsRecognizedReplay && facts.AcceptedAt > confirmedAt ? facts.AcceptedAt : confirmedAt;
-            lifetime = confirmed ?? RetentionLifetime.Confirmed;
-            reason = "all-intended-deliveries-confirmed";
-        }
-        else if (facts.ExplicitNoDelivery)
-        {
-            tier = RetentionTier.ExplicitNoDelivery;
-            origin = facts.AcceptedAt;
-            lifetime = noDelivery ?? RetentionLifetime.NoDelivery;
-            reason = "explicit-no-delivery";
-        }
-        else
-        {
-            tier = RetentionTier.Waiting;
-            origin = facts.AcceptedAt;
-            lifetime = waiting ?? RetentionLifetime.Waiting;
-            reason = "waiting-or-unmatched";
-        }
+            return WithDeadlines(RetentionTier.HeldOrUnfinished, qualificationLostAt,
+                heldOrUnfinished ?? RetentionLifetime.HeldOrUnfinished, "favorite-became-incomplete");
+        if (facts.Held || facts.HasDeliveryIntent && confirmedStart is null)
+            return WithDeadlines(RetentionTier.HeldOrUnfinished, facts.AcceptedAt,
+                heldOrUnfinished ?? RetentionLifetime.HeldOrUnfinished, facts.Held ? "held" : "delivery-unfinished");
+        if (confirmedStart is DateTimeOffset deliveryStart)
+            return WithDeadlines(RetentionTier.ConfirmedDelivery, deliveryStart,
+                confirmed ?? RetentionLifetime.Confirmed, "all-intended-deliveries-confirmed");
+        if (facts.ExplicitNoDelivery)
+            return WithDeadlines(RetentionTier.ExplicitNoDelivery, facts.AcceptedAt,
+                noDelivery ?? RetentionLifetime.NoDelivery, "explicit-no-delivery");
+        return WithDeadlines(RetentionTier.Waiting, facts.AcceptedAt, waiting ?? RetentionLifetime.Waiting, "waiting-or-unmatched");
 
-        return new(tier, origin + lifetime.PressureAge, origin + lifetime.OrdinaryAge,
-            facts.ProtectedUntil, reason) { IntervalStartedAt = origin };
+        RetentionAssetDecision WithDeadlines(RetentionTier tier, DateTimeOffset start, RetentionLifetime lifetime, string reason) =>
+            new(tier, start + lifetime.PressureAge, start + lifetime.OrdinaryAge, facts.ProtectedUntil, reason)
+            { IntervalStartedAt = start };
+    }
+
+    private static DateTimeOffset? ConfirmedIntervalStart(RetentionAssetFacts facts)
+    {
+        if (!facts.HasDeliveryIntent || !facts.HasPositiveConfirmationForEveryIntendedDelivery
+            || facts.FinalIntendedDeliveryConfirmedAt is not DateTimeOffset confirmedAt)
+            return null;
+        return facts.IsRecognizedReplay && facts.AcceptedAt > confirmedAt ? facts.AcceptedAt : confirmedAt;
     }
 
     public static RetentionCaptureDecision EvaluateCapture(IReadOnlyCollection<RetentionAssetDecision> assets,

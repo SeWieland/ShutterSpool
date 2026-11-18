@@ -255,7 +255,7 @@ The settings preview reports `accountingKnown`, `usedBytes` and `reservedBytes` 
 `proposedQuotaHeadroomBytes` subtracts usage and reservations from the proposed active quota; it can be negative, and is null when accounting is unknown or the proposed quota is inactive.
 `overQuota` and `admissionBlocked` still describe the current saved configuration, independently of that proposed-limit comparison.
 
-The retention summary carries policy revision, tier, deadlines, protection and pause reasons, variant byte lengths and states, and a server-observed interval timeline. A start is included only when it is derived from durable accepted/confirmation evidence. Trash restore does not reinstate paused release/delivery work; Resume remains explicit.
+The retention summary carries policy revision, tier, deadlines, protection and pause reasons, variant byte lengths and states, and a server-observed interval timeline. When present, the timeline start comes from durable policy evidence, such as Asset acceptance, delivery confirmation, the first durable loss of Favorite qualification, or recorded Trash entry. Trash restore does not reinstate paused release/delivery work; Resume remains explicit.
 
 ## Delivery work
 

@@ -133,6 +133,26 @@ public sealed class RetentionPolicyTests
     }
 
     [Fact]
+    public void Confirmed_favorite_keeps_its_pressure_only_deadline_after_requalifying_while_held()
+    {
+        DateTimeOffset confirmedAt = Accepted.AddDays(3);
+        RetentionAssetDecision result = RetentionPolicy.Evaluate(new RetentionAssetFacts
+        {
+            AcceptedAt = Accepted,
+            Favorite = true,
+            Held = true,
+            FavoriteQualificationLostAt = Accepted.AddDays(1),
+            HasDeliveryIntent = true,
+            HasPositiveConfirmationForEveryIntendedDelivery = true,
+            FinalIntendedDeliveryConfirmedAt = confirmedAt,
+        });
+
+        Assert.Equal(RetentionTier.ConfirmedFavorite, result.Tier);
+        Assert.Equal(confirmedAt.AddHours(1), result.PressureEligibleAt);
+        Assert.Null(result.TrashEligibleAt);
+    }
+
+    [Fact]
     public void Newly_incomplete_favorite_uses_its_single_qualification_loss_clock()
     {
         var facts = new RetentionAssetFacts
