@@ -6,7 +6,7 @@ import type { DisplayState } from '../lib/gallery-slideshow';
 import { FullscreenChrome, chromeState } from '../lib/fullscreen-chrome';
 import { api, handleFailure, cancellable } from '../lib/api';
 import { session, onAccessLost, accessGeneration } from '../lib/session';
-import { useReconciliation } from '../lib/reconcile';
+import { allRefreshScopes, useReconciliation, type PreviewInvalidation, type RefreshScope } from '../lib/reconcile';
 import { useGalleryGrid } from '../composables/useGalleryGrid';
 import { provideWorkspaceClock } from '../composables/useWorkspaceClock';
 import { usePhotoViewer } from '../composables/usePhotoViewer';
@@ -17,8 +17,8 @@ import { useWorkspacePreferences } from '../composables/useWorkspacePreferences'
 import { useCaptureBrowser } from '../composables/useCaptureBrowser';
 import { effectiveMotion, reconcileCaptures, curationTiming } from '../lib/workspace-interactions';
 import { pageWorkspaceId, readWorkspaceId, withWorkspace } from '../lib/workspace-context';
-import { mayCurate, mayAdminister, workspaceAccess, refreshWorkspaceAccess, closeWorkspaceAccess } from '../lib/workspace-access';
-import type { CaptureInboxItemResponse as Capture, CaptureDetailResponse, CaptureCurationResponse, SourceConfigurationResponse } from '../api/models';
+import { mayCurate, mayAdminister, refreshWorkspaceAccess, closeWorkspaceAccess } from '../lib/workspace-access';
+import type { CaptureInboxItemResponse as Capture, CaptureInboxResponse, CaptureDetailResponse, CaptureCurationResponse, SourceConfigurationPageResponse, SourceConfigurationResponse } from '../api/models';
 const props = defineProps<{
     captureId?: string;
     inactive?: boolean;
@@ -206,7 +206,7 @@ const visible = ref(true);
 let workspaceActive = true;
 let refreshSequence = 0;
 let refreshController: AbortController | undefined;
-let activeRefreshScopes: Set<string> | undefined;
+let activeRefreshScopes: Set<RefreshScope> | undefined;
 let selectingInitialView = false;
 const systemReduced = ref(false);
 let motionQuery: MediaQueryList | undefined;
@@ -393,31 +393,59 @@ function query(next = false) {
     const f = filter.value;
     return captureBrowser.query({ ...f, oldestFirst: appearance.value.sort === 'oldest' }, next);
 }
+async function readBoundaryCapture(cached: Capture, isCurrent: () => boolean, signal: AbortSignal) {
+    let row = cached;
+    try {
+        const current = await api.management.captures.byId(String(cached.id)).get({ options: [cancellable(signal)] });
+        if (!isCurrent()) return;
+        if (current) {
+            row = { ...cached, ...current };
+            if (current.curation) curationVisit.sync(String(row.id), current.curation);
+            return row;
+        }
+    } catch (failure) {
+        if (!isCurrent()) return;
+        if (handleFailure(failure) === 404) return;
+    }
+    pageError.value = 'Some loaded Captures could not be verified. Refresh to retry.';
+    return row;
+}
 async function revalidateBoundary(incoming: Capture[], isCurrent: () => boolean, signal: AbortSignal) {
     const retained: Capture[] = [];
     const freshIds = new Set(incoming.map(row => String(row.id)));
     const boundaryTime = incoming.at(-1)?.acceptedAt?.getTime();
     for (const cached of rows.value.filter(matchesFilter)) {
-        let row = cached;
-        if (!freshIds.has(String(row.id)) && boundaryTime != null && row.acceptedAt?.getTime() === boundaryTime) {
-            try {
-                const current = await api.management.captures.byId(String(row.id)).get({ options: [cancellable(signal)] });
-                if (!isCurrent()) return retained;
-                if (current) {
-                    row = { ...row, ...current };
-                    if (current.curation) curationVisit.sync(String(row.id), current.curation);
-                }
-                else pageError.value = 'Some loaded Captures could not be verified. Refresh to retry.';
-            } catch (failure) {
-                if (!isCurrent()) return retained;
-                const status = handleFailure(failure);
-                if (status === 404) continue;
-                pageError.value = 'Some loaded Captures could not be verified. Refresh to retry.';
-            }
+        const atBoundary = boundaryTime != null && cached.acceptedAt?.getTime() === boundaryTime;
+        let row: Capture | undefined = cached;
+        if (atBoundary && !freshIds.has(String(cached.id))) {
+            row = await readBoundaryCapture(cached, isCurrent, signal);
+            if (!isCurrent()) return retained;
         }
-        if (matchesFilter(row)) retained.push(row);
+        if (row && matchesFilter(row)) retained.push(row);
     }
     return retained;
+}
+function viewerPageAnchor(next: boolean) {
+    if (mayCurate.value || next || !rows.value.length) return undefined;
+    if (galleryInspectionId.value || full.value) return activeId.value;
+    return gridElement.value?.querySelector<HTMLElement>('.gallery-tile')?.dataset.id ?? String(rows.value[0]?.id);
+}
+function acceptCapturePage(page: CaptureInboxResponse | undefined, next: boolean, retained?: Capture[]) {
+    const incoming = page?.items ?? [];
+    const oldestFirst = appearance.value.sort === 'oldest';
+    if (next) rows.value = reconcileCaptures(rows.value, incoming, true, pageAfterId.value, oldestFirst);
+    else if (retained) rows.value = reconcileCaptures(retained, incoming, false, pageAfterId.value, oldestFirst);
+    else rows.value = incoming;
+
+    if (!mayCurate.value && !next) playback.reconcilePage(page ?? { items: [] });
+    captureBrowser.acceptPage(page);
+    if (!mayCurate.value) captureBrowser.save('Gallery');
+    if (orderSelection) {
+        const loaded = new Set(rows.value.map(row => String(row.id)));
+        selection.value = orderSelection.filter(id => loaded.has(id));
+        orderSelection = undefined;
+    }
+    evidenceGeneration.value++;
 }
 async function loadPage(next: boolean, reconcile = false, parentSignal?: AbortSignal) {
     if (next && (loading.value || !cursor.value || pageError.value))
@@ -427,9 +455,7 @@ async function loadPage(next: boolean, reconcile = false, parentSignal?: AbortSi
     const requestSurface = retentionSurface.value;
     const requestCriteria = JSON.stringify(query(false));
     const requestTagDraft = filterTagDraft.value;
-    const viewerAnchor = !mayCurate.value && !next && rows.value.length
-        ? (galleryInspectionId.value || full.value ? activeId.value : gridElement.value?.querySelector<HTMLElement>('.gallery-tile')?.dataset.id ?? String(rows.value[0]?.id))
-        : undefined;
+    const viewerAnchor = viewerPageAnchor(next);
     const pageRequest = captureBrowser.requestPage({
         query: { ...query(next), ...(viewerAnchor ? { startAt: viewerAnchor } : {}) },
         parentSignal,
@@ -450,24 +476,15 @@ async function loadPage(next: boolean, reconcile = false, parentSignal?: AbortSi
         if (!response.current || !isCurrent()) return;
         if ('error' in response) throw response.error;
         const page = response.value;
-        if (!isCurrent())
-            return;
         const anchor = !galleryInspectionId.value ? gridElement.value?.querySelector<HTMLElement>('.gallery-tile') : undefined;
         const anchorId = anchor?.dataset.id;
         const before = anchor?.getBoundingClientRect().top;
-        const incoming = page?.items ?? [];
-        const retained = reconcile && page?.nextCursor ? await revalidateBoundary(incoming, isCurrent, signal) : rows.value;
-        if (!isCurrent()) return;
-        rows.value = next || reconcile && !!page?.nextCursor ? reconcileCaptures(next ? rows.value : retained, incoming, next, pageAfterId.value, appearance.value.sort === 'oldest') : incoming;
-        if (!mayCurate.value && !next) playback.reconcilePage(page ?? { items: [] });
-        captureBrowser.acceptPage(page);
-        if (!mayCurate.value) captureBrowser.save('Gallery');
-        if (orderSelection) {
-            const loaded = new Set(rows.value.map(row => String(row.id)));
-            selection.value = orderSelection.filter(id => loaded.has(id));
-            orderSelection = undefined;
+        let retained: Capture[] | undefined;
+        if (reconcile && page?.nextCursor) {
+            retained = await revalidateBoundary(page.items ?? [], isCurrent, signal);
         }
-        evidenceGeneration.value++;
+        if (!isCurrent()) return;
+        acceptCapturePage(page, next, retained);
         await nextTick();
         if (!isCurrent()) return;
         measureGrid();
@@ -522,49 +539,20 @@ function matchesFilter(row: Capture) {
 function unavailableInViewer(row: Capture) {
     return ['trash', 'purging', 'purged'].includes(row.retention?.disposition ?? '') || !!slideshowQuery && !matchesFilter(row);
 }
-async function refreshData(ids?: Set<string>, previews?: {
-    all: boolean;
-    ids: Set<string>;
-}, scopes = new Set(['capture', 'previews', 'sources', 'delivery', 'storage', 'erasure'])) {
-    const previousAccess = accessGeneration();
-    if (!await refreshWorkspaceAccess() || previousAccess !== accessGeneration() || !workspaceActive) return;
-    if (scopes.has('capture') || scopes.has('previews')) slideshowReady.value = false;
-    const access = accessGeneration();
-    refreshController?.abort();
-    const controller = refreshController = new AbortController();
-    activeRefreshScopes = scopes;
-    let ownerKey = refreshOwnerKey();
-    const current = () => workspaceActive && !controller.signal.aborted && access === accessGeneration() && ownerKey === refreshOwnerKey();
-    const requested = ++refreshSequence;
-    const viewerDeadline = !mayCurate.value ? setTimeout(() => {
-        if (current()) closeWorkspaceAccess();
-    }, 8_000) : undefined;
-    try {
-    const readSources = mayAdminister.value && scopes.has('sources');
-    if (!mayAdminister.value && !initialized.value) initialized.value = true;
-    if (readSources) try {
-        const page = await api.management.sources.get({ queryParameters: { limit: 100 }, options: [cancellable(controller.signal)] });
-        if (!current() || requested !== refreshSequence) return;
-        sources.value = page?.items ?? [];
-        policyStale.value = !!page?.nextCursor;
-        sourcesStale.value = false;
-        if (!initialized.value) {
-            selectingInitialView = true;
-            view.value = !props.captureId && sources.value.some(source => source.curationMode === 'Delay' || source.curationMode === 'Manual') ? 'Curation' : 'Gallery';
-            initialized.value = true;
-            ownerKey = refreshOwnerKey();
-            selectingInitialView = false;
-        }
-    }
-    catch (failure) {
-        if (!current()) return;
-        handleFailure(failure);
-        policyStale.value = true;
-        sourcesStale.value = true;
-    }
-    if (!session.value || !current() || requested !== refreshSequence)
-        return;
-    const captureActive = (view.value === 'Gallery' || view.value === 'Curation') && retentionSurface.value === 'photos';
+function adoptSourcePage(page: SourceConfigurationPageResponse | undefined, ownerKey: string) {
+    sources.value = page?.items ?? [];
+    policyStale.value = !!page?.nextCursor;
+    sourcesStale.value = false;
+    if (initialized.value) return ownerKey;
+
+    selectingInitialView = true;
+    const needsCuration = sources.value.some(source => source.curationMode === 'Delay' || source.curationMode === 'Manual');
+    view.value = !props.captureId && needsCuration ? 'Curation' : 'Gallery';
+    initialized.value = true;
+    selectingInitialView = false;
+    return refreshOwnerKey();
+}
+function updateScopeState(scopes: Set<RefreshScope>, captureActive: boolean) {
     if (!mayCurate.value && !captureActive) {
         captureBrowser.clear();
         capture.value = undefined;
@@ -572,73 +560,117 @@ async function refreshData(ids?: Set<string>, previews?: {
         previewVersions.value = {};
         endSlideshow();
     }
-    const deliveryActive = view.value === 'Delivery';
-    const storageActive = view.value === 'Gallery' && retentionSurface.value === 'trash' || view.value === 'Settings' && settingsSection.value === 'Storage';
     if (scopes.has('capture') && !captureActive) capturesStale.value = true;
-    if (scopes.has('delivery') && !deliveryActive) deliveryStale.value = true;
-    if (scopes.has('storage') && !storageActive) storageStale.value = true;
-    if (scopes.has('delivery') && deliveryActive) { deliveryGeneration.value++; deliveryStale.value = false; }
-    if (scopes.has('storage') && storageActive) { generation.value++; storageStale.value = false; }
-    if (mayCurate.value && scopes.has('capture') && captureActive) {
+    if (scopes.has('delivery')) {
+        const active = view.value === 'Delivery';
+        if (active) deliveryGeneration.value++;
+        deliveryStale.value = !active;
+    }
+    if (scopes.has('storage')) {
+        const active = view.value === 'Gallery' && retentionSurface.value === 'trash' || view.value === 'Settings' && settingsSection.value === 'Storage';
+        if (active) generation.value++;
+        storageStale.value = !active;
+    }
+}
+async function refreshWaitingForCuration(isCurrent: () => boolean, signal: AbortSignal) {
+    try {
+        const waiting = await api.management.captures.get({ queryParameters: { released: false, limit: 1 }, options: [cancellable(signal)] });
+        if (isCurrent()) waitingForCuration.value = !!waiting?.items?.length;
+    } catch (failure) {
+        if (isCurrent()) handleFailure(failure);
+    }
+}
+async function refreshTargetedRows(ids: Set<string>, isCurrent: () => boolean, signal: AbortSignal) {
+    for (const id of ids) {
+        if (!rows.value.some(row => String(row.id) === id)) continue;
         try {
-            const waiting = await api.management.captures.get({ queryParameters: { released: false, limit: 1 }, options: [cancellable(controller.signal)] });
-            if (!current() || requested !== refreshSequence) return;
-            waitingForCuration.value = !!waiting?.items?.length;
+            const value = await api.management.captures.byId(id).get({ options: [cancellable(signal)] });
+            if (!isCurrent()) return;
+            if (!value) continue;
+            const index = rows.value.findIndex(row => String(row.id) === id);
+            if (index < 0) continue;
+            rows.value[index] = { ...rows.value[index], ...value };
+            if (value.curation) curationVisit.sync(id, value.curation);
         } catch (failure) {
-            if (!current()) return;
-            handleFailure(failure);
+            if (!isCurrent()) return;
+            if (handleFailure(failure) === 404) await forgetUnavailableCapture(id);
         }
     }
-    hasCuration.value = mayCurate.value && (policyStale.value || sources.value.some(s => s.curationMode !== 'Immediate') || waitingForCuration.value);
-    if (scopes.has('capture') && (scopes.has('delivery') || scopes.has('storage') || scopes.has('erasure'))) evidenceGeneration.value++;
-    if (scopes.has('capture') && captureActive && ids && rows.value.length) {
-        for (const id of ids) {
-            const index = rows.value.findIndex(r => String(r.id) === id);
-            if (index < 0)
-                continue;
+}
+function invalidatePreviews(previews: PreviewInvalidation, fullRefresh: boolean) {
+    const ids = previews.all || fullRefresh && !previews.ids.size
+        ? new Set([...rows.value.map(row => String(row.id)), activeId.value, secondId.value])
+        : previews.ids;
+    for (const id of ids)
+        if (id) previewVersions.value[id] = (previewVersions.value[id] ?? 0) + 1;
+}
+async function refreshData(ids?: Set<string>, previews?: PreviewInvalidation, scopes = new Set(allRefreshScopes)) {
+    const previousAccess = accessGeneration();
+    if (!await refreshWorkspaceAccess() || previousAccess !== accessGeneration() || !workspaceActive) return;
+    if (scopes.has('capture') || scopes.has('previews')) slideshowReady.value = false;
+    const access = accessGeneration();
+    refreshController?.abort();
+    const controller = refreshController = new AbortController();
+    const { signal } = controller;
+    activeRefreshScopes = scopes;
+    let ownerKey = refreshOwnerKey();
+    const requested = ++refreshSequence;
+    const isCurrent = () => workspaceActive && !signal.aborted && requested === refreshSequence
+        && access === accessGeneration() && ownerKey === refreshOwnerKey();
+    const viewerDeadline = !mayCurate.value ? setTimeout(() => {
+        if (isCurrent()) closeWorkspaceAccess();
+    }, 8_000) : undefined;
+    try {
+        if (!mayAdminister.value && !initialized.value) initialized.value = true;
+        if (mayAdminister.value && scopes.has('sources')) {
             try {
-                const value = await api.management.captures.byId(id).get({ options: [cancellable(controller.signal)] });
-                if (!current() || requested !== refreshSequence)
-                    return;
-                if (value) {
-                    const currentIndex = rows.value.findIndex(row => String(row.id) === id);
-                    if (currentIndex < 0) continue;
-                    rows.value[currentIndex] = { ...rows.value[currentIndex], ...value };
-                    if (value.curation)
-                        curationVisit.sync(id, value.curation);
-                }
-            }
-            catch (failure) {
-                if (!current() || requested !== refreshSequence) return;
-                const status = handleFailure(failure);
-                if (status === 404) await forgetUnavailableCapture(id);
+                const page = await api.management.sources.get({ queryParameters: { limit: 100 }, options: [cancellable(signal)] });
+                if (!isCurrent()) return;
+                ownerKey = adoptSourcePage(page, ownerKey);
+            } catch (failure) {
+                if (!isCurrent()) return;
+                handleFailure(failure);
+                policyStale.value = true;
+                sourcesStale.value = true;
             }
         }
-        for (const row of rows.value) if (unavailableInViewer(row)) invalidateSlide(String(row.id));
-        rows.value = rows.value.filter(matchesFilter);
-        evidenceGeneration.value++;
-    }
-    if (scopes.has('capture') && captureActive) {
-        await loadPage(false, mayCurate.value && rows.value.length > 0, controller.signal);
-        if (!current() || requested !== refreshSequence) return;
-        capturesStale.value = false;
-        evidenceGeneration.value++;
-    }
-    if (scopes.has('capture') && captureActive && activeId.value && (!ids || ids.has(activeId.value))) {
-        await openCapture(activeId.value, false, undefined, false, controller.signal);
-        if (!current() || requested !== refreshSequence) return;
-    }
-    if (scopes.has('previews') && previews) {
-        const idsToInvalidate = previews.all || scopes.size === 6 && !previews.ids.size
-            ? new Set([...rows.value.map(row => String(row.id)), activeId.value, secondId.value])
-            : previews.ids;
-        for (const id of idsToInvalidate)
-            if (id) previewVersions.value[id] = (previewVersions.value[id] ?? 0) + 1;
-    }
-    if (current() && requested === refreshSequence) {
-        if (!mayCurate.value && (pageError.value || detailError.value)) { closeWorkspaceAccess(); return; }
-        slideshowReady.value = !pageError.value && !detailError.value;
-    }
+        if (!session.value || !isCurrent()) return;
+
+        const captureActive = (view.value === 'Gallery' || view.value === 'Curation') && retentionSurface.value === 'photos';
+        const refreshCaptures = captureActive && scopes.has('capture');
+        updateScopeState(scopes, captureActive);
+        if (mayCurate.value && refreshCaptures) {
+            await refreshWaitingForCuration(isCurrent, signal);
+            if (!isCurrent()) return;
+        }
+        hasCuration.value = mayCurate.value && (policyStale.value || sources.value.some(s => s.curationMode !== 'Immediate') || waitingForCuration.value);
+        if (scopes.has('capture') && (scopes.has('delivery') || scopes.has('storage') || scopes.has('erasure'))) evidenceGeneration.value++;
+
+        if (refreshCaptures) {
+            if (ids && rows.value.length) {
+                await refreshTargetedRows(ids, isCurrent, signal);
+                if (!isCurrent()) return;
+                for (const row of rows.value) if (unavailableInViewer(row)) invalidateSlide(String(row.id));
+                rows.value = rows.value.filter(matchesFilter);
+                evidenceGeneration.value++;
+            }
+            await loadPage(false, mayCurate.value && rows.value.length > 0, signal);
+            if (!isCurrent()) return;
+            capturesStale.value = false;
+            evidenceGeneration.value++;
+            if (activeId.value && (!ids || ids.has(activeId.value))) {
+                await openCapture(activeId.value, false, undefined, false, signal);
+                if (!isCurrent()) return;
+            }
+        }
+        if (scopes.has('previews') && previews) invalidatePreviews(previews, scopes.size === allRefreshScopes.length);
+        if (!isCurrent()) return;
+        const ready = !pageError.value && !detailError.value;
+        if (!mayCurate.value && !ready) {
+            closeWorkspaceAccess();
+            return;
+        }
+        slideshowReady.value = ready;
     } finally {
         clearTimeout(viewerDeadline);
         if (refreshController === controller && activeRefreshScopes === scopes)
@@ -673,7 +705,7 @@ watch(() => [view.value, retentionSurface.value, settingsSection.value], () => {
     if ((view.value === 'Gallery' || view.value === 'Curation') && retentionSurface.value === 'photos' && capturesStale.value) live.invalidate('capture');
 });
 function refresh(ids?: Set<string>, previews?: { all: boolean; ids: Set<string> }) {
-    return live.invalidate(ids ? ['capture', 'delivery', 'storage'] : ['capture', 'previews', 'sources', 'delivery', 'storage', 'erasure'], ids, previews);
+    return live.invalidate(ids ? ['capture', 'delivery', 'storage'] : allRefreshScopes, ids, previews);
 }
 watch(() => [live.online.value, live.connected.value, live.connectionRecovery.value], () => {
     slideshowReady.value = false;

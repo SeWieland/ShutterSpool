@@ -90,6 +90,26 @@ test('connection recovery interrupts playback while ordinary safety reconciliati
     await client.flush();
 });
 
+test('Capture and preview batches each keep 60 IDs and promote independently on a further hint', async () => {
+    const reads = [];
+    const client = reconciliation(async (ids, previews) => reads.push({ ids, previews }));
+    await client.live.initialize();
+    const ids = new Set(Array.from({ length: 60 }, (_, index) => String(index)));
+    for (const [event, captureId] of [
+        [], ['captureChanged', '0'], ['captureChanged', 'new'], ['previewReady', '0'], ['previewReady', 'new'],
+    ]) {
+        reads.length = 0;
+        client.live.invalidate(['capture', 'previews'], ids, { ids, all: false });
+        if (event) client.emit(event, { captureId });
+        await client.flush();
+        assert.equal(reads.length, 1);
+        const [batch] = reads;
+        assert.deepEqual(batch.ids && [...batch.ids], event === 'captureChanged' ? undefined : [...ids]);
+        assert.equal(batch.previews.all, event === 'previewReady');
+        assert.deepEqual([...batch.previews.ids], event === 'previewReady' ? [] : [...ids]);
+    }
+});
+
 test('hints invalidate only their scopes and unrelated bursts merge into one read', async () => {
     const reads = [];
     const client = reconciliation(async (ids, previews, scopes) => reads.push({ ids, previews, scopes: [...scopes].sort() }));
@@ -119,6 +139,11 @@ test('hints invalidate only their scopes and unrelated bursts merge into one rea
     await client.flush();
     assert.deepEqual(reads[0].scopes, ['capture', 'delivery', 'erasure', 'previews', 'sources', 'storage']);
     assert.equal(reads[0].previews.all, true, 'broad recovery invalidates visible preview URLs');
+    reads.length = 0;
+    client.emit('previewReady', { captureId: '' });
+    await client.flush();
+    assert.deepEqual(reads[0].scopes, ['capture', 'delivery', 'erasure', 'previews', 'sources', 'storage']);
+    assert.equal(reads[0].previews.all, true);
 });
 
 test('active refreshes stay serial and merge an invalidation received during a read', async () => {
