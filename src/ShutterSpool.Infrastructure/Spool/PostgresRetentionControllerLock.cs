@@ -17,18 +17,15 @@ internal sealed class PostgresRetentionControllerLock(string connectionString) :
             command.CommandText = "SELECT pg_try_advisory_lock(hashtextextended(@lock_key, 0))";
             command.Parameters.AddWithValue("lock_key", LockKey);
             bool acquired = (bool)(await command.ExecuteScalarAsync(cancellationToken))!;
-            if (!acquired)
-            {
-                await connection.DisposeAsync();
-                return null;
-            }
-            return new Lease(connection);
+            if (acquired) return new Lease(connection);
         }
         catch
         {
             await connection.DisposeAsync();
             throw;
         }
+        await connection.DisposeAsync();
+        return null;
     }
 
     private sealed class Lease(NpgsqlConnection connection) : IAsyncDisposable
@@ -44,7 +41,8 @@ internal sealed class PostgresRetentionControllerLock(string connectionString) :
                 await using var command = owned.CreateCommand();
                 command.CommandText = "SELECT pg_advisory_unlock(hashtextextended(@lock_key, 0))";
                 command.Parameters.AddWithValue("lock_key", LockKey);
-                if ((bool)(await command.ExecuteScalarAsync(CancellationToken.None))! != true)
+                bool unlocked = (bool)(await command.ExecuteScalarAsync(CancellationToken.None))!;
+                if (!unlocked)
                     throw new InvalidOperationException("The retention controller lease was not owned by this PostgreSQL session.");
             }
             finally
