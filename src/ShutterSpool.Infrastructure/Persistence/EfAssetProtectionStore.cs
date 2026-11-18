@@ -38,7 +38,7 @@ internal sealed class EfAssetProtectionStore(ShutterSpoolDbContext database) : I
 
     public Task<ProtectionOperation<GalleryProtection>> CreateGalleryAsync(ProtectionOriginal[] originals,
         DateTimeOffset expiresAt, DateTimeOffset now, CancellationToken cancellationToken) =>
-        CreateProtectionAsync<GalleryProtection>(originals, now, async (_, token) =>
+        WithProtectionTransactionAsync<GalleryProtection>(originals, async token =>
         {
             var protection = new GalleryProtectionEntity
             {
@@ -57,7 +57,7 @@ internal sealed class EfAssetProtectionStore(ShutterSpoolDbContext database) : I
         ProtectionOriginal[] originals, DateTimeOffset expiresAt, DateTimeOffset now,
         CancellationToken cancellationToken)
     {
-        return await WithProtectionTransactionAsync<GalleryProtection>(originals, now, async (_, token) =>
+        return await WithProtectionTransactionAsync<GalleryProtection>(originals, async token =>
         {
             GalleryProtectionEntity? protection = await database.GalleryProtections
                 .FromSqlInterpolated($"SELECT * FROM gallery_protections WHERE \"Id\" = {id} FOR UPDATE")
@@ -109,7 +109,7 @@ internal sealed class EfAssetProtectionStore(ShutterSpoolDbContext database) : I
 
     public Task<ProtectionOperation<PreservationHold>> CreatePreservationAsync(ProtectionOriginal[] originals,
         string authority, string reason, DateTimeOffset reviewAt, DateTimeOffset now,
-        CancellationToken cancellationToken) => CreateProtectionAsync<PreservationHold>(originals, now, async (_, token) =>
+        CancellationToken cancellationToken) => WithProtectionTransactionAsync<PreservationHold>(originals, async token =>
         {
             var hold = new PreservationHoldEntity
             {
@@ -157,15 +157,8 @@ internal sealed class EfAssetProtectionStore(ShutterSpoolDbContext database) : I
             await PreservationStateAsync(id, cancellationToken)), cancellationToken);
     }
 
-    private async Task<ProtectionOperation<T>> CreateProtectionAsync<T>(ProtectionOriginal[] originals,
-        DateTimeOffset now, Func<CaptureEntity[], CancellationToken, Task<ProtectionOperation<T>>> create,
-        CancellationToken cancellationToken)
-    {
-        return await WithProtectionTransactionAsync<T>(originals, now, create, cancellationToken);
-    }
-
     private async Task<ProtectionOperation<T>> WithProtectionTransactionAsync<T>(ProtectionOriginal[] originals,
-        DateTimeOffset now, Func<CaptureEntity[], CancellationToken, Task<ProtectionOperation<T>>> operation,
+        Func<CancellationToken, Task<ProtectionOperation<T>>> operation,
         CancellationToken cancellationToken)
     {
         await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
@@ -186,7 +179,7 @@ internal sealed class EfAssetProtectionStore(ShutterSpoolDbContext database) : I
             return await FinishAsync(transaction, new ProtectionOperation<T>(ProtectionOperationStatus.Blocked,
                 ErrorCode: "ORIGINAL_UNAVAILABLE"), cancellationToken);
 
-        ProtectionOperation<T> result = await operation([.. lockedCaptures], cancellationToken);
+        ProtectionOperation<T> result = await operation(cancellationToken);
         if (result.Status == ProtectionOperationStatus.Committed)
         {
             MarkRetentionFactsDirty(lockedCaptures);
