@@ -8,6 +8,7 @@ public enum RetentionOperation { Selection, Trash, Purge, Failure, Retry }
 public sealed class RetentionTelemetry : IDisposable
 {
     public const string MeterName = "ShutterSpool.Retention";
+    private const string CategoryTag = "category";
     private readonly Meter _meter = new(MeterName);
     private readonly Counter<long> _operationBytes;
     private readonly Counter<long> _operationCount;
@@ -66,11 +67,11 @@ public sealed class RetentionTelemetry : IDisposable
     {
         SpoolQuotaSnapshot? capacity = Volatile.Read(ref _capacity);
         if (capacity is null) yield break;
-        yield return new(capacity.ActiveBytes, new KeyValuePair<string, object?>("category", "active"));
-        yield return new(capacity.TrashBytes, new KeyValuePair<string, object?>("category", "trash"));
-        yield return new(capacity.PartialBytes, new KeyValuePair<string, object?>("category", "partial"));
-        yield return new(capacity.QuarantineBytes, new KeyValuePair<string, object?>("category", "quarantine"));
-        yield return new(capacity.DiskPreviewBytes, new KeyValuePair<string, object?>("category", "preview"));
+        yield return new(capacity.ActiveBytes, new KeyValuePair<string, object?>(CategoryTag, "active"));
+        yield return new(capacity.TrashBytes, new KeyValuePair<string, object?>(CategoryTag, "trash"));
+        yield return new(capacity.PartialBytes, new KeyValuePair<string, object?>(CategoryTag, "partial"));
+        yield return new(capacity.QuarantineBytes, new KeyValuePair<string, object?>(CategoryTag, "quarantine"));
+        yield return new(capacity.DiskPreviewBytes, new KeyValuePair<string, object?>(CategoryTag, "preview"));
     }
 
     public void Dispose() => _meter.Dispose();

@@ -1,6 +1,6 @@
 """Characterize the pinned Community edge with synthetic bytes, not ShutterSpool durability.
 
-Run: python tests/verify-sftpgo-httpfs.py (Docker Desktop required).
+Run: python tests/verify-sftpgo-httpfs.py (Docker Desktop and OpenSSL required).
 Only disposable probe resources are removed; no existing service or media is touched.
 """
 import ftplib
@@ -9,16 +9,21 @@ import io
 import json
 import secrets
 import socket
+import ssl
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.parse
+from pathlib import Path
 from image_pins import load_image_pins
 
 IMAGE = load_image_pins()['camera-edge']
 KEY = secrets.token_hex(32)
 PASSWORD = secrets.token_hex(16)
 events, files, dirs, flags_seen = [], {}, {'/'}, []
+auth_key_checks = []
+expected_key = KEY
 fail_hook = False
 hold_hook = threading.Event()
 hold_hook.set()
@@ -47,7 +52,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
     def do_POST(self):
-        if self.headers.get('X-API-KEY') != KEY: return self.reply(403)
+        correct_key = self.headers.get('X-API-KEY') == expected_key
+        if self.path == '/auth':
+            auth_key_checks.append(correct_key)
+        if not correct_key: return self.reply(403)
         if self.path == '/auth':
             body = json.loads(self.body())
             if body.get('username') != 'cam_probe' or body.get('password') != PASSWORD: return self.reply(403)
@@ -93,8 +101,64 @@ def port():
         sock.bind(('127.0.0.1',0))
         return sock.getsockname()[1]
 
+
+def openssl(*args):
+    subprocess.run(['openssl', *args], check=True, capture_output=True)
+
+
+def issue_leaf(directory, name, hostname, ca=None):
+    key = directory / f'{name}.key'
+    cert = directory / f'{name}.pem'
+    extensions = f'subjectAltName=DNS:{hostname}'
+    request = ['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-subj', f'/CN={hostname}',
+               '-addext', extensions, '-addext', 'extendedKeyUsage=serverAuth']
+    if ca is None:
+        openssl(*request, '-x509', '-days', '2', '-out', cert)
+    else:
+        csr = directory / f'{name}.csr'
+        openssl(*request, '-out', csr)
+        openssl('x509', '-req', '-in', csr, '-CA', ca[0], '-CAkey', ca[1], '-CAcreateserial',
+                '-copy_extensions', 'copy', '-days', '2', '-out', cert)
+    return cert, key
+
+
+def connect(control_port):
+    ftp = ftplib.FTP()
+    try:
+        ftp.connect('127.0.0.1', control_port, timeout=1)
+        ftp.timeout = 10
+        ftp.sock.settimeout(10)
+        return ftp
+    except ftplib.all_errors:
+        ftp.close()
+        raise
+
+
+def assert_login_rejected(control_port):
+    with connect(control_port) as ftp:
+        try:
+            ftp.login('cam_probe', PASSWORD)
+        except ftplib.error_perm:
+            return
+        raise AssertionError('FTP login accepted a rejected callback')
+
+
+hostname = 'host.docker.internal'
+certificates = tempfile.TemporaryDirectory(prefix='shutterspool-callback-probe-')
+cert_dir = Path(certificates.name)
+ca = (cert_dir / 'ca.pem', cert_dir / 'ca.key')
+openssl('req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-out', ca[0], '-keyout', ca[1],
+        '-subj', '/CN=ShutterSpool Callback Probe CA', '-days', '2', '-addext', 'basicConstraints=critical,CA:TRUE',
+        '-addext', 'keyUsage=critical,keyCertSign,cRLSign')
+original = issue_leaf(cert_dir, 'original', hostname, ca)
+replacement = issue_leaf(cert_dir, 'replacement', hostname, ca)
+wrong_hostname = issue_leaf(cert_dir, 'wrong-hostname', 'wrong.example.test', ca)
+untrusted = issue_leaf(cert_dir, 'untrusted', hostname)
+tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+tls.load_cert_chain(*original)
 server = http.server.ThreadingHTTPServer(('0.0.0.0',0), Handler)
-BASE = f'http://host.docker.internal:{server.server_port}'
+server.socket = tls.wrap_socket(server.socket, server_side=True)
+BASE = f'https://{hostname}:{server.server_port}'
 threading.Thread(target=server.serve_forever,daemon=True).start()
 control, passive = port(), port()
 name = 'shutterspool-m109-probe-'+secrets.token_hex(4)
@@ -107,12 +171,17 @@ env = {
  'SFTPGO_COMMON__ACTIONS__EXECUTE_ON':'pre-upload,upload','SFTPGO_COMMON__ACTIONS__EXECUTE_SYNC':'upload',
  'SFTPGO_COMMON__ACTIONS__HOOK':BASE+'/hook','SFTPGO_HTTP__HEADERS__0__KEY':'X-API-KEY',
  'SFTPGO_HTTP__HEADERS__0__VALUE':KEY,'SFTPGO_HTTP__RETRY_MAX':'0', 'SFTPGO_HTTP__TIMEOUT':'10',
+ 'SSL_CERT_DIR':'/etc/ssl/certs:/etc/sftpgo/callback-trust',
 }
-command = ['docker','run','-d','--name',name,'-p',f'127.0.0.1:{control}:2121','-p',f'127.0.0.1:{passive}-{passive+1}:{passive}-{passive+1}']
+command = ['docker','run','-d','--name',name,'-p',f'127.0.0.1:{control}:2121',
+           '-p',f'127.0.0.1:{passive}-{passive+1}:{passive}-{passive+1}',
+           '--mount', f'type=bind,source={ca[0]},target=/etc/sftpgo/callback-trust/root.pem,readonly']
 for key,value in env.items(): command += ['-e',key+'='+value]
 command += [IMAGE,'sftpgo','serve','--log-file-path','/dev/null','--log-level','error']
 try:
-    subprocess.run(command,check=True,capture_output=True)
+    started = subprocess.run(command, capture_output=True)
+    if started.returncode:
+        raise RuntimeError('The disposable SFTPGo probe container could not start.')
     time.sleep(1)
     result = subprocess.run(['docker','inspect',name,'--format','{{.State.Status}}'],capture_output=True,text=True)
     if result.returncode or result.stdout.strip() != 'running':
@@ -120,11 +189,24 @@ try:
         raise RuntimeError((logs.stdout+logs.stderr).replace(KEY,'[redacted]').replace(PASSWORD,'[redacted]'))
     for attempt in range(60):
         try:
-            ftp=ftplib.FTP(); ftp.connect('127.0.0.1',control,timeout=1); ftp.sock.settimeout(10); break
+            probe = connect(control)
+            probe.close()
+            break
         except (OSError, EOFError): time.sleep(.2)
     else: raise RuntimeError('No probe listener')
+    for rejected in (untrusted, wrong_hostname):
+        tls.load_cert_chain(*rejected)
+        assert_login_rejected(control)
+        assert not auth_key_checks, 'The auth request reached the callback with invalid TLS'
+    tls.load_cert_chain(*original)
+    expected_key = secrets.token_hex(32)
+    assert_login_rejected(control)
+    assert auth_key_checks == [False], 'The invalid-key attempt did not reach the HTTPS auth callback'
+    expected_key = KEY
+    ftp = connect(control)
     ftp.login('cam_probe',PASSWORD)
-    ftp.timeout = 10
+    assert auth_key_checks[-1], 'The retry did not reach the HTTPS auth callback with its valid key'
+    print('PASS: untrusted CA, hostname mismatch and wrong key each refused; verified HTTPS login then succeeded')
     assert ftp.storbinary('STOR DSC0001.JPG',io.BytesIO(b'first')).startswith('226')
     assert files['/DSC0001.JPG'] == b'first'
     assert ftp.storbinary('STOR DSC0001.JPG',io.BytesIO(b'second')).startswith('226')
@@ -171,6 +253,23 @@ try:
     assert len({event['timestamp'] for event in events}) == len(events)
     print('PASS: callback schema includes provider endpoint, session and distinct event timestamps')
     ftp.close()
+    fail_hook = False
+    client_tls = ssl.create_default_context(cafile=str(ca[0]))
+    for filename, identity in (('rotated.JPG', replacement), ('restored.JPG', original)):
+        tls.load_cert_chain(*identity)
+        with socket.create_connection(('127.0.0.1', server.server_port), timeout=5) as peer:
+            with client_tls.wrap_socket(peer, server_hostname=hostname) as verified:
+                assert verified.getpeercert(binary_form=True) == ssl.PEM_cert_to_DER_cert(identity[0].read_text(encoding='ascii'))
+                verified.sendall(b'GET / HTTP/1.0\r\n\r\n')
+                with verified.makefile('rb') as response:
+                    assert response.readline().startswith(b'HTTP/1.0 403')
+                    response.read()
+        with connect(control) as ftp:
+            ftp.login('cam_probe', PASSWORD)
+            assert ftp.storbinary('STOR ' + filename, io.BytesIO(b'certificate probe')).startswith('226')
+        assert files['/' + filename] == b'certificate probe'
+    print('PASS: verified callback certificate replacement and rollback after completed uploads')
 finally:
     subprocess.run(['docker','rm','-f',name],capture_output=True)
     server.shutdown(); server.server_close()
+    certificates.cleanup()

@@ -12,6 +12,15 @@ The package contains no ACME client, DNS credentials, renewal daemon or expiry w
 | `server.pem` | FTPS leaf/full chain and matching unencrypted private key |
 | `root.pem` | Actual public CA root used by enabled FTPS clients; contains no private key |
 
+Supply these files under `certificates/`. Every enabled camera profile also needs a separate callback certificate:
+
+| File | Purpose |
+| --- | --- |
+| `callback-certificates/server.pem` | Private HTTPS leaf for the Compose DNS name `server`, intermediate chain and matching unencrypted private key. Readable only by Server's UID 1654. |
+| `callback-certificates/root.pem` | Exactly one public CA certificate for that callback chain. Readable by the edge's UID 1000. |
+
+Include `server` as a DNS subject alternative name and use a server-authentication certificate. Keep the callback identity directory outside `certificates/`, which the public proxy and camera edges mount. Compose mounts only the public callback root into each edge and adds it to the image's public trust. The callback port stays on the private Compose network, including for Plain FTP LAN.
+
 Use the configured DNS hostnames in certificate subject alternative names and an appropriate server-authentication certificate.
 Modern and trusted-LAN legacy FTPS share the configured ingest hostname; each listener retains its protocol policy.
 Mount certificate directories read-only; give non-root consumers the required read permission without exposing keys to other users.
@@ -27,10 +36,11 @@ Clients must retain normal certificate validation.
 1. Prepare the complete replacement in a separate private directory. Validate its chain, hostname, dates and matching private key with OpenSSL or the issuing service's standard tools.
 2. Schedule a maintenance window. Block new management traffic and [drain each affected camera edge](../operations/README.md#stop-writers-before-capture) while Server stays available.
    A timeout aborts replacement: preserve the old generation and investigate; do not force-kill transfers.
-3. Stop the proxy if replacing its HTTPS certificates. Confirm all consumers of changed files are stopped.
+3. Stop the proxy if replacing its HTTPS certificates. For callback certificate changes, stop all camera edges after their transfers drain, then stop Server. Confirm all consumers of changed files are stopped.
 4. Replace the complete files in the mounted directory, preserving restricted ownership/modes. Retain the previous valid generation privately until checks pass.
 5. Recreate the selected consumers using the installation's complete Compose file selection.
    Verify a new HTTPS session and a hostname/chain-validated FTPS connection through the declared control/passive route before reopening traffic.
+   For callback replacement, complete a controlled upload and confirm Server recorded the Asset and stored the original.
 
 If validation/startup fails, keep ingress closed and restore the previous still-valid generation before retrying.
 Do not substitute an expired certificate, change the Source to plaintext, or disable trust checks.

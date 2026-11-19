@@ -48,23 +48,21 @@ public sealed class CameraIngressService(
         return login;
     }
 
-    public async Task AdmitAsync(Guid loginId, string username, string sessionId, string virtualPath, long timestamp,
-        long maximumUploadBytes, int maximumConcurrentTransfers, int transferTimeoutSeconds, CancellationToken cancellationToken)
+    public async Task AdmitAsync(CameraUploadCorrelation correlation, CameraAdmissionLimits limits, CancellationToken cancellationToken)
     {
-        ValidateVirtualPath(virtualPath, allowDirectory: false);
+        ValidateVirtualPath(correlation.VirtualPath, allowDirectory: false);
+        var (maximumUploadBytes, maximumConcurrentTransfers, transferTimeoutSeconds) = limits;
         if (maximumUploadBytes <= 0 || maximumConcurrentTransfers <= 0 || transferTimeoutSeconds <= 0)
-            throw new ArgumentOutOfRangeException(nameof(maximumUploadBytes), "Camera upload limits and timeout must be positive.");
+            throw new ArgumentOutOfRangeException(nameof(limits), "Camera upload limits and timeout must be positive.");
         long requiredFreeBytes = checked(maximumUploadBytes * maximumConcurrentTransfers);
         await ingest.CheckAdmittedAdmissionAsync(requiredFreeBytes, cancellationToken);
         Guid admissionId = Guid.NewGuid();
         Guid assetId = Guid.NewGuid();
-        string receiveKey = ingest.GetAdmittedReceiveKey(assetId);
-        if (!await ingest.ReserveCameraAdmissionAsync(admissionId, assetId, maximumUploadBytes, receiveKey, cancellationToken))
+        var reservation = new CameraAdmissionReservation(admissionId, assetId, ingest.GetAdmittedReceiveKey(assetId));
+        if (!await ingest.ReserveCameraAdmissionAsync(admissionId, assetId, maximumUploadBytes, reservation.ReceiveKey, cancellationToken))
             throw new CameraIngressRejectedException("Upload capacity is unavailable.");
 
-        CameraUploadAdmission? admission = await store.AdmitAsync(loginId, username, sessionId, virtualPath, timestamp,
-            admissionId, assetId, maximumUploadBytes, receiveKey,
-            maximumConcurrentTransfers, transferTimeoutSeconds, cancellationToken);
+        CameraUploadAdmission? admission = await store.AdmitAsync(correlation, limits, reservation, cancellationToken);
         if (admission is null)
         {
             await ingest.ReleaseUnadmittedQuotaReservationAsync(admissionId, cancellationToken);

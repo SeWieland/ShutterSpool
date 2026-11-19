@@ -90,7 +90,9 @@ public sealed class CaptureCurationService(ICaptureCurationStore store)
         return [.. results];
     }
 
-    private static CaptureBulkResult Result(Guid id, CaptureMutationResult result) => result.State is null
-        ? new(id, "not_found", null)
-        : new(id, result.Succeeded ? "committed" : "conflict", result.State);
+    private static CaptureBulkResult Result(Guid id, CaptureMutationResult result)
+    {
+        if (result.State is null) return new(id, "not_found", null);
+        return new(id, result.Succeeded ? "committed" : "conflict", result.State);
+    }
 }

@@ -89,11 +89,10 @@ export function useReconciliation(
         invalidate(allRefreshScopes);
     }
     function queueFlush() {
-        if (!debounce)
-            debounce = setTimeout(() => {
-                debounce = undefined;
-                void flush();
-            }, 200);
+        debounce ??= setTimeout(() => {
+            debounce = undefined;
+            void flush();
+        }, 200);
     }
     hub.on("captureChanged", (hint: { captureId: string; kind?: string }) => {
         if (stopped) return;

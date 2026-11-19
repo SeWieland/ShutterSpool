@@ -170,7 +170,7 @@ internal sealed class EfAssetProtectionStore(ShutterSpoolDbContext database) : I
             CaptureEntity? capture = await database.Captures.FromSqlInterpolated(
                 $"SELECT * FROM captures WHERE \"Id\" = {captureId} FOR UPDATE")
                 .SingleOrDefaultAsync(cancellationToken);
-            if (capture is null || capture.RetentionDisposition is not ("Active" or "Trash"))
+            if (capture is null || capture.RetentionDisposition is not (nameof(RetentionDisposition.Active) or nameof(RetentionDisposition.Trash)))
                 return await FinishAsync(transaction, new ProtectionOperation<T>(ProtectionOperationStatus.Blocked,
                     ErrorCode: "ORIGINAL_UNAVAILABLE"), cancellationToken);
             lockedCaptures.Add(capture);
@@ -203,7 +203,8 @@ internal sealed class EfAssetProtectionStore(ShutterSpoolDbContext database) : I
                 HasErasure = database.PrivacyErasureAssets.Any(erased => erased.AssetId == asset.Id) })
             .ToArrayAsync(cancellationToken);
         if (current.Length != ids.Length || current.Any(item => item.State != "Spooled"
-                || item.RetentionDisposition is not ("Active" or "Trash") || item.HasRemoval || item.HasErasure)) return false;
+                || item.RetentionDisposition is not (nameof(RetentionDisposition.Active) or nameof(RetentionDisposition.Trash))
+                || item.HasRemoval || item.HasErasure)) return false;
 
         var expected = originals.OrderBy(item => item.AssetId).ToArray();
         var actual = current.OrderBy(item => item.Id).ToArray();
@@ -226,7 +227,8 @@ internal sealed class EfAssetProtectionStore(ShutterSpoolDbContext database) : I
                 HasErasure = database.PrivacyErasureAssets.Any(erased => erased.AssetId == asset.Id) })
             .ToArrayAsync(cancellationToken);
         if (originals.Length != assetIds.Length || originals.Any(item => item.State != "Spooled"
-                || item.RetentionDisposition is not ("Active" or "Trash") || item.HasRemoval || item.HasErasure)) return null;
+                || item.RetentionDisposition is not (nameof(RetentionDisposition.Active) or nameof(RetentionDisposition.Trash))
+                || item.HasRemoval || item.HasErasure)) return null;
         return [.. originals.Select(item => new ProtectionOriginal(item.Id, item.CaptureId, item.SpoolKey, item.Size)).OrderBy(item => item.AssetId)];
     }
 
@@ -280,7 +282,7 @@ internal sealed class EfAssetProtectionStore(ShutterSpoolDbContext database) : I
     private static void MarkRetentionFactsDirty(IEnumerable<CaptureEntity> captures)
     {
         foreach (CaptureEntity capture in captures)
-            if (capture.RetentionDisposition == "Active") capture.RetentionFactsDirty = true;
+            if (capture.RetentionDisposition == nameof(RetentionDisposition.Active)) capture.RetentionFactsDirty = true;
     }
 
     private Task<int> LockRoutingAsync(CancellationToken cancellationToken) =>

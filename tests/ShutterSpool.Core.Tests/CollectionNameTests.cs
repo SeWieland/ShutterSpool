@@ -17,6 +17,7 @@ public sealed class CollectionNameTests
     }
 
     [Theory]
+    [InlineData(null)]
     [InlineData("")]
     [InlineData(" ")]
     [InlineData("//Berlin")]
@@ -35,8 +36,11 @@ public sealed class CollectionNameTests
     [InlineData("Events/trailing ")]
     [InlineData("Events/trailing.")]
     [InlineData("Events/line\nbreak")]
-    public void Rejects_names_that_are_not_safe_relative_paths(string input) =>
-        Assert.Throws<ArgumentException>(() => CollectionName.Parse(input));
+    public void Rejects_names_that_are_not_safe_relative_paths(string? input)
+    {
+        ArgumentException error = Assert.Throws<ArgumentException>(() => CollectionName.Parse(input));
+        Assert.Equal("input", error.ParamName);
+    }
 
     [Fact]
     public void Normalizes_unicode_and_case_for_identity()
@@ -55,6 +59,7 @@ public sealed class CollectionNameTests
         Assert.Equal(maximum, CollectionName.Parse("/" + maximum).Path);
         Assert.Throws<ArgumentException>(() => CollectionName.Parse(maximum + "x"));
         Assert.Throws<ArgumentException>(() => CollectionName.Parse(new string('x', 256)));
-        Assert.Throws<ArgumentException>(() => CollectionName.Parse("Events/\uD800"));
+        ArgumentException error = Assert.Throws<ArgumentException>(() => CollectionName.Parse("Events/\uD800"));
+        Assert.Equal("input", error.ParamName);
     }
 }

@@ -40,7 +40,8 @@ public sealed class CorePipelineTests
             await first.InitializeShutterSpoolAsync(configuration, token);
             Directory.CreateDirectory(targetRoot);
             await using AsyncServiceScope scope = WorkspaceFixture.Scope(first, workspace);
-            var source = await scope.ServiceProvider.GetRequiredService<SourceManagementService>().CreateAsync("Synthetic", "Manual", null, cancellationToken: token);
+            var source = await scope.ServiceProvider.GetRequiredService<SourceManagementService>()
+                .CreateAsync(new("Synthetic", "Manual", null), cancellationToken: token);
             var destination = await scope.ServiceProvider.GetRequiredService<DestinationManagementService>().CreateAsync("Local", "local", null, token);
             await scope.ServiceProvider.GetRequiredService<ILocalDestinationConfiguration>().ConfigureAsync(destination.Id, destination.ConfigurationRevision, targetRoot, token);
             DestinationRoutingMutation routing = await scope.ServiceProvider.GetRequiredService<DestinationRoutingService>().SetAsync(new(destination.Id, true,

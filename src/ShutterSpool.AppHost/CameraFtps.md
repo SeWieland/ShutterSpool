@@ -2,7 +2,7 @@
 
 This guide covers camera ingress through the local AppHost on Windows. Complete the [AppHost prerequisites](README.md#start-the-development-environment) first. Camera operators should use the [camera setup guide](../../docs/camera-compatibility.md#camera-setup).
 
-The operator supplies certificates. ShutterSpool does not issue, renew, or reload them automatically. For packaged installations, see the [packaged certificate guide](../../deploy/certificates/README.md); the [camera guide](../../docs/camera-compatibility.md) records hardware observations and their limits.
+The operator supplies and renews certificates. Replace each generation during a controlled restart. The [packaged certificate guide](../../deploy/certificates/README.md) covers packaged installations. The [camera guide](../../docs/camera-compatibility.md) records hardware observations and their limits.
 
 ## Supply and validate certificates
 
@@ -13,6 +13,8 @@ For explicit FTPS, configure `ShutterSpool:CameraIngress:CertificateDirectory` t
 
 Keep private keys outside source control and do not place them in `root.pem`. The AppHost validates the certificate chain, hostname, validity period, server-authentication usage, and private-key match before enabling an FTPS profile. Certificate validation is not disabled for development. Synthetic certificates are only for automated tests.
 
+For every enabled camera profile, supply a separate `CallbackCertificateDirectory` with its own `server.pem` leaf, chain and matching key, and a `root.pem` containing exactly one public CA certificate. Use the Aspire tunnel DNS name `aspire.dev.internal` in the callback certificate's SAN, or the configured `AppHost:ContainerHostname` when different. Keep the tunnel enabled. Server reads the callback bundle from the host. Aspire adds the public callback root to each edge's system trust.
+
 Configure ingress explicitly, using the hostname present in the certificate and a LAN address reachable by the camera:
 
 ```powershell
@@ -20,6 +22,7 @@ aspire secret set ShutterSpool:CameraIngress:Profiles:ModernFtps:Enabled true --
 aspire secret set ShutterSpool:CameraIngress:ListenAddress YOUR_LAN_IPV4 --non-interactive
 aspire secret set ShutterSpool:CameraIngress:AdvertisedAddress YOUR_LAN_IPV4 --non-interactive
 aspire secret set ShutterSpool:CameraIngress:CertificateDirectory 'ABSOLUTE_PATH_TO_CERTIFICATE_DIRECTORY' --non-interactive
+aspire secret set ShutterSpool:CameraIngress:CallbackCertificateDirectory 'ABSOLUTE_PATH_TO_CALLBACK_CERTIFICATE_DIRECTORY' --non-interactive
 aspire secret set ShutterSpool:CameraIngress:Hostname YOUR_INGEST_HOSTNAME --non-interactive
 aspire start --non-interactive
 aspire wait server --timeout 60 --non-interactive
@@ -50,7 +53,7 @@ aspire wait camera-edge-legacy --timeout 60 --non-interactive
 ```
 
 Omit the wait for any disabled edge. Starting the AppHost reconstructs its graph and validates the supplied files before enabling FTPS; restarting only an edge resource does not rerun that validation.
-Verify a new hostname/chain-validated FTPS connection before resuming uploads. Secret/configuration replacement takes effect after restart; no background renewal or reload runs.
+Verify a new hostname/chain-validated FTPS connection before resuming uploads. If replacing the callback certificate, use the same stop and restart sequence for all enabled profiles and verify a controlled upload completed with its Asset and original present.
 If validation or startup fails, keep ingress stopped and restore the last known-good certificate pair before restarting the AppHost.
 
 ## Older cameras with legacy ciphers
@@ -81,9 +84,9 @@ Each profile accepts `ControlPort`, `PassiveStart`, and `PassiveEnd` under `Shut
 
 Set `ShutterSpool:CameraIngress:Hostname` to the installation's ingest hostname. The UI receives the declared hostname and profile control port from Server; it never guesses a profile hostname or tests DNS per render/upload. `ListenAddress` controls the host LAN IPv4 binding (default loopback); `AdvertisedAddress` controls passive replies and defaults to `ListenAddress`. Restrict control/passive ports to the camera network; current compatibility qualification is trusted-LAN only.
 
-The edge certificate directory is mounted read-only. Server receives only the configured public CA root path for the bounded, authorized CA download. The edge has no spool mount or exposed administration, SSH/SFTP, or WebDAV listener. Its private HTTPFs endpoint streams into ShutterSpool's spool-owned receive operation; a synchronous upload hook establishes successful completion before Asset publication and FTP success. Its account store is disposable; every login and upload admission checks PostgreSQL.
+The FTPS bundle is mounted read-only. Server receives the configured FTPS public CA root path for the bounded, authorized CA download. The edge has no spool mount or exposed administration, SSH/SFTP, or WebDAV listener. Its private HTTPFs endpoint streams into ShutterSpool's spool-owned receive operation; a synchronous upload hook establishes successful completion before Asset publication and FTP success. Its account store is disposable; every login and upload admission checks PostgreSQL.
 
-The AppHost generates and persists `Parameters:camera-callback-key` in User Secrets. Only Server and the edge receive it. The private callback endpoint uses a separate listener and shared-key authentication, and does not serve management, originals, or the web application. On Docker Desktop, authentication/upload hooks and returned HTTPFs URLs use `host.docker.internal` and the private proxy port, so recreated edges do not depend on a manual hostname alias; do not publish or forward this endpoint. Other deployments must supply an edge-reachable private callback base URL.
+The AppHost generates and persists `Parameters:camera-callback-key` in User Secrets. Only Server and the edge receive it. The Aspire container tunnel carries authentication, upload hooks and HTTPFs to the dedicated HTTPS listener on loopback. Keep the callback off the LAN and out of public proxy routes.
 
 Only Server writes the spool. FTP virtual folders are empty protocol metadata under the spool's `.camera-directories`; originals use generated private spool keys. Neither the camera nor edge receives a host path or mount. Failed hook cleanup cannot delete authoritative originals or uncertain receive bytes. Configure `ShutterSpool:Spool:ReservedBytes` for payload admission and retain the spool with its PostgreSQL state across restarts. See the [transfer sequence](../ShutterSpool.Application/README.md#camera-transfer-flow).
 

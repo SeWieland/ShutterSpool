@@ -13,15 +13,15 @@ public sealed record CollectionName(string Path, string Name)
 
     public static CollectionName Parse(string? input)
     {
-        if (string.IsNullOrEmpty(input)) throw Invalid();
+        if (string.IsNullOrEmpty(input)) throw Invalid(nameof(input));
         string path;
         try { path = input.Normalize(NormalizationForm.FormC); }
-        catch (ArgumentException) { throw Invalid(); }
+        catch (ArgumentException) { throw Invalid(nameof(input)); }
         if (path.StartsWith('/')) path = path[1..];
         if (path.Length is 0 or > MaximumPathLength || path.Contains('\\')
             || path.Contains('{') || path.Contains('}') || path.Contains(':')
             || path.Contains("%2f", StringComparison.OrdinalIgnoreCase)
-            || path.Contains("%5c", StringComparison.OrdinalIgnoreCase)) throw Invalid();
+            || path.Contains("%5c", StringComparison.OrdinalIgnoreCase)) throw Invalid(nameof(input));
 
         string[] segments = path.Split('/');
         if (segments.Any(segment => segment.Length is 0 or > MaximumSegmentLength
@@ -29,7 +29,7 @@ public sealed record CollectionName(string Path, string Name)
             || char.IsWhiteSpace(segment[0]) || char.IsWhiteSpace(segment[^1])
             || segment.Any(char.IsControl)
             || segment.IndexOfAny(['?', '*', '"', '<', '>', '|']) >= 0
-            || segment.EndsWith('.') || IsReservedDeviceName(segment))) throw Invalid();
+            || segment.EndsWith('.') || IsReservedDeviceName(segment))) throw Invalid(nameof(input));
         return new(path, segments[^1]);
     }
 
@@ -42,6 +42,6 @@ public sealed record CollectionName(string Path, string Name)
             || name.StartsWith("LPT", StringComparison.OrdinalIgnoreCase)) && name[3] is >= '1' and <= '9';
     }
 
-    private static ArgumentException Invalid() => new(
-        "Use a safe relative Collection name with nonempty segments of at most 255 characters.", "name");
+    private static ArgumentException Invalid(string paramName) => new(
+        "Use a safe relative Collection name with nonempty segments of at most 255 characters.", paramName);
 }

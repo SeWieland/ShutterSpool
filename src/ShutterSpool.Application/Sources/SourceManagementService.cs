@@ -1,11 +1,15 @@
 using ShutterSpool.Application.Security;
+using ShutterSpool.Domain.Collections;
 using ShutterSpool.Domain.Sources;
 
 namespace ShutterSpool.Application.Sources;
 
-public sealed record SourceProvisioning(Guid Id, string Name, SourceCurationMode CurationMode, int DelaySeconds,
-    string Username, string VirtualRoot, byte[] SecretVerifier, SourceType SourceType, SourceConnectionProfile ConnectionProfile,
-    Guid CollectionId);
+public sealed record SourceConfigurationInput(string Name, string CurationMode, int? DelaySeconds,
+    SourceType SourceType = SourceType.CameraFtpUpload, SourceConnectionProfile ConnectionProfile = SourceConnectionProfile.ModernFtps,
+    Guid? CollectionId = null);
+public sealed record SourceSettings(string Name, SourceCurationMode CurationMode, int DelaySeconds,
+    SourceType SourceType, SourceConnectionProfile ConnectionProfile, Guid CollectionId);
+public sealed record SourceProvisioning(Guid Id, SourceSettings Settings, string Username, string VirtualRoot, byte[] SecretVerifier);
 public sealed record CreatedSource(Guid Id, string Username, string VirtualRoot, string Secret);
 public sealed record SourcePolicy(Guid Id, SourceCurationMode CurationMode, int CurationDelaySeconds);
 public sealed record SourceCredential(Guid SourceId, string Username, string VirtualRoot, byte[] SecretVerifier, long CredentialGeneration,
@@ -45,9 +49,8 @@ public interface ISourceConfigurationStore
 {
     Task<SourceManagementConfiguration[]> ListAsync(int limit, string? afterName, Guid? afterId, CancellationToken cancellationToken);
     Task<SourceManagementConfiguration?> GetAsync(Guid id, CancellationToken cancellationToken);
-    Task<SourceConfigurationWrite> UpdateConfigurationAsync(Guid id, long expectedRevision, string name,
-        SourceCurationMode mode, int delaySeconds, SourceType sourceType, SourceConnectionProfile connectionProfile,
-        Guid collectionId, CancellationToken cancellationToken);
+    Task<SourceConfigurationWrite> UpdateConfigurationAsync(Guid id, long expectedRevision, SourceSettings settings,
+        CancellationToken cancellationToken);
     Task<SourceConfigurationWrite> ReplaceCredentialAsync(Guid id, long expectedRevision, string username, byte[] verifier, CancellationToken cancellationToken);
     Task<SourceConfigurationWrite> SetIngressEnabledAsync(Guid id, long expectedRevision, bool enabled, CancellationToken cancellationToken);
     Task<SourceIngressState?> SetIngressEnabledAsync(Guid id, bool enabled, CancellationToken cancellationToken);
@@ -93,21 +96,19 @@ public sealed class SourceManagementService(ISourceConfigurationStore store, ICr
     public Task<SourceRemovalWrite> RemoveAsync(Guid id, long expectedRevision, CancellationToken token) =>
         store.RemoveAsync(id, expectedRevision, token);
 
-    public async Task<CreatedSource> CreateAsync(string name, string mode, int? delaySeconds,
-        SourceType sourceType = SourceType.CameraFtpUpload, SourceConnectionProfile connectionProfile = SourceConnectionProfile.ModernFtps,
-        string? requestedUsername = null, string? passwordMode = null, string? requestedPassword = null, Guid? collectionId = null,
-            CancellationToken cancellationToken = default)
+    public async Task<CreatedSource> CreateAsync(SourceConfigurationInput input, string? requestedUsername = null,
+        string? passwordMode = null, string? requestedPassword = null, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(name) || name.Trim().Length > 256) throw new ArgumentException("Provide a source name of at most 256 characters.");
-        (SourceCurationMode curationMode, int delay) = ParsePolicy(mode, delaySeconds);
+        (string name, SourceCurationMode mode, int delay) = ParseNameAndPolicy(input);
         Guid id = Guid.NewGuid();
         string username = requestedUsername ?? GenerateUsername();
         ValidateUsername(username);
         string secret = ResolvePassword(passwordMode, requestedPassword);
         string root = $"sources/{Guid.NewGuid():N}";
-        ValidateProfile(sourceType, connectionProfile);
-        var provisioning = new SourceProvisioning(id, name.Trim(), curationMode, delay, username, root,
-            protector.CreateVerifier(secret), sourceType, connectionProfile, collectionId ?? ShutterSpool.Domain.Collections.CollectionName.BuiltInId);
+        ValidateProfile(input.SourceType, input.ConnectionProfile);
+        var settings = new SourceSettings(name, mode, delay, input.SourceType, input.ConnectionProfile,
+            input.CollectionId ?? CollectionName.BuiltInId);
+        var provisioning = new SourceProvisioning(id, settings, username, root, protector.CreateVerifier(secret));
         int maxAttempts = requestedUsername is null ? 5 : 1;
         for (int attempt = 1; attempt <= maxAttempts; attempt++)
         {
@@ -131,17 +132,14 @@ public sealed class SourceManagementService(ISourceConfigurationStore store, ICr
         return store.UpdatePolicyAsync(id, curationMode, delay, cancellationToken);
     }
 
-    public async Task<SourceConfigurationWrite> UpdateConfigurationAsync(Guid id, long expectedRevision,
-        string name, string mode, int? delaySeconds,
-        SourceType sourceType = SourceType.CameraFtpUpload, SourceConnectionProfile connectionProfile = SourceConnectionProfile.ModernFtps,
-        Guid? collectionId = null, CancellationToken token = default)
+    public async Task<SourceConfigurationWrite> UpdateConfigurationAsync(Guid id, long expectedRevision, SourceConfigurationInput input,
+        CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(name) || name.Trim().Length > 256)
-            throw new ArgumentException("Provide a source name of at most 256 characters.");
-        (SourceCurationMode curationMode, int delay) = ParsePolicy(mode, delaySeconds);
-        ValidateProfile(sourceType, connectionProfile);
-        return await store.UpdateConfigurationAsync(id, expectedRevision, name.Trim(), curationMode, delay, sourceType, connectionProfile,
-            collectionId ?? (await store.GetAsync(id, token))?.CollectionId ?? ShutterSpool.Domain.Collections.CollectionName.BuiltInId, token);
+        (string name, SourceCurationMode mode, int delay) = ParseNameAndPolicy(input);
+        ValidateProfile(input.SourceType, input.ConnectionProfile);
+        Guid collectionId = input.CollectionId ?? (await store.GetAsync(id, cancellationToken))?.CollectionId ?? CollectionName.BuiltInId;
+        var settings = new SourceSettings(name, mode, delay, input.SourceType, input.ConnectionProfile, collectionId);
+        return await store.UpdateConfigurationAsync(id, expectedRevision, settings, cancellationToken);
     }
 
     public async Task<SourceSecretWrite> RegenerateAsync(Guid id, long expectedRevision,
@@ -201,6 +199,15 @@ public sealed class SourceManagementService(ISourceConfigurationStore store, ICr
 
     public Task<SourceIngressState?> SetIngressEnabledAsync(Guid id, bool enabled, CancellationToken cancellationToken) =>
         store.SetIngressEnabledAsync(id, enabled, cancellationToken);
+
+    private static (string Name, SourceCurationMode Mode, int Delay) ParseNameAndPolicy(SourceConfigurationInput input)
+    {
+        string? name = input.Name?.Trim();
+        if (string.IsNullOrEmpty(name) || name.Length > 256)
+            throw new ArgumentException("Provide a source name of at most 256 characters.");
+        (SourceCurationMode mode, int delay) = ParsePolicy(input.CurationMode, input.DelaySeconds);
+        return (name, mode, delay);
+    }
 
     private static (SourceCurationMode Mode, int Delay) ParsePolicy(string? value, int? requestedDelay)
     {

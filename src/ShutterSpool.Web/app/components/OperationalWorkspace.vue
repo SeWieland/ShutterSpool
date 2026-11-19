@@ -892,7 +892,6 @@ async function switchView(next: View) {
 function beforeUnload(event: BeforeUnloadEvent) {
     if (unloadRisk.value) {
         event.preventDefault();
-        event.returnValue = '';
     }
 }
 function requestDeparture() {

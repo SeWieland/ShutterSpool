@@ -36,10 +36,11 @@ internal sealed class EfCameraIngressStore(ShutterSpoolDbContext database, TimeP
         return login is null ? null : Map(login);
     }
 
-    public async Task<CameraUploadAdmission?> AdmitAsync(Guid loginId, string username, string sessionId, string virtualPath, long timestamp,
-        Guid admissionId, Guid assetId, long maximumUploadBytes, string receiveKey,
-        int maximumConcurrentTransfers, int transferTimeoutSeconds, CancellationToken cancellationToken)
+    public async Task<CameraUploadAdmission?> AdmitAsync(CameraUploadCorrelation correlation, CameraAdmissionLimits limits,
+        CameraAdmissionReservation reservation, CancellationToken cancellationToken)
     {
+        var (admissionId, assetId, receiveKey) = reservation;
+        var (maximumUploadBytes, maximumConcurrentTransfers, transferTimeoutSeconds) = limits;
         if (admissionId == Guid.Empty || assetId == Guid.Empty || maximumUploadBytes <= 0
             || string.IsNullOrWhiteSpace(receiveKey) || receiveKey.Length > 1_024 || receiveKey.Contains('\\')
             || Path.IsPathRooted(receiveKey) || receiveKey.Split('/').Any(segment => segment is "" or "." or ".."))
@@ -47,6 +48,7 @@ internal sealed class EfCameraIngressStore(ShutterSpoolDbContext database, TimeP
         await using var transaction = database.Database.IsRelational() ? await database.Database.BeginTransactionAsync(cancellationToken) : null;
         if (transaction is not null)
             await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(hashtextextended('shutterspool-camera-admission', 0))", cancellationToken);
+        var (loginId, username, sessionId, virtualPath, timestamp) = correlation;
         long staleBeforeTimestamp = timestamp - checked(transferTimeoutSeconds * 1_000_000_000L);
         await QuarantineStaleAsync(staleBeforeTimestamp, cancellationToken);
         CameraLoginEntity? login = await LockCurrentLoginAsync(loginId, username, cancellationToken);

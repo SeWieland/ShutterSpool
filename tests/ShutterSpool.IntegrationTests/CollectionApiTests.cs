@@ -38,6 +38,57 @@ public sealed partial class ConfigurationApiTests
     }
 
     [Fact]
+    public async Task Collection_rename_preserves_validation_and_conflict_responses()
+    {
+        await using var fixture = await ConfigurationApiFixture.CreateAsync();
+        CancellationToken token = TestContext.Current.CancellationToken;
+        Guid id = Guid.NewGuid();
+        await using (var database = new ShutterSpoolDbContext(fixture.Database.Options))
+        {
+            database.Collections.AddRange(
+                new CollectionEntity { Id = id, Name = "Berlin", Path = "Berlin", Identity = "BERLIN" },
+                new CollectionEntity { Id = Guid.NewGuid(), Name = "Bergen", Path = "Bergen", Identity = "BERGEN" });
+            await database.SaveChangesAsync(token);
+        }
+
+        string path = $"/management/collections/{id}";
+        using HttpResponseMessage invalid = await fixture.Client.PutAsJsonAsync(path, new { expectedRevision = 0, name = ".." }, token);
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+        using var validation = JsonDocument.Parse(await invalid.Content.ReadAsStringAsync(token));
+        var error = Assert.Single(validation.RootElement.GetProperty("errors").EnumerateObject());
+        Assert.Equal("name", error.Name);
+        Assert.Contains("input", Assert.Single(error.Value.EnumerateArray()).GetString());
+
+        using HttpResponseMessage missing = await fixture.Client.PutAsJsonAsync($"/management/collections/{Guid.NewGuid()}",
+            new { expectedRevision = 0, name = "Hamburg" }, token);
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+
+        using HttpResponseMessage stale = await fixture.Client.PutAsJsonAsync(path, new { expectedRevision = 4, name = "Bergen" }, token);
+        using HttpResponseMessage duplicate = await fixture.Client.PutAsJsonAsync(path, new { expectedRevision = 0, name = "Bergen" }, token);
+        await AssertConflictAsync(stale, "COLLECTION_REVISION_CONFLICT");
+        await AssertConflictAsync(duplicate, "COLLECTION_NAME_CONFLICT");
+
+        using HttpResponseMessage renamed = await fixture.Client.PutAsJsonAsync(path,
+            new { expectedRevision = 0, name = "Hamburg" }, token);
+        Assert.Equal(HttpStatusCode.OK, renamed.StatusCode);
+        using var updated = JsonDocument.Parse(await renamed.Content.ReadAsStringAsync(token));
+        Assert.Equal("Hamburg", updated.RootElement.GetProperty("path").GetString());
+        Assert.Equal(1, updated.RootElement.GetProperty("revision").GetInt64());
+
+        async Task AssertConflictAsync(HttpResponseMessage response, string code)
+        {
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+            using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
+            Assert.Equal(409, problem.RootElement.GetProperty("status").GetInt32());
+            Assert.Equal(code, problem.RootElement.GetProperty("errorCode").GetString());
+            JsonElement current = problem.RootElement.GetProperty("current");
+            Assert.Equal(id, current.GetProperty("id").GetGuid());
+            Assert.Equal(0, current.GetProperty("revision").GetInt64());
+        }
+    }
+
+    [Fact]
     public async Task Collection_move_rejects_null_bulk_items_without_writes_and_returns_named_conflict_state()
     {
         await using var fixture = await ConfigurationApiFixture.CreateAsync();
@@ -56,6 +107,8 @@ public sealed partial class ConfigurationApiTests
         using HttpResponseMessage malformed = await fixture.Client.PostAsJsonAsync("/management/captures/collection-moves",
             new { targetCollectionId = collectionId, items = new object?[] { null } }, token);
         Assert.Equal(HttpStatusCode.BadRequest, malformed.StatusCode);
+        using var validation = JsonDocument.Parse(await malformed.Content.ReadAsStringAsync(token));
+        Assert.Equal("items", Assert.Single(validation.RootElement.GetProperty("errors").EnumerateObject()).Name);
         using HttpResponseMessage invalidEnvelope = await fixture.Client.PostAsJsonAsync("/management/captures/collection-moves",
             new { targetCollectionId = collectionId, items = new[]
             {

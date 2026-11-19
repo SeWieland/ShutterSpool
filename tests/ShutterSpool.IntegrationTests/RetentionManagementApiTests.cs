@@ -378,6 +378,40 @@ public sealed partial class ConfigurationApiTests
         Assert.Equal("Active", (await database.Captures.SingleAsync(item => item.Id == id, token)).RetentionDisposition);
     }
 
+    [Fact]
+    public async Task Invalid_retention_setting_is_reported_under_settings_for_preview_and_update()
+    {
+        await using var fixture = await ConfigurationApiFixture.CreateAsync();
+        CancellationToken token = TestContext.Current.CancellationToken;
+        const string path = "/management/retention/settings";
+        JsonNode saved = JsonNode.Parse(await fixture.Client.GetStringAsync(path, token))!;
+        var request = new JsonObject
+        {
+            ["expectedSettingsRevision"] = saved["settings"]!["revision"]!.GetValue<int>(),
+            ["expectedQuotaRevision"] = saved["quota"]!["revision"]!.GetValue<int>(),
+            ["settings"] = saved["settings"]!.DeepClone(),
+            ["quota"] = saved["quota"]!.DeepClone(),
+            ["previewCache"] = saved["previewCache"]!.DeepClone(),
+        };
+        request["settings"]!["restoreProtection"] = "00:00:00";
+
+        using HttpResponseMessage preview = await fixture.Client.PostAsJsonAsync($"{path}/preview", request, token);
+        using HttpResponseMessage update = await fixture.Client.PutAsJsonAsync(path, request, token);
+        foreach (HttpResponseMessage response in new[] { preview, update })
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+            JsonNode problem = JsonNode.Parse(await response.Content.ReadAsStringAsync(token))!;
+            Assert.Equal(400, problem["status"]!.GetValue<int>());
+            var error = Assert.Single(problem["errors"]!.AsObject());
+            Assert.Equal("settings", error.Key);
+            Assert.Contains("RestoreProtection", Assert.Single(error.Value!.AsArray())!.GetValue<string>());
+        }
+
+        JsonNode current = JsonNode.Parse(await fixture.Client.GetStringAsync(path, token))!;
+        Assert.True(JsonNode.DeepEquals(saved["settings"], current["settings"]));
+    }
+
     [Theory]
     [InlineData("confirmed")]
     [InlineData("previewCache")]

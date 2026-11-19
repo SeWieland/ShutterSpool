@@ -63,45 +63,51 @@ public static class WorkspaceAccessEndpoints
             new WorkspaceViewerPolicyResponse(access.ViewerPolicy!.IncludeUnreleased, access.ViewerPolicy.Revision)))
             .RequireAuthorization(WorkspacePolicies.Member).Produces<WorkspaceViewerPolicyResponse>();
         management.MapPut("/viewer-policy", (WorkspaceViewerPolicyRequest request, HttpContext http,
-            IAccessGrantStore store, LiveChangeNotifier changes) => ChangeAsync(http, store, changes, request.OperationId,
-                request.ExpectedRevision, Guid.Empty, AccessChangeKind.ViewerPolicy, includeUnreleased: request.IncludeUnreleased))
+            IAccessGrantStore store, LiveChangeNotifier changes) => ChangeAsync(
+                new(request.OperationId, ActorIssuer(http), ActorSubject(http), Guid.Empty, request.ExpectedRevision,
+                    AccessChangeKind.ViewerPolicy, IncludeUnreleased: request.IncludeUnreleased), store, changes, http.RequestAborted))
             .RequireAuthorization(WorkspacePolicies.Administer).Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, MediaTypeNames.Application.ProblemJson).Produces<WorkspaceAccessProblemDetails>(403, MediaTypeNames.Application.ProblemJson).Produces<WorkspaceAccessProblemDetails>(404, MediaTypeNames.Application.ProblemJson).ProducesValidationProblem();
         management.MapPost("/members/{id:guid}/role", (Guid id, WorkspaceMemberRoleRequest request, HttpContext http,
             IAccessGrantStore store, LiveChangeNotifier changes) =>
         {
             if (!Enum.TryParse(request.Role, out WorkspaceRole role) || !Enum.IsDefined(role) || role.ToString() != request.Role)
                 return Task.FromResult<IResult>(Results.ValidationProblem(new Dictionary<string, string[]> { ["role"] = ["Provide a fixed workspace role."] }));
-            return ChangeAsync(http, store, changes, request.OperationId, request.ExpectedRevision, id, AccessChangeKind.Role, role);
+            return ChangeAsync(new(request.OperationId, ActorIssuer(http), ActorSubject(http), id, request.ExpectedRevision,
+                AccessChangeKind.Role, Role: role), store, changes, http.RequestAborted);
         }).RequireAuthorization(WorkspacePolicies.Administer).Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, MediaTypeNames.Application.ProblemJson).Produces<WorkspaceAccessProblemDetails>(403, MediaTypeNames.Application.ProblemJson).Produces<WorkspaceAccessProblemDetails>(404, MediaTypeNames.Application.ProblemJson).ProducesValidationProblem();
         management.MapPost("/members/{id:guid}/promote-owner", (Guid id, WorkspaceOwnerPromotionRequest request,
-            HttpContext http, IAccessGrantStore store, LiveChangeNotifier changes) => ChangeAsync(http, store, changes,
-                request.OperationId, request.ExpectedRevision, id, AccessChangeKind.PromoteOwner, confirmed: request.Confirmed))
+            HttpContext http, IAccessGrantStore store, LiveChangeNotifier changes) => ChangeAsync(
+                new(request.OperationId, ActorIssuer(http), ActorSubject(http), id, request.ExpectedRevision,
+                    AccessChangeKind.PromoteOwner, Confirmed: request.Confirmed), store, changes, http.RequestAborted))
             .RequireAuthorization(WorkspacePolicies.ManageOwners).Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, MediaTypeNames.Application.ProblemJson).Produces<WorkspaceAccessProblemDetails>(403, MediaTypeNames.Application.ProblemJson).Produces<WorkspaceAccessProblemDetails>(404, MediaTypeNames.Application.ProblemJson).ProducesValidationProblem();
         management.MapPost("/members/{id:guid}/remove", (Guid id, WorkspaceMemberChangeRequest request,
-            HttpContext http, IAccessGrantStore store, LiveChangeNotifier changes) => ChangeAsync(http, store, changes,
-                request.OperationId, request.ExpectedRevision, id, AccessChangeKind.Remove))
+            HttpContext http, IAccessGrantStore store, LiveChangeNotifier changes) => ChangeAsync(
+                new(request.OperationId, ActorIssuer(http), ActorSubject(http), id, request.ExpectedRevision,
+                    AccessChangeKind.Remove), store, changes, http.RequestAborted))
             .RequireAuthorization(WorkspacePolicies.Administer).Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, MediaTypeNames.Application.ProblemJson).Produces<WorkspaceAccessProblemDetails>(403, MediaTypeNames.Application.ProblemJson).Produces<WorkspaceAccessProblemDetails>(404, MediaTypeNames.Application.ProblemJson).ProducesValidationProblem();
         management.MapPost("/membership/leave", (WorkspaceMemberChangeRequest request,
-            HttpContext http, IAccessGrantStore store, LiveChangeNotifier changes) => ChangeAsync(http, store, changes,
-                request.OperationId, request.ExpectedRevision, Guid.Empty, AccessChangeKind.Leave))
+            HttpContext http, IAccessGrantStore store, LiveChangeNotifier changes) => ChangeAsync(
+                new(request.OperationId, ActorIssuer(http), ActorSubject(http), Guid.Empty, request.ExpectedRevision,
+                    AccessChangeKind.Leave), store, changes, http.RequestAborted))
             .RequireAuthorization(WorkspacePolicies.Member).Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, MediaTypeNames.Application.ProblemJson).Produces<WorkspaceAccessProblemDetails>(403, MediaTypeNames.Application.ProblemJson).Produces<WorkspaceAccessProblemDetails>(404, MediaTypeNames.Application.ProblemJson).ProducesValidationProblem();
         return management;
     }
 
-    private static async Task<IResult> ChangeAsync(HttpContext http, IAccessGrantStore store, LiveChangeNotifier changes,
-        Guid operation, long revision, Guid target, AccessChangeKind kind, WorkspaceRole? role = null, bool confirmed = false,
-        bool includeUnreleased = false)
+    private static string ActorIssuer(HttpContext http) => http.User.FindFirstValue("iss")!;
+    private static string ActorSubject(HttpContext http) =>
+        (http.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? http.User.FindFirstValue("sub"))!;
+
+    private static async Task<IResult> ChangeAsync(AccessChange command, IAccessGrantStore store, LiveChangeNotifier changes,
+        CancellationToken cancellationToken)
     {
-        if (operation == Guid.Empty || revision < 0)
+        if (command.OperationId == Guid.Empty || command.ExpectedRevision < 0)
             return Results.ValidationProblem(new Dictionary<string, string[]> { ["request"] = ["Provide an operation ID and current revision."] });
-        AccessChangeResult result = await store.ChangeAsync(new(operation, http.User.FindFirstValue("iss")!,
-            (http.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? http.User.FindFirstValue("sub"))!, target,
-            revision, kind, role, confirmed, includeUnreleased), http.RequestAborted);
+        AccessChangeResult result = await store.ChangeAsync(command, cancellationToken);
         WorkspaceMemberResponse? member = result.Membership is null ? null : WorkspaceMemberResponse.From(result.Membership);
         WorkspaceViewerPolicyResponse? policy = result.ViewerPolicy is null ? null : new(result.ViewerPolicy.IncludeUnreleased, result.ViewerPolicy.Revision);
         if (result.Status == "applied")
         {
-            changes.RetentionChanged();
+            if (!result.WasReplayed()) changes.RetentionChanged();
             return Results.Ok(new WorkspaceAccessChangeResponse(result.OperationId, result.Status, member, policy, null));
         }
 

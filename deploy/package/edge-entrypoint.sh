@@ -2,6 +2,14 @@
 set -eu
 export SFTPGO_HTTP__HEADERS__0__VALUE="$(cat /run/secrets/camera-callback-key)"
 [ -n "$SFTPGO_HTTP__HEADERS__0__VALUE" ] || exit 1
+callback_root=/etc/sftpgo/callback-trust/root.pem
+if ! callback_constraints=$(openssl x509 -in "$callback_root" -noout -ext basicConstraints 2>/dev/null) \
+  || ! printf '%s\n' "$callback_constraints" | grep -q 'CA:TRUE' \
+  || [ "$(grep -c -- '-----BEGIN CERTIFICATE-----' "$callback_root")" != 1 ] \
+  || grep -Eq -- '-----BEGIN .*PRIVATE KEY-----' "$callback_root"; then
+  echo 'The callback HTTPS CA certificate is missing or invalid; ingress remains closed.' >&2
+  exit 1
+fi
 if [ "${SFTPGO_FTPD__BINDINGS__0__TLS_MODE:-0}" != 0 ]; then
   bundle=/etc/sftpgo/certs/server.pem
   root=/etc/sftpgo/certs/root.pem

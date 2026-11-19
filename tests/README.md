@@ -83,7 +83,7 @@ Run checks from the repository root with Python 3.10+ unless noted. These use co
 | `python tests/verify-release-build.py` | Check Compose package construction and refusal paths with controlled fixtures. |
 | `python tests/verify-ftps-edge.py` | Exercise the pinned disposable edge's protocol behavior and controlled certificate replacement. Requires OpenSSL and a Docker setup that lets the container reach the fixture callback at `host.docker.internal`, as Docker Desktop does. Add `--legacy` for the separate RSA AES-CBC profile. |
 | `python tests/verify-keycloak-theme.py` | Check native enrollment defaults/verified-email mapper and theme preflight, selection and fallback; shell cases use the pinned Keycloak image and a controlled administrative-command stub. Requires Docker; this optional check does not prove email delivery or account enrollment. |
-| `python tests/verify-sftpgo-httpfs.py` | Characterize synchronous completion, same-name uploads, rejected append/resume and hook-failure cleanup with synthetic bytes on a disposable loopback FTP endpoint; requires Docker. |
+| `python tests/verify-sftpgo-httpfs.py` | Exercise verified HTTPS for auth, the synchronous hook and HTTPFs, including TLS and key refusal, replacement and rollback. The disposable FTP endpoint also checks same-name uploads, append/resume refusal and hook-failure cleanup. Requires Docker Desktop and OpenSSL. |
 
 `camera_ftp.py` is the reusable synthetic client, not a standalone acceptance run. It keeps the socket address separate from the TLS hostname and never falls back to plaintext after TLS failure.
 

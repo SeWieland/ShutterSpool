@@ -227,6 +227,41 @@ test('Reevaluate preview and confirmation are owner-fenced and require online st
     expect(endpoints.preview).toHaveBeenCalledTimes(2);
 });
 
+test.each([
+    { phase: 'preview', status: 409, message: 'State changed.', refresh: 1 },
+    { phase: 'confirm', status: 409, message: 'State changed.', refresh: 1 },
+    { phase: 'confirm', status: 404, message: 'Outcome uncertain.', refresh: 1 },
+    { phase: 'preview', status: 404, message: 'This destination or original is unavailable.', refresh: 0 },
+    { phase: 'preview', status: 503, message: 'Unable to preview Reevaluate.', refresh: 0 },
+])('Reevaluate $phase handles $status and waits for a deliberate retry', async ({ phase, status, message, refresh }) => {
+    if (phase === 'confirm') {
+        endpoints.preview.mockResolvedValueOnce({ confirmationToken: 'first', explanation: 'First preview' });
+        endpoints.confirm.mockRejectedValueOnce({ status });
+    } else {
+        endpoints.preview.mockRejectedValueOnce({ status });
+    }
+    const view = await mountSuspended(ReevaluateAction, { route: '', global, props: { assetId: 'asset', destinationId: 'destination', online: true } });
+    onTestFinished(() => view.unmount());
+    await view.get('button').trigger('click');
+    await flushPromises();
+    if (phase === 'confirm') {
+        await view.get('.actions button').trigger('click');
+        await flushPromises();
+        expect(endpoints.confirm).toHaveBeenCalledExactlyOnceWith('asset', 'destination', { confirmationToken: 'first' });
+    }
+    expect(view.get('[role="status"]').text()).toContain(message);
+    expect(view.find('.actions').exists()).toBe(false);
+    expect(view.emitted('refresh') ?? []).toHaveLength(refresh);
+    expect(endpoints.preview).toHaveBeenCalledTimes(1);
+
+    endpoints.preview.mockResolvedValueOnce({ confirmationToken: 'retry', explanation: 'New preview' });
+    await view.get('button').trigger('click');
+    await flushPromises();
+    expect(view.text()).toContain('New preview');
+    expect(endpoints.preview).toHaveBeenCalledTimes(2);
+    expect(endpoints.confirm).toHaveBeenCalledTimes(phase === 'confirm' ? 1 : 0);
+});
+
 test('Gallery route-only reevaluation is limited to released current targets and avoids duplicate visible work actions', async () => {
     const target = { assetId: 'asset', destinationId: 'destination' };
     let work: object[] = [];

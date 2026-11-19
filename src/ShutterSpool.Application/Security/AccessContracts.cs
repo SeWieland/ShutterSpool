@@ -19,7 +19,12 @@ public sealed record AccessChange(Guid OperationId, string ActorIssuer, string A
     long ExpectedRevision, AccessChangeKind Kind, WorkspaceRole? Role = null, bool Confirmed = false,
     bool IncludeUnreleased = false);
 public sealed record AccessChangeResult(Guid OperationId, string Status, WorkspaceMembership? Membership = null,
-    WorkspaceViewerPolicy? ViewerPolicy = null);
+    WorkspaceViewerPolicy? ViewerPolicy = null)
+{
+    internal bool IsReplay { get; init; }
+
+    public bool WasReplayed() => IsReplay;
+}
 public sealed record SafeDelivery(Guid Id, Guid AssetId, string State, bool CanRetry);
 public interface IWorkspaceMediaScope
 {

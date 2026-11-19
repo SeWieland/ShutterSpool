@@ -121,7 +121,9 @@ test('Trash uncertainty and shared pending state block submit while verification
 });
 
 test('resume recovery reads forward cancellation and cannot update an action after owner replacement', async () => {
-    const response = Promise.withResolvers(), get = vi.fn(() => response.promise);
+    const stale = Promise.withResolvers();
+    const current = Promise.withResolvers();
+    const get = vi.fn().mockReturnValueOnce(stale.promise).mockReturnValueOnce(current.promise);
     const post = vi.fn().mockRejectedValue({ status: 503 });
     management.captures = { byId: () => ({ get, resume: { post } }) };
     const wrapper = await mountEditor(CaptureResumeAction, { captureId: 'shot', evidence: { ...evidence(), isPaused: true, disposition: 'active' } });
@@ -131,11 +133,19 @@ test('resume recovery reads forward cancellation and cannot update an action aft
     expect(signal).toBeInstanceOf(AbortSignal);
     await wrapper.setProps({ captureId: 'other' });
     expect(signal.aborted).toBe(true);
-    response.resolve({ retention: { captureRevision: 99 } });
+    await click(wrapper, 'Resume delivery');
+    await click(wrapper, 'Check current details');
+    stale.resolve({ retention: { captureRevision: 99 } });
     await flushPromises();
-    expect(wrapper.emitted('refresh')).toEqual([['shot']]);
+    expect(wrapper.emitted('refresh')).toEqual([['shot'], ['other']]);
     expect(wrapper.text()).not.toContain('Current details checked');
-    expect(post.mock.calls).toEqual([[{ expectedRevision: 7 }]]);
+    expect(button(wrapper, 'Checking current details…').element.disabled).toBe(true);
+    current.resolve({ retention: { captureRevision: 8 } });
+    await flushPromises();
+    expect(wrapper.emitted('refresh')).toEqual([['shot'], ['other'], ['other']]);
+    expect(wrapper.text()).toContain('Current details checked');
+    expect(button(wrapper, 'Check current details').element.disabled).toBe(false);
+    expect(post.mock.calls).toEqual([[{ expectedRevision: 7 }], [{ expectedRevision: 7 }]]);
 });
 
 test('No delivery intended requires positive unmatched evidence and never infers permission from empty delivery', async () => {

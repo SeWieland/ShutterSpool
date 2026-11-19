@@ -23,6 +23,47 @@ test('cancelled navigation leaves the mounted aperture on the current view', asy
     expect(view.get<HTMLInputElement>('input[aria-label="Add tag"]').element.value).toBe('unfinished');
 });
 
+test('workspace departure protects unresolved edits and allows clean or confirmed navigation', async () => {
+    const { view } = await mountWorkspace({ curation: true });
+    const router = view.vm.$router;
+    const original = router.currentRoute.value.fullPath;
+    const target = { path: '/workspace-departure-test', query: router.currentRoute.value.query };
+    const removeRoute = router.addRoute({ path: target.path, component: { render: () => null } });
+    const input = view.get<HTMLInputElement>('input[aria-label="Add tag"]');
+    const unload = () => window.dispatchEvent(new Event('beforeunload', { cancelable: true }));
+
+    try {
+        expect(unload()).toBe(true);
+        await router.push(target);
+        expect(router.currentRoute.value.path).toBe(target.path);
+        expect(window.confirm).not.toHaveBeenCalled();
+        await router.push(original);
+
+        await input.setValue('unfinished draft');
+        expect(unload()).toBe(false);
+        vi.mocked(window.confirm).mockReturnValueOnce(false);
+        await router.push(target);
+        expect(router.currentRoute.value.fullPath).toBe(original);
+        expect(input.element.value).toBe('unfinished draft');
+
+        await input.setValue('');
+        expect(unload()).toBe(true);
+        await router.push(target);
+        expect(router.currentRoute.value.path).toBe(target.path);
+        expect(window.confirm).toHaveBeenCalledTimes(1);
+        await router.push(original);
+
+        await input.setValue('discard this draft');
+        vi.mocked(window.confirm).mockReturnValueOnce(true);
+        await router.push(target);
+        expect(router.currentRoute.value.path).toBe(target.path);
+        expect(window.confirm).toHaveBeenCalledTimes(2);
+    } finally {
+        await router.push(original);
+        removeRoute();
+    }
+});
+
 test('explicit Capture links retain the requested photo despite Curation membership', async () => {
     for (const released of [false, true]) {
         transport.detail.mockImplementation(async id => photo(id, { curation: { revision: 1, rating: 0, releasedAt: released ? new Date() : null } }));
@@ -102,7 +143,7 @@ test('targeted reconciliation fences late success and failure after view, query,
         else pending.resolve(photo('a', { displayName: 'stale detail' }));
         await active;
         expect(transport.failure).not.toHaveBeenCalled();
-        expect(transport.page.mock.calls.length).toBe(before + Number(change === 'query'));
+        expect(transport.page).toHaveBeenCalledTimes(before + Number(change === 'query'));
         if (change !== 'dispose') expect(view.text()).not.toContain('stale detail');
         dispose();
     }

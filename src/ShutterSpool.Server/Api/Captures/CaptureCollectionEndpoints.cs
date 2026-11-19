@@ -19,6 +19,8 @@ public sealed class CaptureCollectionConflictProblemDetails : ProblemDetails
 
 public static class CaptureCollectionEndpoints
 {
+    private const string ItemsField = "items";
+
     public static RouteGroupBuilder MapCaptureCollectionEndpoints(this RouteGroupBuilder management)
     {
         RouteGroupBuilder captures = management.MapGroup("/captures");
@@ -49,13 +51,13 @@ public static class CaptureCollectionEndpoints
         ShutterSpool.Application.Security.WorkspaceAccessContext access, CancellationToken token)
     {
         if (request.Items is null || request.Items.Length is < 1 or > 100)
-            return Invalid("items", "Provide 1 to 100 Captures.");
+            return Invalid(ItemsField, "Provide 1 to 100 Captures.");
         if (request.Items.Any(item => item is null))
-            return Invalid("items", "Each item must include a Capture ID and revision.");
+            return Invalid(ItemsField, "Each item must include a Capture ID and revision.");
         if (request.TargetCollectionId == Guid.Empty || request.Items.Any(item => item.CaptureId == Guid.Empty || item.ExpectedRevision < 0))
-            return Invalid("items", "Provide an existing target and Capture IDs with non-negative revisions.");
+            return Invalid(ItemsField, "Provide an existing target and Capture IDs with non-negative revisions.");
         if (request.Items.Select(item => item.CaptureId).Distinct().Count() != request.Items.Length)
-            return Invalid("items", "Capture IDs must be distinct.");
+            return Invalid(ItemsField, "Capture IDs must be distinct.");
         CollectionMoveResult[] results;
         try
         {
@@ -74,7 +76,7 @@ public static class CaptureCollectionEndpoints
             }
             results = [.. admitted];
         }
-        catch (ArgumentException exception) { return Invalid("items", exception.Message); }
+        catch (ArgumentException exception) { return Invalid(ItemsField, exception.Message); }
         Guid[] captureIds = [.. results.Where(result => result.Current is not null).Select(result => result.CaptureId).Distinct()];
         IReadOnlyDictionary<Guid, CaptureRetentionSummary> summaries = await retention.GetCaptureSummariesAsync(
             captureIds, DateTimeOffset.UtcNow, token);

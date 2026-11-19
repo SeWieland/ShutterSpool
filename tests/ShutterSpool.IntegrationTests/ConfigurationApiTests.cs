@@ -358,12 +358,23 @@ public sealed partial class ConfigurationApiTests
         SourceConfigurationResponse modernConfig = (await defaultRead.Content.ReadFromJsonAsync<SourceConfigurationResponse>(token))!;
         Assert.Equal("ModernFtps", modernConfig.ConnectionProfile);
 
+        Guid defaultCollection = Guid.NewGuid();
+        await using (var database = new ShutterSpoolDbContext(fixture.Database.Options))
+        {
+            database.Collections.Add(new() { Id = defaultCollection, Name = "Incoming", Path = "Incoming", Identity = "INCOMING" });
+            await database.SaveChangesAsync(token);
+        }
+
         using HttpResponseMessage optedCreate = await fixture.Client.PostAsJsonAsync("/management/sources",
-            CameraRequest("Legacy enabled", "LegacyFtps"), token);
+            new CreateSourceRequest(" Legacy enabled ", "CameraFtpUpload", "LegacyFtps",
+                DelaySeconds: 90, CollectionId: defaultCollection), token);
         optedCreate.EnsureSuccessStatusCode();
         CreatedSourceResponse opted = (await optedCreate.Content.ReadFromJsonAsync<CreatedSourceResponse>(token))!;
         using HttpResponseMessage optedRead = await fixture.Client.GetAsync($"/management/sources/{opted.Id}", token);
         SourceConfigurationResponse optedConfig = (await optedRead.Content.ReadFromJsonAsync<SourceConfigurationResponse>(token))!;
+        Assert.Equal("Legacy enabled", optedConfig.Name);
+        Assert.Equal(90, optedConfig.CurationDelaySeconds);
+        Assert.Equal(defaultCollection, optedConfig.CollectionId);
         Assert.Equal("LegacyFtps", optedConfig.ConnectionProfile);
         Assert.Equal(1, optedConfig.CredentialGeneration);
 
@@ -372,6 +383,8 @@ public sealed partial class ConfigurationApiTests
                 "CameraFtpUpload", "LegacyFtps"), token);
         Assert.Equal(HttpStatusCode.OK, omittedTrue.StatusCode);
         SourceConfigurationResponse preservedTrue = (await omittedTrue.Content.ReadFromJsonAsync<SourceConfigurationResponse>(token))!;
+        Assert.Equal(3_600, preservedTrue.CurationDelaySeconds);
+        Assert.Equal(defaultCollection, preservedTrue.CollectionId);
         Assert.Equal("LegacyFtps", preservedTrue.ConnectionProfile);
         Assert.Equal(optedConfig.CredentialGeneration, preservedTrue.CredentialGeneration);
 
@@ -945,7 +958,7 @@ public sealed partial class ConfigurationApiTests
             {
                 Enabled = true,
                 CallbackKey = "synthetic-camera-callback-key-at-least-32",
-                CallbackBaseUrl = "http://localhost:8081/internal/camera",
+                CallbackBaseUrl = "https://localhost:8081/internal/camera",
                 InternalPort = 8081,
                 Profiles = new CameraIngressProfiles
                 {
@@ -977,7 +990,7 @@ public sealed partial class ConfigurationApiTests
                     ["ShutterSpool:Spool:ReservedBytes"] = "0",
                     ["ShutterSpool:CameraIngress:Enabled"] = "true",
                         ["ShutterSpool:CameraIngress:CallbackKey"] = "synthetic-camera-callback-key-at-least-32",
-                        ["ShutterSpool:CameraIngress:CallbackBaseUrl"] = "http://localhost:8081/internal/camera",
+                        ["ShutterSpool:CameraIngress:CallbackBaseUrl"] = "https://localhost:8081/internal/camera",
                     ["ShutterSpool:CameraIngress:InternalPort"] = "8081",
                 }));
             }

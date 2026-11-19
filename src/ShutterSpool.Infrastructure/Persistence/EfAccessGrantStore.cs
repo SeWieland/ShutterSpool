@@ -47,7 +47,7 @@ internal sealed partial class EfAccessGrantStore(ShutterSpoolDbContext database)
         WorkspaceAccessOperationEntity? recorded = await database.Set<WorkspaceAccessOperationEntity>().AsNoTracking()
             .SingleOrDefaultAsync(item => item.Id == change.OperationId, cancellationToken);
         if (recorded is not null)
-            return recorded.Request == request ? JsonSerializer.Deserialize<AccessChangeResult>(recorded.Result)!
+            return recorded.Request == request ? JsonSerializer.Deserialize<AccessChangeResult>(recorded.Result)! with { IsReplay = true }
                 : new(change.OperationId, Conflict);
 
         // Always read current authority inside the tenant serialization boundary.

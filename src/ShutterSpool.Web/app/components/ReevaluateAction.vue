@@ -15,6 +15,12 @@ function clear() {
     busy.value = false;
     emit('busy', false);
 }
+function failureOutcome(status: number | undefined, confirm: boolean) {
+    if (status === 409) return { message: 'State changed. Refresh and preview Reevaluate again.', refresh: true };
+    if (confirm) return { message: 'Outcome uncertain. Refresh work before issuing another action.', refresh: true };
+    if (status === 404) return { message: 'This destination or original is unavailable. Check destination settings.', refresh: false };
+    return { message: 'Unable to preview Reevaluate. Try again when connected.', refresh: false };
+}
 async function command(confirm = false) {
     if (busy.value || props.disabled || props.online !== true || !props.assetId || !props.destinationId || confirm && !preview.value?.confirmationToken) return;
     const assetId = props.assetId, destinationId = props.destinationId;
@@ -34,13 +40,11 @@ async function command(confirm = false) {
         } else preview.value = result;
     } catch (failure) {
         const status = handleFailure(failure);
-        if (current()) {
-            preview.value = undefined;
-            feedback.value = status === 409 ? 'State changed. Refresh and preview Reevaluate again.'
-                : confirm ? 'Outcome uncertain. Refresh work before issuing another action.'
-                    : status === 404 ? 'This destination or original is unavailable. Check destination settings.' : 'Unable to preview Reevaluate. Try again when connected.';
-            if (confirm || status === 409) emit('refresh');
-        }
+        if (!current()) return;
+        const outcome = failureOutcome(status, confirm);
+        preview.value = undefined;
+        feedback.value = outcome.message;
+        if (outcome.refresh) emit('refresh');
     } finally {
         if (request === sequence) { busy.value = false; emit('busy', false); }
     }

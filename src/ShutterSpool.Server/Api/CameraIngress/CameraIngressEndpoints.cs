@@ -121,8 +121,8 @@ internal static class CameraIngressEndpoints
                 case "pre-upload" when request.Status == 1:
                     CameraLogin? login = await ingress.FindLoginAsync(loginId, cancellationToken);
                     if (login is null || !settings.IsEnabled(login.ConnectionProfile)) return Results.StatusCode(403);
-                    await ingress.AdmitAsync(loginId, request.Username, request.SessionId, virtualPath, request.Timestamp.Value,
-                        settings.MaximumUploadBytes, settings.MaximumConcurrentTransfers, settings.TransferTimeoutSeconds, cancellationToken);
+                    await ingress.AdmitAsync(new(loginId, request.Username, request.SessionId, virtualPath, request.Timestamp.Value),
+                        new(settings.MaximumUploadBytes, settings.MaximumConcurrentTransfers, settings.TransferTimeoutSeconds), cancellationToken);
                     return Results.Ok();
                 case "pre-upload":
                     return Results.StatusCode(403);

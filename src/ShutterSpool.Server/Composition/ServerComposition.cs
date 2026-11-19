@@ -69,7 +69,7 @@ internal static class ServerComposition
         cameraCredentialPolicy.Validate();
         builder.Services.AddSingleton(cameraCredentialPolicy);
         builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
-        if (cameraIngress.Enabled) ConfigureCameraListener(builder, cameraIngress.InternalPort);
+        if (cameraIngress.Enabled) ConfigureCameraListener(builder, cameraIngress);
         builder.AddServiceDefaults();
         builder.Services.AddOpenApi();
         builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
@@ -267,10 +267,15 @@ internal static class ServerComposition
             extensions: new Dictionary<string, object?> { ["errorCode"] = errorCode }).ExecuteAsync(context);
     }
 
-    private static void ConfigureCameraListener(WebApplicationBuilder builder, int internalPort)
+    private static void ConfigureCameraListener(WebApplicationBuilder builder, CameraIngressSettings ingress)
     {
         string? urls = builder.Configuration[Microsoft.AspNetCore.Hosting.WebHostDefaults.ServerUrlsKey]
             ?? builder.WebHost.GetSetting(Microsoft.AspNetCore.Hosting.WebHostDefaults.ServerUrlsKey);
+        IConfigurationSection callback = builder.Configuration.GetSection("Kestrel:Endpoints:CameraCallback");
+        string address = ingress.InternalListenOnAllInterfaces ? "0.0.0.0" : "localhost";
+        callback["Url"] = $"https://{address}:{ingress.InternalPort}";
+        callback["Certificate:Path"] = ingress.CallbackCertificatePath;
+        callback["Certificate:KeyPath"] = ingress.CallbackCertificatePath;
         builder.WebHost.ConfigureKestrel((_, server) =>
         {
             if (!string.IsNullOrWhiteSpace(urls))
@@ -278,7 +283,8 @@ internal static class ServerComposition
                 foreach (string value in urls.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                     ConfigurePublicListener(server, value);
             }
-            server.ListenAnyIP(internalPort);
+            if (string.IsNullOrWhiteSpace(ingress.CallbackCertificatePath))
+                throw new InvalidOperationException("Enabled camera ingress requires a dedicated callback HTTPS certificate.");
         });
     }
 

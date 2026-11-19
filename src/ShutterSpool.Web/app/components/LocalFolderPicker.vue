@@ -33,7 +33,14 @@ async function browse(value = '') {
             const detail = (failure as { detail?: string })?.detail;
             error.value = detail || 'We could not open this folder. Check the path and server permissions, or choose another folder.';
         }
-    } finally { if (browseController === controller) browseController = undefined; if (!disposed && request === sequence) busy.value = false; }
+    } finally {
+        if (browseController === controller) {
+            browseController = undefined;
+        }
+        if (!disposed && request === sequence) {
+            busy.value = false;
+        }
+    }
 }
 function choose() {
     if (!disposed && !busy.value && props.online && listing.value?.path) {
@@ -54,7 +61,7 @@ watch(() => props.online, online => { if (!online) { sequence++; cancelBrowse();
         <p id="folder-browser-help" class="muted">Folders on the machine running ShutterSpool. Choose an existing folder where the server can write your photographs.</p>
         <form class="folder-location" @submit.prevent="browse(path)">
             <label class="field">Folder path<input ref="location" v-model="path" autofocus autocomplete="off" maxlength="2048" :disabled="busy || !online" /></label>
-            <button :disabled="busy || !online">Go</button>
+            <button type="submit" :disabled="busy || !online">Go</button>
         </form>
         <div class="actions">
             <button type="button" :disabled="busy || !online" @click="browse()">Drives / roots</button>

@@ -7,7 +7,9 @@ public sealed class CameraIngressSettings
     public bool Enabled { get; init; }
     public string CallbackKey { get; init; } = "";
     public string CallbackBaseUrl { get; init; } = "";
+    public string CallbackCertificatePath { get; init; } = "";
     public int InternalPort { get; init; } = 8081;
+    public bool InternalListenOnAllInterfaces { get; init; }
     public long MaximumUploadBytes { get; init; } = 512L * 1024 * 1024;
     public int MaximumConcurrentTransfers { get; init; } = 16;
     public int MaximumSessionsPerSource { get; init; } = 2;
@@ -38,8 +40,9 @@ public sealed class CameraIngressSettings
     {
         if (CallbackKey.Length < 32) throw new InvalidOperationException("Camera ingress callback key must contain at least 32 characters.");
         if (!Uri.TryCreate(CallbackBaseUrl.TrimEnd('/'), UriKind.Absolute, out Uri? callbackBase)
-            || callbackBase.Scheme is not ("http" or "https") || callbackBase.AbsolutePath != "/internal/camera")
-            throw new InvalidOperationException("Camera ingress callback base URL must point to /internal/camera.");
+            || callbackBase.Scheme != Uri.UriSchemeHttps || callbackBase.Port < 1 || callbackBase.AbsolutePath != "/internal/camera"
+            || callbackBase.UserInfo.Length != 0 || callbackBase.Query.Length != 0 || callbackBase.Fragment.Length != 0)
+            throw new InvalidOperationException("Camera ingress callback base URL must be an HTTPS URL pointing to /internal/camera.");
     }
 
     private void ValidateLimits()

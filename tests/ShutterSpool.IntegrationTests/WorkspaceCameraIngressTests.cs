@@ -63,12 +63,12 @@ public sealed class WorkspaceCameraIngressTests
         await using WebApplication server = await StartAsync(fixture);
         CreatedSource created;
         await using (var scope = WorkspaceFixture.Scope(server.Services, workspaces[0]))
-            created = await scope.ServiceProvider.GetRequiredService<SourceManagementService>().CreateAsync("Synthetic rotated camera", "Delay", 60,
+            created = await scope.ServiceProvider.GetRequiredService<SourceManagementService>().CreateAsync(new("Synthetic rotated camera", "Delay", 60),
                 cancellationToken: Token);
         using HttpClient client = server.GetTestClient();
         client.DefaultRequestHeaders.Add("X-API-KEY", CallbackKey);
         Guid login = await AuthenticateAsync(client, created.Username, created.Secret);
-        string endpoint = $"http://localhost:8081/internal/camera/fs/{login:N}";
+        string endpoint = $"https://localhost:8081/internal/camera/fs/{login:N}";
         long admitted = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1_000_000;
         using (HttpResponseMessage admission = await client.PostAsJsonAsync(hookPath, Event("pre-upload", created.Username, endpoint, admitted), Token))
             Assert.Equal(HttpStatusCode.OK, admission.StatusCode);
@@ -125,7 +125,7 @@ public sealed class WorkspaceCameraIngressTests
         await using (WebApplication server = await StartAsync(fixture))
         {
             await using (var scope = WorkspaceFixture.Scope(server.Services, workspaces[0]))
-                created = await scope.ServiceProvider.GetRequiredService<SourceManagementService>().CreateAsync("Synthetic camera", "Delay", 60,
+                created = await scope.ServiceProvider.GetRequiredService<SourceManagementService>().CreateAsync(new("Synthetic camera", "Delay", 60),
                     cancellationToken: Token);
             using HttpClient client = server.GetTestClient();
             using (HttpResponseMessage denied = await client.PostAsJsonAsync("/internal/camera/auth", new { username = created.Username, password = created.Secret }, Token))
@@ -137,7 +137,7 @@ public sealed class WorkspaceCameraIngressTests
                 using HttpResponseMessage rejectedHandle = await client.GetAsync($"/internal/camera/fs/{handle}/stat/%2F", Token);
                 Assert.Equal(HttpStatusCode.Forbidden, rejectedHandle.StatusCode);
             }
-            string endpoint = $"http://localhost:8081/internal/camera/fs/{login:N}";
+            string endpoint = $"https://localhost:8081/internal/camera/fs/{login:N}";
             long admitted = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1_000_000;
             using (HttpResponseMessage admission = await client.PostAsJsonAsync("/internal/camera/hook", Event("pre-upload", created.Username, endpoint, admitted), Token))
                 Assert.Equal(HttpStatusCode.OK, admission.StatusCode);
@@ -203,7 +203,7 @@ public sealed class WorkspaceCameraIngressTests
         builder.Configuration["Logging:LogLevel:Default"] = "Warning";
         foreach ((string key, string value) in new Dictionary<string, string>
         {
-            ["Enabled"] = "true", ["CallbackKey"] = CallbackKey, ["CallbackBaseUrl"] = "http://localhost:8081/internal/camera",
+            ["Enabled"] = "true", ["CallbackKey"] = CallbackKey, ["CallbackBaseUrl"] = "https://localhost:8081/internal/camera",
             ["InternalPort"] = "8081", ["Profiles:ModernFtps:Enabled"] = "true", ["Profiles:ModernFtps:ControlPort"] = "2121",
             ["MaximumUploadBytes"] = "1024", ["MaximumConcurrentTransfers"] = "1",
         }) builder.Configuration["ShutterSpool:CameraIngress:" + key] = value;

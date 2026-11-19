@@ -92,6 +92,34 @@ public sealed partial class WorkspaceTenancyPostgresTests
         await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => provider.InitializeShutterSpoolAsync(fixture.Configuration, TestContext.Current.CancellationToken));
     }
 
+    [Theory]
+    [InlineData("control", "studio0", "Control runtime credentials can connect to a tenant database.")]
+    [InlineData("studio0", "studio1", "Workspace runtime credentials can connect to another workspace or the control database.")]
+    [InlineData("studio0", "control", "Workspace runtime credentials can connect to another workspace or the control database.")]
+    public async Task Startup_refuses_cross_database_runtime_privileges(string actor, string target, string expected)
+    {
+        await using var fixture = await WorkspaceFixture.CreateAsync();
+        CancellationToken token = TestContext.Current.CancellationToken;
+        await fixture.ProvisionAsync();
+        var connections = new Dictionary<string, NpgsqlConnectionStringBuilder>
+        {
+            ["control"] = new(fixture.Configuration.GetConnectionString("shutterspool-control")),
+            ["studio0"] = new(fixture.Connection(0)),
+            ["studio1"] = new(fixture.Connection(1)),
+        };
+        await using var control = fixture.ControlMigrationDatabase();
+        await control.Database.OpenConnectionAsync(token);
+        await using var grant = new NpgsqlCommand(
+            $"GRANT CONNECT ON DATABASE \"{connections[target].Database}\" TO \"{connections[actor].Username}\"",
+            (NpgsqlConnection)control.Database.GetDbConnection());
+        await grant.ExecuteNonQueryAsync(token);
+
+        await using ServiceProvider provider = fixture.Services();
+        var refusal = await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(
+            () => provider.InitializeShutterSpoolAsync(fixture.Configuration, token));
+        Assert.Equal(expected, refusal.Message);
+    }
+
     [Fact]
     public async Task Source_routing_rechecks_current_credentials_and_a_control_conflict_leaves_a_repairable_disabled_source()
     {
@@ -103,9 +131,10 @@ public sealed partial class WorkspaceTenancyPostgresTests
         for (int index = 0; index < workspaces.Length; index++)
         {
             await using AsyncServiceScope scope = WorkspaceFixture.Scope(provider, workspaces[index]);
-            var source = new SourceProvisioning(ids[index], "Same name", SourceCurationMode.Delay, 60, "shared-wire-login",
-                $"sources/{ids[index]:N}", [1, 2, 3], SourceType.CameraFtpUpload, SourceConnectionProfile.ModernFtps,
-                ShutterSpool.Domain.Collections.CollectionName.BuiltInId);
+            var source = new SourceProvisioning(ids[index],
+                new("Same name", SourceCurationMode.Delay, 60, SourceType.CameraFtpUpload,
+                    SourceConnectionProfile.ModernFtps, ShutterSpool.Domain.Collections.CollectionName.BuiltInId),
+                "shared-wire-login", $"sources/{ids[index]:N}", [1, 2, 3]);
             ISourceConfigurationStore store = scope.ServiceProvider.GetRequiredService<ISourceConfigurationStore>();
             if (index == 0) await store.CreateAsync(source, TestContext.Current.CancellationToken);
             else
@@ -149,23 +178,36 @@ public sealed partial class WorkspaceTenancyPostgresTests
     [Fact]
     public async Task Partial_provisioning_reconciles_the_same_targets_without_duplicate_grants_or_implicit_owner_changes()
     {
-        await using var fixture = await WorkspaceFixture.CreateAsync();
+        await using var fixture = await WorkspaceFixture.CreateAsync(workspaceCount: 1);
         CancellationToken token = TestContext.Current.CancellationToken;
         await WorkspaceOperator.RunAsync(["--workspace-control-init"], fixture.Configuration, token);
         string original = fixture.Connection(0)!;
         fixture.Configuration[WorkspaceFixture.ConnectionKey(0)] = new NpgsqlConnectionStringBuilder(original) { Password = Guid.NewGuid().ToString("N") }.ConnectionString;
         await Assert.ThrowsAsync<PostgresException>(() => fixture.ProvisionWorkspaceAsync(0));
         Assert.Empty(await fixture.RegistryAsync());
+        await using var control = fixture.ControlMigrationDatabase();
+        WorkspaceRecord claim = await control.Workspaces.AsNoTracking().SingleAsync(token);
+        Assert.False(claim.Ready);
+        await using var database = fixture.MigrationDatabase(0);
+        WorkspaceIdentityEntity identity = await database.WorkspaceIdentities.AsNoTracking().SingleAsync(token);
+        Assert.True(identity.BootstrapComplete);
+        Assert.Equal((claim.Id, claim.StorageIdentity, claim.OperationId), (identity.Id, identity.StorageIdentity, identity.OperationId));
+        WorkspaceRuntime.StorageMarker marker = WorkspaceRuntime.ValidateRoot(claim.Definition);
+        Assert.Equal(claim.OperationId, marker.ProvisionOperation);
+        AuthorizationGrant owner = await database.AuthorizationGrants.AsNoTracking().SingleAsync(token);
         string ownerKey = $"ShutterSpool:Workspaces:Definitions:{WorkspaceFixture.WorkspaceName(0)}:OwnerSubject";
         fixture.Configuration[ownerKey] = "different-owner";
         await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => fixture.ProvisionWorkspaceAsync(0));
         fixture.Configuration[ownerKey] = "studio0";
+        fixture.Configuration[$"ShutterSpool:Workspaces:Definitions:{WorkspaceFixture.WorkspaceName(0)}:SetupOperatorIdentity"] = null;
         fixture.Configuration[WorkspaceFixture.ConnectionKey(0)] = original;
         await fixture.ProvisionAsync();
         await fixture.ProvisionAsync();
-        await using var database = fixture.MigrationDatabase(0);
-        Assert.Single(await database.AuthorizationGrants.ToArrayAsync(token));
-        Assert.Equal("studio0", (await database.AuthorizationGrants.SingleAsync(token)).Subject);
+        WorkspaceDefinition published = Assert.Single(await fixture.RegistryAsync());
+        Assert.Equal(claim.Definition, published);
+        Assert.Equal(marker, WorkspaceRuntime.ValidateRoot(published));
+        AuthorizationGrant confirmedOwner = await database.AuthorizationGrants.AsNoTracking().SingleAsync(token);
+        Assert.Equal((owner.Id, "studio0"), (confirmedOwner.Id, confirmedOwner.Subject));
     }
 
     [Fact]
@@ -495,6 +537,8 @@ public sealed partial class WorkspaceTenancyPostgresTests
         public static AsyncServiceScope Scope(IServiceProvider provider, WorkspaceDefinition workspace)
         { AsyncServiceScope scope = provider.CreateAsyncScope(); scope.ServiceProvider.GetRequiredService<WorkspaceContext>().Bind(workspace); return scope; }
         public ShutterSpoolDbContext MigrationDatabase(int index) => new(databases[index + 1].Options);
+        public WorkspaceControlDbContext ControlMigrationDatabase() =>
+            WorkspaceControlDbContext.Create(Configuration.GetConnectionString("shutterspool-control-migration")!);
         public async Task SetDatabaseAvailableAsync(int index, bool available)
         {
             await using var connection = new NpgsqlConnection(adminConnection);

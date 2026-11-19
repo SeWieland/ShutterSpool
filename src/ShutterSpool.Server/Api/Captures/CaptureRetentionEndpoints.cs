@@ -45,6 +45,8 @@ public sealed record RetentionHistoryPageResponse(RetentionHistoryItemResponse[]
 
 public static class CaptureRetentionEndpoints
 {
+    private const string ResultExtension = "result";
+
     public static RouteGroupBuilder MapCaptureRetentionEndpoints(this RouteGroupBuilder management)
     {
         management.MapGet("/trash", GetTrashAsync).RequireAuthorization(WorkspacePolicies.Curate).WithSummary("List recoverable Trash")
@@ -123,10 +125,10 @@ public static class CaptureRetentionEndpoints
             RetentionOperationStatus.Committed => Results.Ok(response),
             RetentionOperationStatus.Pending => Results.Accepted(value: response),
             RetentionOperationStatus.NotFound => Results.Problem(statusCode: StatusCodes.Status404NotFound,
-                title: "Capture not found", extensions: new Dictionary<string, object?> { ["result"] = response }),
+                title: "Capture not found", extensions: new Dictionary<string, object?> { [ResultExtension] = response }),
             RetentionOperationStatus.Conflict or RetentionOperationStatus.Protected => Results.Conflict(response),
             RetentionOperationStatus.Blocked => Results.Problem(statusCode: StatusCodes.Status423Locked,
-                title: "Permanent deletion is blocked", extensions: new Dictionary<string, object?> { ["result"] = response }),
+                title: "Permanent deletion is blocked", extensions: new Dictionary<string, object?> { [ResultExtension] = response }),
             _ => Results.Problem(statusCode: StatusCodes.Status500InternalServerError, title: "Permanent deletion failed"),
         };
     }
@@ -144,10 +146,10 @@ public static class CaptureRetentionEndpoints
         {
             RetentionOperationStatus.Committed => Results.Ok(response),
             RetentionOperationStatus.NotFound => Results.Problem(statusCode: StatusCodes.Status404NotFound,
-                title: "Capture not found", extensions: new Dictionary<string, object?> { ["result"] = response }),
+                title: "Capture not found", extensions: new Dictionary<string, object?> { [ResultExtension] = response }),
             RetentionOperationStatus.Conflict or RetentionOperationStatus.Protected => Results.Conflict(response),
             RetentionOperationStatus.Blocked => Results.Problem(statusCode: StatusCodes.Status423Locked,
-                title: "Retention operation is blocked", extensions: new Dictionary<string, object?> { ["result"] = response }),
+                title: "Retention operation is blocked", extensions: new Dictionary<string, object?> { [ResultExtension] = response }),
             _ => Results.Problem(statusCode: StatusCodes.Status500InternalServerError, title: "Retention operation failed"),
         };
     }

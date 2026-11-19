@@ -36,7 +36,7 @@ For a package with bundled PostgreSQL, Valkey, Keycloak and Traefik:
 
    ```sh
    umask 077
-   mkdir -p secrets certificates restore-evidence
+   mkdir -p secrets certificates callback-certificates restore-evidence
    cp config/identity.env.example config/identity.env
    ```
 
@@ -44,7 +44,7 @@ For a package with bundled PostgreSQL, Valkey, Keycloak and Traefik:
    Choose a unique project name, free network subnets and reachable HTTPS/ingest addresses.
    Set matching origins and initial Owner subject in `config/appsettings.json` and `config/identity.env`, and replace both Host rules in `package/traefik/dynamic.yml`.
    The [configuration steps](#configure-and-start) identify the required values.
-3. Supply the [secret files for the bundled services](#configure-and-start) and [HTTPS/FTPS certificate files](certificates/README.md#required-files).
+3. Supply the [secret files for the bundled services](#configure-and-start) and [operator certificate files](certificates/README.md#required-files).
    Apply the documented consumer ownership and permissions before starting; certificates come from the operator or an external issuing service.
 4. [Prepare and provision the workspace databases and storage](operations/README.md#workspace-provisioning) using the shared JSON configuration, then start and check readiness:
 
@@ -109,9 +109,9 @@ Do not start overlapping Server instances with different file selections against
    Do not trust the entire backend or cluster network. An existing proxy must overwrite forwarded headers and be the only trusted forwarding source.
 3. Keep `server` and `localhost` in `AllowedHosts` alongside the public application hostname for private callbacks/probes.
    Ensure public application/issuer DNS works for browsers and containers, or explicitly configure the private OIDC backchannel below.
-4. Create private `secrets`, `certificates` and `restore-evidence` directories. Supply the selected secrets without printing them to terminals, command history or logs.
+4. Create private `secrets`, `certificates`, `callback-certificates` and `restore-evidence` directories. Supply the selected secrets without printing them to terminals, command history or logs.
    Use a persistent random base64 32-byte encryption key and a random callback key of at least 64 characters.
-5. Supply the HTTPS and enabled-FTPS certificates described in the [certificate guide](certificates/README.md).
+5. Supply the HTTPS, camera callback and enabled-FTPS certificates described in the [certificate guide](certificates/README.md).
    Consumers mount them read-only; no ACME/DNS credentials belong in this installation.
 6. Check consuming-user permissions and [provision the named workspaces](operations/README.md#workspace-provisioning). Keep Server and edges stopped until provisioning succeeds, then start:
 

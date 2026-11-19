@@ -1,18 +1,19 @@
 using System.Net;
 using System.Net.Sockets;
+using Aspire.Hosting.ApplicationModel;
 using Microsoft.Extensions.Configuration;
 
 namespace ShutterSpool.AppHost;
 
-internal sealed record CameraIngressProfile(string Name, string Edge, int Control, int Start, int End, string AuthPath)
+internal sealed record CameraIngressProfile(string Name, string Edge, int Control, int Start, int End, string AuthSuffix)
 {
     private const string PlainFtpLan = "PlainFtpLan";
     private const string LegacyFtps = "LegacyFtps";
     private static readonly CameraIngressProfile[] Defaults =
     [
-        new("ModernFtps", "camera-edge", 2121, 2122, 2137, "/internal/camera/auth"),
-        new(LegacyFtps, "camera-edge-legacy", 2138, 2139, 2154, "/internal/camera/legacy-auth"),
-        new(PlainFtpLan, "camera-edge-plain", 2155, 2156, 2171, "/internal/camera/plain-auth"),
+        new("ModernFtps", "camera-edge", 2121, 2122, 2137, "auth"),
+        new(LegacyFtps, "camera-edge-legacy", 2138, 2139, 2154, "legacy-auth"),
+        new(PlainFtpLan, "camera-edge-plain", 2155, 2156, 2171, "plain-auth"),
     ];
 
     public bool RequiresTls => Name != PlainFtpLan;
@@ -39,6 +40,9 @@ internal sealed record CameraIngressProfile(string Name, string Edge, int Contro
 
 internal sealed class CameraIngressConfiguration
 {
+    public const string EdgeCallbackTrustPath = "/etc/sftpgo/callback-trust/root.pem";
+    public const string EdgeCertificateDirectories = "/etc/ssl/certs:/etc/sftpgo/callback-trust";
+
     public int MaxConnections { get; }
     public int MaxPerHost { get; }
     public int IdleMinutes { get; }
@@ -47,6 +51,8 @@ internal sealed class CameraIngressConfiguration
     public string ListenAddress { get; }
     public string AdvertisedAddress { get; }
     public string CertificateDirectory { get; }
+    public string CallbackCertificatePath { get; } = "";
+    public string CallbackTrustPath { get; } = "";
 
     public CameraIngressConfiguration(IConfiguration configuration, CameraIngressProfile[] profiles, bool isPublishMode)
     {
@@ -75,6 +81,21 @@ internal sealed class CameraIngressConfiguration
                 CameraIngressCertificate.Validate(Path.Combine(CertificateDirectory, "server.pem"),
                     Path.Combine(CertificateDirectory, "root.pem"), hostname);
         }
+
+        if (isPublishMode) return;
+        if (!configuration.GetValue("ASPIRE_ENABLE_CONTAINER_TUNNEL", true))
+            throw new InvalidOperationException("Camera ingress requires the Aspire container tunnel for private HTTPS callbacks.");
+        string? callbackDirectory = section["CallbackCertificateDirectory"];
+        if (string.IsNullOrWhiteSpace(callbackDirectory))
+            throw new InvalidOperationException("Camera ingress requires ShutterSpool:CameraIngress:CallbackCertificateDirectory containing its dedicated server.pem and root.pem.");
+        callbackDirectory = Path.GetFullPath(callbackDirectory);
+        CallbackCertificatePath = Path.Combine(callbackDirectory, "server.pem");
+        CallbackTrustPath = Path.Combine(callbackDirectory, "root.pem");
+        if (CertificateDirectory.Length > 0 && string.Equals(CallbackCertificatePath, Path.Combine(CertificateDirectory, "server.pem"),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            throw new InvalidOperationException("Camera-facing FTPS and private HTTPS callbacks require separate certificate directories.");
+        string callbackHostname = configuration["AppHost:ContainerHostname"] ?? KnownHostNames.DefaultContainerTunnelHostName;
+        CameraIngressCertificate.ValidateCallback(CallbackCertificatePath, CallbackTrustPath, callbackHostname);
     }
 
     private static bool IsIpv4(string value) =>
