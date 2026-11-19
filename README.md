@@ -1,5 +1,8 @@
 # ShutterSpool
 
+[![SonarQube Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=shutterspool_shutterspool&metric=alert_status&branch=main)](https://sonarcloud.io/summary/overall?id=shutterspool_shutterspool&branch=main)
+[![SonarQube Coverage](https://sonarcloud.io/api/project_badges/measure?project=shutterspool_shutterspool&metric=coverage&branch=main)](https://sonarcloud.io/summary/overall?id=shutterspool_shutterspool&branch=main)
+
 Receive camera media, keep it safe, optionally curate each capture, then deliver the right originals to the configured destinations.
 
 ShutterSpool sits between your camera and the places your photographs should end up.
