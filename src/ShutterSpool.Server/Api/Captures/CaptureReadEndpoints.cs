@@ -1,4 +1,5 @@
 using ShutterSpool.Server.Security;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.WebUtilities;
 using ShutterSpool.Application.Captures;
 using ShutterSpool.Application.Retention;
@@ -100,6 +101,28 @@ public sealed record CaptureDetailResponse(Guid Id, string DisplayName, DateTime
 
 public static class CaptureReadEndpoints
 {
+    private readonly record struct CaptureInboxQuery
+    {
+        [FromQuery(Name = "limit")] public int? Limit { get; init; }
+        [FromQuery(Name = "cursor")] public string? Cursor { get; init; }
+        [FromQuery(Name = "startAt")] public Guid? StartAt { get; init; }
+        [FromQuery(Name = "sourceId")] public Guid? SourceId { get; init; }
+        [FromQuery(Name = "rating")] public int? Rating { get; init; }
+        [FromQuery(Name = "ratingMaximum")] public int? RatingMaximum { get; init; }
+        [FromQuery(Name = "selection")] public string? Selection { get; init; }
+        [FromQuery(Name = "tag")] public string? Tag { get; init; }
+        [FromQuery(Name = "label")] public string? Label { get; init; }
+        [FromQuery(Name = "labels")] public string[]? Labels { get; init; }
+        [FromQuery(Name = "released")] public bool? Released { get; init; }
+        [FromQuery(Name = "held")] public bool? Held { get; init; }
+        [FromQuery(Name = "attention")] public bool? Attention { get; init; }
+        [FromQuery(Name = "sourceIds")] public Guid[]? SourceIds { get; init; }
+        [FromQuery(Name = "collectionIds")] public Guid[]? CollectionIds { get; init; }
+        [FromQuery(Name = "workflows")] public string[]? Workflows { get; init; }
+        [FromQuery(Name = "oldestFirst")] public bool? OldestFirst { get; init; }
+        [FromQuery(Name = "favoritesOnly")] public bool? FavoritesOnly { get; init; }
+    }
+
     public static RouteGroupBuilder MapCaptureReadEndpoints(this RouteGroupBuilder management)
     {
         management.MapGet("/tags", GetTagsAsync).RequireAuthorization(WorkspacePolicies.Member).WithSummary("Suggest existing Capture tags")
@@ -112,29 +135,27 @@ public static class CaptureReadEndpoints
         return management;
     }
 
-    private static async Task<IResult> GetInboxAsync(int? limit, string? cursor, Guid? startAt, Guid? sourceId, int? rating,
-        int? ratingMaximum, string? selection, string? tag, string? label, string[]? labels, bool? released, bool? held,
-        bool? attention, Guid[]? sourceIds, Guid[]? collectionIds, string[]? workflows, bool? oldestFirst, bool? favoritesOnly, CaptureReadService reads,
+    private static async Task<IResult> GetInboxAsync([AsParameters] CaptureInboxQuery query, CaptureReadService reads,
         ICaptureRetentionReadStore retention,
         ShutterSpool.Application.Security.WorkspaceAccessContext access,
         CancellationToken cancellationToken)
     {
-        int pageSize = limit ?? 30;
+        int pageSize = query.Limit ?? 30;
         if (pageSize is < 1 or > 100) return Invalid("limit", "Provide a page size from 1 to 100.");
-        if (cursor is not null && startAt.HasValue) return Invalid("startAt", "Use startAt only on the first Capture page.");
-        IResult? error = ParseCurationChoices(selection, label, labels, out CaptureSelection? selected, out string[]? selectedLabels);
+        if (query.Cursor is not null && query.StartAt.HasValue) return Invalid("startAt", "Use startAt only on the first Capture page.");
+        IResult? error = ParseCurationChoices(query.Selection, query.Label, query.Labels, out CaptureSelection? selected, out string[]? selectedLabels);
         if (error is not null) return error;
-        if (sourceId.HasValue && sourceIds is { Length: > 0 }) return Invalid("sourceIds", "Use either sourceId or sourceIds, not both.");
-        if (sourceIds is { Length: > 30 }) return Invalid("sourceIds", "Provide at most 30 sources.");
-        if (collectionIds is { Length: > 30 }) return Invalid("collectionIds", "Provide at most 30 Collections.");
-        error = ParseWorkflows(workflows, released.HasValue || held.HasValue || attention.HasValue, out var selectedWorkflows);
+        if (query.SourceId.HasValue && query.SourceIds is { Length: > 0 }) return Invalid("sourceIds", "Use either sourceId or sourceIds, not both.");
+        if (query.SourceIds is { Length: > 30 }) return Invalid("sourceIds", "Provide at most 30 sources.");
+        if (query.CollectionIds is { Length: > 30 }) return Invalid("collectionIds", "Provide at most 30 Collections.");
+        error = ParseWorkflows(query.Workflows, query.Released.HasValue || query.Held.HasValue || query.Attention.HasValue, out var selectedWorkflows);
         if (error is not null) return error;
-        Guid[]? selectedSources = sourceIds is { Length: > 0 } ? [.. sourceIds.Distinct().Order()] : null;
-        Guid[]? selectedCollections = collectionIds is { Length: > 0 } ? [.. collectionIds.Distinct().Order()] : null;
-        var filter = new CaptureReadFilter(sourceId, rating, selected, tag, selectedLabels, released, held, attention,
-            ratingMaximum, selectedSources, selectedWorkflows, oldestFirst ?? false, favoritesOnly ?? false,
-            selectedCollections, startAt);
-        return await ReadPageAsync(pageSize, cursor, filter, reads, retention, access, cancellationToken);
+        Guid[]? selectedSources = query.SourceIds is { Length: > 0 } ? [.. query.SourceIds.Distinct().Order()] : null;
+        Guid[]? selectedCollections = query.CollectionIds is { Length: > 0 } ? [.. query.CollectionIds.Distinct().Order()] : null;
+        var filter = new CaptureReadFilter(query.SourceId, query.Rating, selected, query.Tag, selectedLabels, query.Released,
+            query.Held, query.Attention, query.RatingMaximum, selectedSources, selectedWorkflows, query.OldestFirst ?? false,
+            query.FavoritesOnly ?? false, selectedCollections, query.StartAt);
+        return await ReadPageAsync(pageSize, query.Cursor, filter, reads, retention, access, cancellationToken);
     }
 
     private static IResult? ParseCurationChoices(string? selection, string? label, string[]? labels,
