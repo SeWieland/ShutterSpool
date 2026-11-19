@@ -51,11 +51,6 @@ export function clearAccess(
 // Workspace revocation clears private state without ending the shared issuer session.
 export function clearPrivateAccess() {
     generation++;
-    clearNuxtState(
-        (key) =>
-            key.startsWith("capture-draft-") ||
-            key.startsWith("capture-conflict-"),
-    );
     for (const callback of cleared) callback();
 }
 

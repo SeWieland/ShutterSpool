@@ -112,7 +112,7 @@ jobs:
           global-json-file: global.json
       - name: Install Aspire CLI
         run: |
-          dotnet tool install --tool-path "$RUNNER_TEMP/aspire" Aspire.Cli --version 13.6.0
+          dotnet tool install --tool-path "$RUNNER_TEMP/aspire" Aspire.Cli --version 17.0.0
           echo "$RUNNER_TEMP/aspire" >> "$GITHUB_PATH"
       - name: Set up Node.js for attribution generation
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0

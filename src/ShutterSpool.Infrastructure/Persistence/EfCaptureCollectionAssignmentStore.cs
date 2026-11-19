@@ -20,7 +20,7 @@ internal sealed class EfCaptureCollectionAssignmentStore(ShutterSpoolDbContext d
             return new(captureId, CollectionMoveStatus.TargetMissing, null, null);
         }
         // Curation and retention also mutate Captures without taking the Collection-assignment lock.
-        CaptureEntity? capture = await database.Captures.FromSqlInterpolated(
+        CaptureEntity? capture = await database.Captures.FromSql(
             $"SELECT * FROM captures WHERE \"Id\" = {captureId} FOR UPDATE").SingleOrDefaultAsync(token);
         if (capture is null)
         {

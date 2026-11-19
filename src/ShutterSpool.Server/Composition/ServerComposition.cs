@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using Microsoft.OpenApi;
 using ShutterSpool.Application.Workspaces;
 using ShutterSpool.Server.Api.Workspaces;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -27,6 +28,8 @@ namespace ShutterSpool.Server.Composition;
 
 internal static class ServerComposition
 {
+    internal static bool IsGeneratingOpenApi => System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name == "GetDocument.Insider";
+
     public static async Task<int> RunWorkspaceOperatorAsync(string[] args, IConfiguration configuration)
     {
         try
@@ -54,7 +57,9 @@ internal static class ServerComposition
         if (shutdownTimeout <= TimeSpan.Zero) throw new InvalidOperationException("The Server shutdown timeout must be positive.");
         builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = shutdownTimeout);
         ConfigureForwardedHeaders(builder);
-        CameraIngressSettings cameraIngress = builder.Configuration.GetSection("ShutterSpool:CameraIngress").Get<CameraIngressSettings>() ?? new();
+        CameraIngressSettings cameraIngress = IsGeneratingOpenApi
+            ? new()
+            : builder.Configuration.GetSection("ShutterSpool:CameraIngress").Get<CameraIngressSettings>() ?? new();
         cameraIngress.Validate();
         builder.Services.AddSingleton(cameraIngress);
         string? configuredMinimum = builder.Configuration["ShutterSpool:CameraCredentials:MinimumPasswordLength"];
@@ -71,7 +76,7 @@ internal static class ServerComposition
         builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
         if (cameraIngress.Enabled) ConfigureCameraListener(builder, cameraIngress);
         builder.AddServiceDefaults();
-        builder.Services.AddOpenApi();
+        builder.Services.AddOpenApi(options => options.OpenApiVersion = OpenApiSpecVersion.OpenApi3_1);
         builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
         {
             context.ProblemDetails.Extensions.TryAdd("errorCode", context.ProblemDetails.Status switch
@@ -135,7 +140,7 @@ internal static class ServerComposition
 
     private static void AddHostedWorkers(WebApplicationBuilder builder)
     {
-        if (System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name == "GetDocument.Insider") return;
+        if (IsGeneratingOpenApi) return;
         builder.Services.AddHostedService(services => services.GetRequiredService<SourceAuthenticationObservationWorker>());
         builder.Services.AddHostedService<MetadataWorker>();
         builder.Services.AddHostedService<CaptureGroupingWorker>();

@@ -183,7 +183,7 @@ public sealed class CaptureCurationPostgresTests
             {
                 await database.Database.MigrateAsync(token);
                 assetId = await AddAssetAsync(database, sourceId, cancellationToken: token);
-                await database.Database.ExecuteSqlInterpolatedAsync($"UPDATE assets SET \"IngestedAt\" = {DateTimeOffset.UtcNow.AddHours(-2)} WHERE \"Id\" = {assetId}", token);
+                await database.Database.ExecuteSqlAsync($"UPDATE assets SET \"IngestedAt\" = {DateTimeOffset.UtcNow.AddHours(-2)} WHERE \"Id\" = {assetId}", token);
                 Assert.True(await new CaptureGroupingService(new EfCaptureGroupingStore(database)).ProcessOneAsync(token));
                 captureId = await CaptureIdAsync(database, assetId, token);
             }
@@ -336,7 +336,7 @@ public sealed class CaptureCurationPostgresTests
         await journal.CreateAsync(operation, cancellationToken);
         await journal.MarkPromotedAsync(operation.Id, new SpoolWrite(operation.PartialKey, $"originals/{assetId:N}", 16, sha), cancellationToken);
         await journal.CommitAsync(operation.Id, ingestedAt ?? DateTimeOffset.UtcNow, cancellationToken);
-        await database.Database.ExecuteSqlInterpolatedAsync($"UPDATE assets SET \"MetadataState\" = 'Complete', \"MetadataRole\" = {role}, \"CaptureTimeLocal\" = TIMESTAMP '2025-01-01 00:00:00' WHERE \"Id\" = {assetId}", cancellationToken);
+        await database.Database.ExecuteSqlAsync($"UPDATE assets SET \"MetadataState\" = 'Complete', \"MetadataRole\" = {role}, \"CaptureTimeLocal\" = TIMESTAMP '2025-01-01 00:00:00' WHERE \"Id\" = {assetId}", cancellationToken);
         return assetId;
     }
 

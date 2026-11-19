@@ -1,8 +1,10 @@
+using Aspire.Hosting.Dotnet;
 using Microsoft.Extensions.Configuration;
 using ShutterSpool.AppHost;
 
 const string CameraInternalEndpoint = "camera-internal";
 const string DisabledEnvironmentValue = "false";
+const string ServerProject = "../ShutterSpool.Server/ShutterSpool.Server.csproj";
 
 var imagePins = ImagePins.Load();
 var builder = DistributedApplication.CreateBuilder(args);
@@ -27,15 +29,22 @@ var previewPrewarmMode = builder.AddParameter("preview-prewarm-mode", "GridOnly"
 var imaginaryConcurrency = builder.AddParameter("imaginary-concurrency", "20");
 var imaginaryCpus = builder.AddParameter("imaginary-cpus", "2");
 var imaginaryHttpTimeout = builder.AddParameter("imaginary-http-timeout-seconds", "120");
+var postgresPin = new ImagePin("library/postgres", "18.7-trixie", "e754b839f447639b7004895f4d8a4bfcb4e9dbe3a1bc035f27f646562a16fd61");
 var postgres = builder.AddPostgres("postgres", password: postgresPassword)
+    .WithImage(postgresPin.Image, postgresPin.Tag)
+    .WithImageSHA256(postgresPin.Sha256)
     .WithHostPort(builder.Configuration.GetValue("ShutterSpool:Development:DatabasePort", 54329))
     .WithDataVolume("shutterspool-postgres");
 postgres.AddDatabase("keycloak-data", "keycloak");
 var valkey = builder.AddValkey("valkey")
+    .WithImage("valkey/valkey", "9.2.0-trixie")
+    .WithImageSHA256("1c2b25b09f354c66fe994733acdf12fcfd4bdf6f3bd92b88a93a70378d884056")
     .WithDataVolume("shutterspool-valkey");
 var postgresEndpoint = postgres.GetEndpoint("tcp");
 int identityPort = builder.Configuration.GetValue("ShutterSpool:Development:IdentityPort", 8082);
-var keycloak = builder.AddContainer("keycloak", "quay.io/keycloak/keycloak", "26.6")
+var keycloakPin = new ImagePin("quay.io/keycloak/keycloak", "26.8.2", "7e66a96e4739239070aeaf72e4c5decf0f7f682cfc725b9f7ea2b336eaba38b3");
+var keycloak = builder.AddContainer("keycloak", keycloakPin.Image, keycloakPin.Tag)
+    .WithImageSHA256(keycloakPin.Sha256)
     .WithHttpEndpoint(port: identityPort, targetPort: 8080)
     .WithArgs("start", "--import-realm", "--http-enabled=true", "--hostname-strict=false")
     .WithEnvironment("KC_BOOTSTRAP_ADMIN_USERNAME", keycloakAdministrator)
@@ -49,7 +58,8 @@ var keycloak = builder.AddContainer("keycloak", "quay.io/keycloak/keycloak", "26
     .WithBindMount("./Realms", "/opt/shutterspool", isReadOnly: true)
     .WithBindMount("./Themes/shutterspool", "/opt/keycloak/themes/shutterspool", isReadOnly: true)
     .WaitFor(postgres);
-var keycloakReconciler = builder.AddContainer("keycloak-reconciler", "quay.io/keycloak/keycloak", "26.6")
+var keycloakReconciler = builder.AddContainer("keycloak-reconciler", keycloakPin.Image, keycloakPin.Tag)
+    .WithImageSHA256(keycloakPin.Sha256)
     .WithEntrypoint("/bin/sh")
     .WithArgs("/opt/shutterspool/reconcile.sh")
     .WithEnvironment("KEYCLOAK_ADMIN", keycloakAdministrator)
@@ -84,7 +94,7 @@ if (!builder.ExecutionContext.IsPublishMode)
             "-http-read-timeout", imaginaryHttpTimeout, "-http-write-timeout", imaginaryHttpTimeout, "-log-level", "error" })
             context.Args.Add(argument);
     });
-var server = builder.AddProject<Projects.ShutterSpool_Server>("server")
+var server = builder.AddDotnetProject("server", ServerProject, options => options.LaunchProfileName = "http")
     .WithReference(valkey)
     .WaitFor(postgres)
     .WaitFor(valkey)
@@ -120,9 +130,8 @@ if (!builder.ExecutionContext.IsPublishMode)
     {
         MinLength = 32, Lower = true, Upper = true, Numeric = true, Special = false,
     }, secret: true, persist: true);
-    var postgresImage = postgres.Resource.Annotations.OfType<ContainerImageAnnotation>().Single();
-    var databases = builder.AddContainer("workspace-databases", postgresImage.Image,
-            postgresImage.Tag ?? throw new InvalidOperationException("The PostgreSQL dependency requires an explicit image tag."))
+    var databases = builder.AddContainer("workspace-databases", postgresPin.Image, postgresPin.Tag)
+        .WithImageSHA256(postgresPin.Sha256)
         .WithEntrypoint("psql").WithArgs("-f", "/setup/workspace-databases.sql")
         .WithEnvironment("PGHOST", postgresEndpoint.Property(EndpointProperty.Host))
         .WithEnvironment("PGPORT", postgresEndpoint.Property(EndpointProperty.Port))
@@ -133,7 +142,7 @@ if (!builder.ExecutionContext.IsPublishMode)
         .WithBindMount("../../deploy/package/workspace-databases.sql", "/setup/workspace-databases.sql", isReadOnly: true)
         .WaitFor(postgres);
 
-    void ConfigureWorkspace(IResourceBuilder<ProjectResource> resource, bool maintenance)
+    void ConfigureWorkspace(IResourceBuilder<DotnetProjectResource> resource, bool maintenance)
     {
         resource.WithEnvironment("ASPNETCORE_ENVIRONMENT", "Development")
             .WithEnvironment("ShutterSpool__Security__Authority", keycloakAuthority)
@@ -152,9 +161,9 @@ if (!builder.ExecutionContext.IsPublishMode)
                 .WithEnvironment("ConnectionStrings__Workspaces__studio__Migration", ReferenceExpression.Create(
                     $"Host={postgresEndpoint.Property(EndpointProperty.Host)};Port={postgresEndpoint.Property(EndpointProperty.Port)};Database=shutterspool_studio;Username=shutterspool_migration;Password={migrationPassword}"));
     }
-    var control = builder.AddProject<Projects.ShutterSpool_Server>("workspace-control-init", options => options.ExcludeLaunchProfile = true)
+    var control = builder.AddDotnetProject("workspace-control-init", ServerProject, options => options.ExcludeLaunchProfile = true)
         .WithArgs("--workspace-control-init").WaitForCompletion(databases).WaitForCompletion(keycloakReconciler);
-    var workspace = builder.AddProject<Projects.ShutterSpool_Server>("workspace-provision", options => options.ExcludeLaunchProfile = true)
+    var workspace = builder.AddDotnetProject("workspace-provision", ServerProject, options => options.ExcludeLaunchProfile = true)
         .WithArgs("--workspace-provision", "studio").WaitForCompletion(control);
     ConfigureWorkspace(control, maintenance: true);
     ConfigureWorkspace(workspace, maintenance: true);
@@ -172,7 +181,7 @@ ConfigureCameraIngress(builder, server, imagePins);
 if (builder.ExecutionContext.IsPublishMode) ComposePackage.Configure(builder);
 await builder.Build().RunAsync();
 
-static void ConfigureCameraIngress(IDistributedApplicationBuilder builder, IResourceBuilder<ProjectResource> server,
+static void ConfigureCameraIngress(IDistributedApplicationBuilder builder, IResourceBuilder<DotnetProjectResource> server,
     IReadOnlyDictionary<string, ImagePin> imagePins)
 {
     var profiles = CameraIngressProfile.ReadEnabled(builder.Configuration);
@@ -219,7 +228,7 @@ static void ConfigureCameraIngress(IDistributedApplicationBuilder builder, IReso
     }
 }
 
-static void ConfigureCameraProfileFlags(IResourceBuilder<ProjectResource> server, IConfiguration configuration, CameraIngressProfile[] profiles)
+static void ConfigureCameraProfileFlags(IResourceBuilder<DotnetProjectResource> server, IConfiguration configuration, CameraIngressProfile[] profiles)
 {
     foreach (string profile in CameraIngressProfile.Names)
         server.WithEnvironment($"ShutterSpool__CameraIngress__Profiles__{profile}__Enabled",
@@ -228,7 +237,7 @@ static void ConfigureCameraProfileFlags(IResourceBuilder<ProjectResource> server
         .WithEnvironment("ShutterSpool__CameraIngress__Hostname", configuration["ShutterSpool:CameraIngress:Hostname"] ?? "ingest.shutterspool.com");
 }
 
-static void ConfigureCameraIngressLimits(IDistributedApplicationBuilder builder, IResourceBuilder<ProjectResource> server)
+static void ConfigureCameraIngressLimits(IDistributedApplicationBuilder builder, IResourceBuilder<DotnetProjectResource> server)
 {
     foreach (string option in new[] { "MaximumUploadBytes", "MaximumConcurrentTransfers", "MaximumSessionsPerSource", "UploadBandwidthKiBPerSecond", "TransferTimeoutSeconds" })
     {
@@ -237,7 +246,7 @@ static void ConfigureCameraIngressLimits(IDistributedApplicationBuilder builder,
     }
 }
 
-static IResourceBuilder<ContainerResource> AddCameraEdge(IDistributedApplicationBuilder builder, IResourceBuilder<ProjectResource> server,
+static IResourceBuilder<ContainerResource> AddCameraEdge(IDistributedApplicationBuilder builder, IResourceBuilder<DotnetProjectResource> server,
     CameraIngressConfiguration settings, CameraIngressProfile profile, ImagePin edgePin,
     IResourceBuilder<ParameterResource> callbackKey, ReferenceExpression? callbackBaseUrl)
 {

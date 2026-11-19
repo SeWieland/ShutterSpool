@@ -10,7 +10,7 @@ if (workspaceOperation) return await ServerComposition.RunWorkspaceOperatorAsync
 builder.AddShutterSpoolServer();
 await using var app = builder.Build();
 // Build-time OpenAPI discovery executes the entrypoint without operational resources.
-if (System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name != "GetDocument.Insider")
+if (!ServerComposition.IsGeneratingOpenApi)
     await app.InitializeShutterSpoolServerAsync();
 app.MapShutterSpoolServer();
 await app.RunAsync();

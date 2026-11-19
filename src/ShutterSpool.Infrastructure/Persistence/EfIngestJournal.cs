@@ -82,7 +82,7 @@ internal sealed class EfIngestJournal(ShutterSpoolDbContext database, IQuotaRese
     {
         await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await LockRoutingAsync(cancellationToken);
-        IngestOperationEntity operation = await database.Operations.FromSqlInterpolated(
+        IngestOperationEntity operation = await database.Operations.FromSql(
                 $"SELECT * FROM ingest_operations WHERE \"Id\" = {operationId} FOR UPDATE")
             .SingleAsync(cancellationToken);
         if (operation.State == IngestOperationState.Committed.ToString())

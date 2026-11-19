@@ -11,8 +11,7 @@ async function nuxtProject() {
         license: 'https://example.test/license',
         notice: 'https://example.test/notice',
     };
-    const fixtureModule = `export default ${JSON.stringify(attribution)}`;
-    const fixture = `data:text/javascript,${encodeURIComponent(fixtureModule)}`;
+    const fixture = `data:application/json,${encodeURIComponent(JSON.stringify(attribution))}`;
     const hooks = registerHooks({
         resolve(specifier, context, nextResolve) {
             if (context.parentURL?.split('?')[0] === nuxtConfig && specifier === '../../artifacts/attribution/sftpgo.json') {

@@ -338,7 +338,7 @@ internal sealed class CaptureRoutingWorkService(ShutterSpoolDbContext database, 
             select new { item.CaptureId, item.Role, Asset = asset }).SingleOrDefaultAsync(cancellationToken);
         if (member is null) return null;
         CaptureEntity? capture = lockCapture
-            ? await database.Captures.FromSqlInterpolated($"SELECT * FROM captures WHERE \"Id\" = {member.CaptureId} FOR UPDATE").SingleOrDefaultAsync(cancellationToken)
+            ? await database.Captures.FromSql($"SELECT * FROM captures WHERE \"Id\" = {member.CaptureId} FOR UPDATE").SingleOrDefaultAsync(cancellationToken)
             : await database.Captures.AsNoTracking().SingleOrDefaultAsync(item => item.Id == member.CaptureId, cancellationToken);
         if (capture is null) return null;
         CollectionEntity collection = await database.Collections.AsNoTracking()

@@ -57,7 +57,7 @@ public sealed class ArchitectureDatabaseTests
                 """).SingleAsync(token))
                 await Task.Delay(20, token);
             // This fails with lock_not_available if release took the Capture row first.
-            await gate.Database.ExecuteSqlInterpolatedAsync($"SELECT 1 FROM captures WHERE \"Id\" = {id} FOR UPDATE NOWAIT", token);
+            await gate.Database.ExecuteSqlAsync($"SELECT 1 FROM captures WHERE \"Id\" = {id} FOR UPDATE NOWAIT", token);
         }
         finally
         {
@@ -97,7 +97,7 @@ public sealed class ArchitectureDatabaseTests
         CancellationToken token = TestContext.Current.CancellationToken;
         await database.GetService<IMigrator>().MigrateAsync("20261025211318_InitialCreate", token);
         Guid active = Guid.NewGuid(), inactive = Guid.NewGuid(), capture = Guid.NewGuid();
-        await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO authorization_grants (\"Id\",\"Issuer\",\"Subject\",\"IsActive\",\"IsBootstrap\") VALUES ({active},'https://issuer.test','existing',true,true),({inactive},'https://issuer.test','removed',false,false)", token);
+        await database.Database.ExecuteSqlAsync($"INSERT INTO authorization_grants (\"Id\",\"Issuer\",\"Subject\",\"IsActive\",\"IsBootstrap\") VALUES ({active},'https://issuer.test','existing',true,true),({inactive},'https://issuer.test','removed',false,false)", token);
         database.Captures.Add(new() { Id = capture, SourceId = Guid.NewGuid(), NormalizedStem = "existing-synthetic" });
         await database.SaveChangesAsync(token);
         Directory.CreateDirectory(fixture.SpoolRoot);
@@ -153,8 +153,8 @@ public sealed class ArchitectureDatabaseTests
         var correct = new SecretProtector(Options.Create(new CredentialProtectionOptions { EncryptionKey = Convert.ToBase64String(new byte[32]) }));
         await initializer.ValidateSecretKeyAsync(correct, enroll: true, token);
         Guid destination = Guid.NewGuid();
-        await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO destinations (\"Id\", \"Name\", \"Kind\", \"Enabled\") VALUES ({destination}, 'synthetic-key-check', 'local', true)", token);
-        await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO destination_credentials (\"Id\", \"DestinationId\", \"EncryptedSecret\") VALUES ({Guid.NewGuid()}, {destination}, {correct.Protect("synthetic-secret")})", token);
+        await database.Database.ExecuteSqlAsync($"INSERT INTO destinations (\"Id\", \"Name\", \"Kind\", \"Enabled\") VALUES ({destination}, 'synthetic-key-check', 'local', true)", token);
+        await database.Database.ExecuteSqlAsync($"INSERT INTO destination_credentials (\"Id\", \"DestinationId\", \"EncryptedSecret\") VALUES ({Guid.NewGuid()}, {destination}, {correct.Protect("synthetic-secret")})", token);
         var wrong = new SecretProtector(Options.Create(new CredentialProtectionOptions { EncryptionKey = Convert.ToBase64String(Enumerable.Repeat((byte)1, 32).ToArray()) }));
 
         await Assert.ThrowsAnyAsync<System.Security.Cryptography.CryptographicException>(() => initializer.ValidateSecretKeyAsync(wrong, cancellationToken: token));
@@ -181,7 +181,7 @@ public sealed class ArchitectureDatabaseTests
         byte[] corrupted = Convert.FromBase64String(marker);
         corrupted[^1] ^= 1;
         string damagedMarker = Convert.ToBase64String(corrupted);
-        await database.Database.ExecuteSqlInterpolatedAsync($"UPDATE deployment_key_checks SET key_check = {damagedMarker} WHERE id = 1", token);
+        await database.Database.ExecuteSqlAsync($"UPDATE deployment_key_checks SET key_check = {damagedMarker} WHERE id = 1", token);
 
         await Assert.ThrowsAnyAsync<System.Security.Cryptography.CryptographicException>(() => initializer.ValidateSecretKeyAsync(enrolled, cancellationToken: token));
     }
@@ -203,7 +203,7 @@ public sealed class ArchitectureDatabaseTests
             CREATE TABLE retained_state (id integer PRIMARY KEY, encrypted_key text NOT NULL);
             INSERT INTO retained_state VALUES (1, 'synthetic-encrypted-key');
             """, token);
-        await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO \"__EFMigrationsHistory\" VALUES ({migration}, '10.0.4')", token);
+        await database.Database.ExecuteSqlAsync($"INSERT INTO \"__EFMigrationsHistory\" VALUES ({migration}, '10.0.4')", token);
         Directory.CreateDirectory(fixture.SpoolRoot);
         string original = Path.Combine(fixture.SpoolRoot, "synthetic-original");
         await File.WriteAllBytesAsync(original, [4, 5, 6], token);

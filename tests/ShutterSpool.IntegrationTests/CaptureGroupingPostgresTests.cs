@@ -308,7 +308,7 @@ public sealed class CaptureGroupingPostgresTests
             {
                 Guid completedCapture = await CaptureIdAsync(database, lateRaw, token);
                 completedDue = await ReadDateTimeOffsetAsync(database, "SELECT \"ReleaseDueAt\" FROM captures WHERE \"Id\" = @capture", completedCapture, token);
-                await database.Database.ExecuteSqlInterpolatedAsync($"UPDATE captures SET \"State\" = 'COMPLETE', \"ReleasedAt\" = {DateTimeOffset.UtcNow} WHERE \"Id\" = {completedCapture}", token);
+                await database.Database.ExecuteSqlAsync($"UPDATE captures SET \"State\" = 'COMPLETE', \"ReleasedAt\" = {DateTimeOffset.UtcNow} WHERE \"Id\" = {completedCapture}", token);
             }
 
             await using (var database = new ShutterSpoolDbContext(options))
@@ -431,7 +431,7 @@ public sealed class CaptureGroupingPostgresTests
         {
             Value = (object?)storedTime ?? DBNull.Value,
         };
-        await database.Database.ExecuteSqlInterpolatedAsync($"""
+        await database.Database.ExecuteSqlAsync($"""
             UPDATE assets SET "MetadataState" = {outcome}, "MetadataOutcome" = {outcome}, "MetadataRole" = {role},
                 "CaptureTimeLocal" = {captureTimeParameter},
                 "CaptureTimeOffset" = {captureOffset}, "CaptureTimeFractionalDigits" = {fractionalDigits}, "CaptureTimeUncertain" = {uncertainTime},
@@ -491,7 +491,7 @@ public sealed class CaptureGroupingPostgresTests
     }
 
     private static async Task SetIngestedOneDayAgoAsync(ShutterSpoolDbContext database, Guid assetId, CancellationToken cancellationToken) =>
-        await database.Database.ExecuteSqlInterpolatedAsync($"UPDATE assets SET \"IngestedAt\" = {DateTimeOffset.UtcNow.AddDays(-1)} WHERE \"Id\" = {assetId}", cancellationToken);
+        await database.Database.ExecuteSqlAsync($"UPDATE assets SET \"IngestedAt\" = {DateTimeOffset.UtcNow.AddDays(-1)} WHERE \"Id\" = {assetId}", cancellationToken);
 
     private static async Task<Guid> CaptureIdAsync(ShutterSpoolDbContext database, Guid assetId, CancellationToken cancellationToken)
     {

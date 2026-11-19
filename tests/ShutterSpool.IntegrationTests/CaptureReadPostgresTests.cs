@@ -180,7 +180,7 @@ public sealed class CaptureReadPostgresTests
             {
                 Id = Guid.Parse($"00000000-0000-0000-0000-{index + 1:D12}"), SourceId = sourceId, NormalizedStem = $"CAPTURE-{index}",
                 LastPrimaryIngestedAt = acceptedAt.AddMinutes(index / 2), FirstAcceptedAt = acceptedAt.AddMinutes(index / 2), Rating = index + 1,
-                Tags = [$"tag-{index}"], State = CaptureState.CURATING,
+                Tags = index == 0 ? [] : [$"tag-{index}"], State = CaptureState.CURATING,
             }).ToArray();
             database.Captures.AddRange(captures);
             var assets = captures.Select((capture, index) => new AssetEntity
@@ -242,7 +242,13 @@ public sealed class CaptureReadPostgresTests
 
             CaptureInboxPage second = await reads.GetInboxAsync(2, first.NextBefore, first.NextBeforeId, new(), token);
             Assert.Equal([captures[0].Id], second.Items.Select(item => item.Id));
+            Assert.Empty(second.Items[0].Curation.Tags);
             Assert.Null(second.NextBefore);
+
+            CaptureInboxPage tagged = await reads.GetInboxAsync(1, null, null, new(Tag: "tag-1"), token);
+            Assert.Equal(captures[1].Id, Assert.Single(tagged.Items).Id);
+            Assert.Equal("tag-1", Assert.Single(tagged.Items[0].Curation.Tags));
+            Assert.Null(tagged.NextBefore);
 
             var oldestFirst = new List<Guid>();
             DateTimeOffset? after = null;

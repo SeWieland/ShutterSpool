@@ -211,7 +211,7 @@ onUnmounted(() => { clearInterval(accessTimer); discoveryController?.abort(); st
                 <LazyOperationalWorkspace
                     :key="workspaceAccessVersion"
                     ref="workspace"
-                    :capture-id="route.params.id ? String(route.params.id) : undefined"
+                    :capture-id="route.name === 'captures-id' ? route.params.id : undefined"
                     :inactive="invitationsVisible"
                     @navigate="invitationsVisible = false"
                 />

@@ -18,14 +18,14 @@ public sealed class FoundationTests(WorkspaceWebApplicationFactory factory)
     {
         using HttpClient client = factory.CreateWorkspaceClient();
         using JsonDocument document = JsonDocument.Parse(await client.GetStringAsync("/openapi/v1.json", TestContext.Current.CancellationToken));
+        Assert.StartsWith("3.1.", document.RootElement.GetProperty("openapi").GetString());
         JsonElement paths = document.RootElement.GetProperty("paths");
         foreach (string route in new[] { "/media/previews/{id}", "/media/previews/{id}/{profile}" })
         {
             JsonElement responses = paths.GetProperty(route).GetProperty("get").GetProperty("responses");
             JsonElement content = responses.GetProperty("200").GetProperty("content");
-            Assert.True(content.GetProperty("image/webp").TryGetProperty("schema", out _));
-            Assert.True(content.GetProperty("image/svg+xml").TryGetProperty("schema", out _));
-            Assert.Equal("binary", content.GetProperty("image/webp").GetProperty("schema").GetProperty("format").GetString());
+            foreach (string mediaType in new[] { "image/webp", "image/svg+xml" })
+                Assert.Equal("binary", content.GetProperty(mediaType).GetProperty("schema").GetProperty("format").GetString());
             Assert.True(responses.TryGetProperty("304", out _));
             Assert.True(responses.TryGetProperty("404", out _));
         }

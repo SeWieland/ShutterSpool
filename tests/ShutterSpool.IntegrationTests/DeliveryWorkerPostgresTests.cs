@@ -244,8 +244,8 @@ public sealed partial class DeliveryWorkerPostgresTests
         byte[] bytes = await File.ReadAllBytesAsync(Path.Combine(fixture.SpoolRoot, "spool", fixture.AssetId.ToString("N")), token);
         var request = new DeliveryRequest(deliveryId, attemptId, fixture.AssetId, fixture.DestinationId,
             "folder/synthetic.jpg", bytes.Length, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), "synthetic");
-        await database.Database.ExecuteSqlInterpolatedAsync($"UPDATE deliveries SET \"State\" = 'Running', \"AttemptCount\" = 1, \"LeaseId\" = {Guid.NewGuid()}, \"LeaseUntil\" = {DateTimeOffset.UtcNow.AddMinutes(-1)} WHERE \"Id\" = {deliveryId}", token);
-        await database.Database.ExecuteSqlInterpolatedAsync($"""
+        await database.Database.ExecuteSqlAsync($"UPDATE deliveries SET \"State\" = 'Running', \"AttemptCount\" = 1, \"LeaseId\" = {Guid.NewGuid()}, \"LeaseUntil\" = {DateTimeOffset.UtcNow.AddMinutes(-1)} WHERE \"Id\" = {deliveryId}", token);
+        await database.Database.ExecuteSqlAsync($"""
             INSERT INTO delivery_attempts ("Id", "DeliveryId", "AssetId", "RetryNumber", "WorkerId", "ClaimToken", "StartedAt", "TraceId")
             VALUES ({attemptId}, {deliveryId}, {fixture.AssetId}, 1, 'crashed-worker', {Guid.NewGuid()}, {DateTimeOffset.UtcNow.AddMinutes(-2)}, 'synthetic')
             """, token);
@@ -866,12 +866,12 @@ public sealed partial class DeliveryWorkerPostgresTests
                     Directory.CreateDirectory(Path.Combine(spoolRoot, "spool"));
                     await File.WriteAllBytesAsync(Path.Combine(spoolRoot, key), bytes, token);
                     string hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
-                    await database.Database.ExecuteSqlInterpolatedAsync($"""
+                    await database.Database.ExecuteSqlAsync($"""
                         INSERT INTO assets ("Id", "SourceId", "OriginalName", "SpoolKey", "Size", "Sha256", "IngestedAt", "RecoveryCorrelation", "State", "MetadataState", "MetadataRole", "DetectedMediaType")
                         VALUES ({assetId}, {sourceId}, {originalName}, {key}, {bytes.Length}, {hash}, {DateTimeOffset.UtcNow}, {Guid.NewGuid()}, 'Spooled', 'Complete', {role}, {mediaType})
                         """, token);
-                    await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO captures (\"Id\", \"SourceId\", \"NormalizedStem\", \"LastPrimaryIngestedAt\") VALUES ({captureId}, {sourceId}, 'SYNTHETIC', {DateTimeOffset.UtcNow})", token);
-                    await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO capture_assets (\"AssetId\", \"CaptureId\", \"Role\", \"IsPrimary\", \"GroupingReason\") VALUES ({assetId}, {captureId}, {role}, true, 'controlled_test')", token);
+                    await database.Database.ExecuteSqlAsync($"INSERT INTO captures (\"Id\", \"SourceId\", \"NormalizedStem\", \"LastPrimaryIngestedAt\") VALUES ({captureId}, {sourceId}, 'SYNTHETIC', {DateTimeOffset.UtcNow})", token);
+                    await database.Database.ExecuteSqlAsync($"INSERT INTO capture_assets (\"AssetId\", \"CaptureId\", \"Role\", \"IsPrimary\", \"GroupingReason\") VALUES ({assetId}, {captureId}, {role}, true, 'controlled_test')", token);
                     await new DestinationRoutingAdminService(database).SetAsync(new(destinationId, true,
                         [new("all", "All", 0, true, [], "folder", "{suppliedName}")]), token);
                     Assert.True((await new CaptureCurationService(new EfCaptureCurationStore(database, TimeProvider.System)).ReleaseNowAsync(captureId, 0, token)).Succeeded);

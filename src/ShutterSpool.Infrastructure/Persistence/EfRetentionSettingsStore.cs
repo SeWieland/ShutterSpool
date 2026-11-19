@@ -174,7 +174,7 @@ internal sealed class EfRetentionSettingsStore(ShutterSpoolDbContext database, I
 
     private async Task<RetentionPolicyEntity> LockOrCreatePolicyAsync(CancellationToken cancellationToken)
     {
-        RetentionPolicyEntity? policy = await database.RetentionPolicies.FromSqlInterpolated(
+        RetentionPolicyEntity? policy = await database.RetentionPolicies.FromSql(
             $"SELECT * FROM retention_policy WHERE \"Id\" = 1 FOR UPDATE").SingleOrDefaultAsync(cancellationToken);
         if (policy is null)
         {

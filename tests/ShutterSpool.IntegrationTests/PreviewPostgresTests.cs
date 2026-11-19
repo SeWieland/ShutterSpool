@@ -51,7 +51,7 @@ public sealed class PreviewPostgresTests
             Directory.CreateDirectory(Path.GetDirectoryName(originalPath)!);
             await File.WriteAllBytesAsync(originalPath, jpeg, TestContext.Current.CancellationToken);
             await AddAssetAsync(database, rawId, sourceId, "spool/raw", 3);
-            await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO captures (\"Id\", \"SourceId\", \"NormalizedStem\") VALUES ({captureId}, {sourceId}, {"shot"})", TestContext.Current.CancellationToken);
+            await database.Database.ExecuteSqlAsync($"INSERT INTO captures (\"Id\", \"SourceId\", \"NormalizedStem\") VALUES ({captureId}, {sourceId}, {"shot"})", TestContext.Current.CancellationToken);
             await AddMembershipAsync(database, rawId, captureId, "RAW", true);
 
             var settings = new PreviewSettings();
@@ -88,10 +88,10 @@ public sealed class PreviewPostgresTests
     }
 
     private static Task AddAssetAsync(ShutterSpoolDbContext database, Guid id, Guid sourceId, string spoolKey, long size) =>
-        database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO assets (\"Id\", \"SourceId\", \"OriginalName\", \"SpoolKey\", \"Size\", \"Sha256\", \"IngestedAt\", \"RecoveryCorrelation\", \"State\", \"MetadataState\") VALUES ({id}, {sourceId}, {"synthetic.jpg"}, {spoolKey}, {size}, {new string('0', 64)}, {DateTimeOffset.UtcNow}, {Guid.NewGuid()}, {"Spooled"}, {"Complete"})");
+        database.Database.ExecuteSqlAsync($"INSERT INTO assets (\"Id\", \"SourceId\", \"OriginalName\", \"SpoolKey\", \"Size\", \"Sha256\", \"IngestedAt\", \"RecoveryCorrelation\", \"State\", \"MetadataState\") VALUES ({id}, {sourceId}, {"synthetic.jpg"}, {spoolKey}, {size}, {new string('0', 64)}, {DateTimeOffset.UtcNow}, {Guid.NewGuid()}, {"Spooled"}, {"Complete"})");
 
     private static Task AddMembershipAsync(ShutterSpoolDbContext database, Guid assetId, Guid captureId, string role, bool primary) =>
-        database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO capture_assets (\"AssetId\", \"CaptureId\", \"Role\", \"IsPrimary\", \"GroupingReason\") VALUES ({assetId}, {captureId}, {role}, {primary}, {"synthetic"})");
+        database.Database.ExecuteSqlAsync($"INSERT INTO capture_assets (\"AssetId\", \"CaptureId\", \"Role\", \"IsPrimary\", \"GroupingReason\") VALUES ({assetId}, {captureId}, {role}, {primary}, {"synthetic"})");
 
     private sealed class ImaginaryHandler(byte[] expectedOriginal) : HttpMessageHandler
     {

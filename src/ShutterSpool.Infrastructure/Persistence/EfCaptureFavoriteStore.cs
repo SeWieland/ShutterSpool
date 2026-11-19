@@ -21,7 +21,7 @@ internal sealed class EfCaptureFavoriteStore(ShutterSpoolDbContext database) : I
         await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await database.Database.ExecuteSqlRawAsync(
             "SELECT pg_advisory_xact_lock(hashtextextended('shutterspool-routing', 0))", cancellationToken);
-        CaptureEntity? capture = await database.Captures.FromSqlInterpolated(
+        CaptureEntity? capture = await database.Captures.FromSql(
             $"SELECT * FROM captures WHERE \"Id\" = {captureId} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
         if (capture is null)

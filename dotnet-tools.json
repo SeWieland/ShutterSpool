@@ -3,18 +3,18 @@
   "isRoot": true,
   "tools": {
     "microsoft.openapi.kiota": {
-      "version": "1.35.0",
+      "version": "1.38.0",
       "commands": [
         "kiota"
       ],
-      "rollForward": false
+      "rollForward": true
     },
     "dotnet-ef": {
-      "version": "10.0.4",
+      "version": "11.0.0-rc.3.26522.148",
       "commands": [
         "dotnet-ef"
       ],
-      "rollForward": false
+      "rollForward": true
     }
   }
 }

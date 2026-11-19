@@ -152,7 +152,7 @@ internal sealed class EfCaptureGroupingStore(ShutterSpoolDbContext database) : I
 
     private async Task<(SourceCurationMode Policy, int DelaySeconds, Guid CollectionId)> LoadSourcePolicyAsync(Guid sourceId, CancellationToken cancellationToken)
     {
-        SourceEntity? source = await database.Sources.FromSqlInterpolated($"SELECT * FROM sources WHERE \"Id\" = {sourceId} FOR SHARE")
+        SourceEntity? source = await database.Sources.FromSql($"SELECT * FROM sources WHERE \"Id\" = {sourceId} FOR SHARE")
             .AsNoTracking().SingleOrDefaultAsync(cancellationToken);
         if (source is null) throw new InvalidOperationException("Capture grouping requires an existing Source.");
         SourceCurationMode policy = source.CurationMode;

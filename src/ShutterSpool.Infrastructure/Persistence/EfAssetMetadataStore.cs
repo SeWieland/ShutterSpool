@@ -12,7 +12,7 @@ internal sealed class EfAssetMetadataStore(ShutterSpoolDbContext database, TimeS
 
     public async Task<MetadataWork?> ClaimAsync(DateTimeOffset now, CancellationToken cancellationToken)
     {
-        await database.Database.ExecuteSqlInterpolatedAsync($"""
+        await database.Database.ExecuteSqlAsync($"""
             UPDATE assets
             SET "MetadataState" = 'Failed',
                 "MetadataOutcome" = 'Failed',
@@ -28,7 +28,7 @@ internal sealed class EfAssetMetadataStore(ShutterSpoolDbContext database, TimeS
             """, cancellationToken);
 
         Guid leaseId = Guid.NewGuid();
-        int claimed = await database.Database.ExecuteSqlInterpolatedAsync($"""
+        int claimed = await database.Database.ExecuteSqlAsync($"""
             WITH candidate AS (
                 SELECT "Id"
                 FROM assets
@@ -57,7 +57,7 @@ internal sealed class EfAssetMetadataStore(ShutterSpoolDbContext database, TimeS
     }
 
     public async Task<bool> RenewAsync(MetadataWork work, DateTimeOffset now, CancellationToken cancellationToken) =>
-        await database.Database.ExecuteSqlInterpolatedAsync($"""
+        await database.Database.ExecuteSqlAsync($"""
             UPDATE assets
             SET "MetadataLeaseUntil" = {now + _leaseDuration}
             WHERE "Id" = {work.AssetId}
@@ -78,7 +78,7 @@ internal sealed class EfAssetMetadataStore(ShutterSpoolDbContext database, TimeS
             Value = (object?)captureTime ?? DBNull.Value,
         };
 
-        await database.Database.ExecuteSqlInterpolatedAsync($"""
+        await database.Database.ExecuteSqlAsync($"""
             UPDATE assets
             SET "MetadataState" = {metadata.Outcome.ToString()},
                 "MetadataOutcome" = {metadata.Outcome.ToString()},
@@ -110,7 +110,7 @@ internal sealed class EfAssetMetadataStore(ShutterSpoolDbContext database, TimeS
 
     public async Task RetryAsync(MetadataWork work, DateTimeOffset now, CancellationToken cancellationToken)
     {
-        await database.Database.ExecuteSqlInterpolatedAsync($"""
+        await database.Database.ExecuteSqlAsync($"""
             UPDATE assets
             SET "MetadataState" = CASE WHEN "MetadataAttemptCount" >= {MaximumAttempts} THEN 'Failed' ELSE 'Pending' END,
                 "MetadataOutcome" = CASE WHEN "MetadataAttemptCount" >= {MaximumAttempts} THEN 'Failed' ELSE NULL END,

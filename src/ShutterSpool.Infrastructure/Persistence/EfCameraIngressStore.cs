@@ -351,24 +351,24 @@ internal sealed class EfCameraIngressStore(ShutterSpoolDbContext database, TimeP
     }
 
     private Task<SourceCredentialEntity?> LockCredentialByUsernameAsync(string username, CancellationToken cancellationToken) => database.Database.IsRelational()
-        ? database.SourceCredentials.FromSqlInterpolated($"SELECT * FROM source_credentials WHERE \"Username\" = {username} FOR UPDATE").SingleOrDefaultAsync(cancellationToken)
+        ? database.SourceCredentials.FromSql($"SELECT * FROM source_credentials WHERE \"Username\" = {username} FOR UPDATE").SingleOrDefaultAsync(cancellationToken)
         : database.SourceCredentials.SingleOrDefaultAsync(item => item.Username == username, cancellationToken);
 
     private Task<SourceCredentialEntity?> LockCredentialAsync(Guid sourceId, CancellationToken cancellationToken) => database.Database.IsRelational()
-        ? database.SourceCredentials.FromSqlInterpolated($"SELECT * FROM source_credentials WHERE \"SourceId\" = {sourceId} FOR UPDATE").SingleOrDefaultAsync(cancellationToken)
+        ? database.SourceCredentials.FromSql($"SELECT * FROM source_credentials WHERE \"SourceId\" = {sourceId} FOR UPDATE").SingleOrDefaultAsync(cancellationToken)
         : database.SourceCredentials.SingleOrDefaultAsync(item => item.SourceId == sourceId, cancellationToken);
 
     private Task<SourceEntity?> LockSourceAsync(Guid sourceId, CancellationToken cancellationToken) => database.Database.IsRelational()
-        ? database.Sources.FromSqlInterpolated($"SELECT * FROM sources WHERE \"Id\" = {sourceId} FOR UPDATE")
+        ? database.Sources.FromSql($"SELECT * FROM sources WHERE \"Id\" = {sourceId} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken)
         : database.Sources.SingleOrDefaultAsync(item => item.Id == sourceId, cancellationToken);
 
     private Task<CameraLoginEntity?> LockLoginAsync(Guid loginId, CancellationToken cancellationToken) => database.Database.IsRelational()
-        ? database.CameraLogins.FromSqlInterpolated($"SELECT * FROM camera_logins WHERE \"Id\" = {loginId} FOR UPDATE").SingleOrDefaultAsync(cancellationToken)
+        ? database.CameraLogins.FromSql($"SELECT * FROM camera_logins WHERE \"Id\" = {loginId} FOR UPDATE").SingleOrDefaultAsync(cancellationToken)
         : database.CameraLogins.SingleOrDefaultAsync(item => item.Id == loginId, cancellationToken);
 
     private Task<CameraUploadAdmissionEntity?> LockAdmissionAsync(Guid admissionId, CancellationToken cancellationToken) => database.Database.IsRelational()
-        ? database.CameraUploadAdmissions.FromSqlInterpolated($"SELECT * FROM camera_upload_admissions WHERE \"Id\" = {admissionId} FOR UPDATE").SingleOrDefaultAsync(cancellationToken)
+        ? database.CameraUploadAdmissions.FromSql($"SELECT * FROM camera_upload_admissions WHERE \"Id\" = {admissionId} FOR UPDATE").SingleOrDefaultAsync(cancellationToken)
         : database.CameraUploadAdmissions.SingleOrDefaultAsync(item => item.Id == admissionId, cancellationToken);
 
     private static CameraLogin Map(CameraLoginEntity login) => new(login.Id, login.SourceId, login.Username, login.VirtualRoot,

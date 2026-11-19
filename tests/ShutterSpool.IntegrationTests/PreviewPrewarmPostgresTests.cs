@@ -172,7 +172,7 @@ public sealed class PreviewPrewarmPostgresTests
         string originalName, long size, string role)
     {
         var captureTime = new NpgsqlParameter("captureTime", NpgsqlDbType.Timestamp) { Value = CaptureTime };
-        return database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO assets (\"Id\", \"SourceId\", \"OriginalName\", \"SpoolKey\", \"Size\", \"Sha256\", \"IngestedAt\", \"RecoveryCorrelation\", \"State\", \"MetadataState\", \"MetadataRole\", \"CaptureTimeLocal\") VALUES ({id}, {sourceId}, {originalName}, {spoolKey}, {size}, {new string('0', 64)}, {DateTimeOffset.UtcNow}, {Guid.NewGuid()}, {"Spooled"}, {"Complete"}, {role}, {captureTime})");
+        return database.Database.ExecuteSqlAsync($"INSERT INTO assets (\"Id\", \"SourceId\", \"OriginalName\", \"SpoolKey\", \"Size\", \"Sha256\", \"IngestedAt\", \"RecoveryCorrelation\", \"State\", \"MetadataState\", \"MetadataRole\", \"CaptureTimeLocal\") VALUES ({id}, {sourceId}, {originalName}, {spoolKey}, {size}, {new string('0', 64)}, {DateTimeOffset.UtcNow}, {Guid.NewGuid()}, {"Spooled"}, {"Complete"}, {role}, {captureTime})");
     }
 
     private static Task<int> CountJobsAsync(ShutterSpoolDbContext database) =>

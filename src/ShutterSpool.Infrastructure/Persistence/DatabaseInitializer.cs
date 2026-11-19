@@ -63,6 +63,6 @@ internal sealed class DatabaseInitializer(ShutterSpoolDbContext database, Shutte
         if (await database.SourceCredentials.AnyAsync(cancellationToken) || await database.DestinationCredentials.AnyAsync(cancellationToken))
             throw new WorkspaceOperator.RefusedException("Encryption-key enrollment requires fresh provisioning before credentials exist.");
         string marker = protector.Protect(KeyCheckValue);
-        await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO deployment_key_checks (id, key_check) VALUES (1, {marker})", cancellationToken);
+        await database.Database.ExecuteSqlAsync($"INSERT INTO deployment_key_checks (id, key_check) VALUES (1, {marker})", cancellationToken);
     }
 }

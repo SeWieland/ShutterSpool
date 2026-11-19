@@ -7,14 +7,21 @@ import subprocess
 import tempfile
 import unittest
 
+from image_pins import load_image_pins
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / 'src/ShutterSpool.AppHost/Realms/select-login-theme.sh'
+KEYCLOAK_IMAGES = load_image_pins(ROOT / 'deploy/package/components/keycloak.yaml',
+                                  required=('keycloak', 'keycloak-reconciler'))
 RESOURCES = ['theme.properties', 'resources/css/shutterspool.v1.css',
              'resources/img/aperture.svg', 'resources/img/shutter-color.png', 'resources/img/favicon.ico',
              'resources/fonts/Manrope.ttf', 'resources/fonts/Manrope-OFL.txt']
 
 
 class ThemeSelectionTests(unittest.TestCase):
+    def test_keycloak_and_reconciler_use_same_image(self):
+        self.assertEqual(KEYCLOAK_IMAGES['keycloak'], KEYCLOAK_IMAGES['keycloak-reconciler'])
+
     def test_fresh_realms_allow_smtp_free_owners_disable_registration_and_leave_recovery_disabled(self):
         realm = json.loads((SCRIPT.parent / 'shutterspool-realm.json').read_text())
         self.assertIs(realm['registrationAllowed'], False)
@@ -58,7 +65,7 @@ class ThemeSelectionTests(unittest.TestCase):
                        '--mount', f'type=bind,source={mock},target=/opt/keycloak/bin/kcadm.sh,readonly',
                        '--mount', f'type=bind,source={fixture / "theme"},target=/opt/keycloak/themes/shutterspool,readonly',
                        '--mount', f'type=bind,source={SCRIPT.parent},target=/opt/shutterspool,readonly',
-                       '-e', f'SHUTTERSPOOL_LOGIN_THEME={theme}', 'quay.io/keycloak/keycloak:26.6',
+                       '-e', f'SHUTTERSPOOL_LOGIN_THEME={theme}', KEYCLOAK_IMAGES['keycloak'],
                        '/opt/shutterspool/select-login-theme.sh']
             if check:
                 command.append('--check')

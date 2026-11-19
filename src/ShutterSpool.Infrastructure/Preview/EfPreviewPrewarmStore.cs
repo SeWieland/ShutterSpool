@@ -20,7 +20,7 @@ internal sealed class EfPreviewPrewarmStore(ShutterSpoolDbContext database) : IP
             await transaction.CommitAsync(cancellationToken);
             return null;
         }
-        PreviewPrewarmEntity? candidate = await database.PreviewPrewarms.FromSqlInterpolated($"""
+        PreviewPrewarmEntity? candidate = await database.PreviewPrewarms.FromSql($"""
             SELECT job.* FROM preview_prewarms AS job
             JOIN capture_assets AS membership ON membership."AssetId" = job."AssetId"
             JOIN captures AS capture ON capture."Id" = membership."CaptureId"
@@ -52,7 +52,7 @@ internal sealed class EfPreviewPrewarmStore(ShutterSpoolDbContext database) : IP
         Guid leaseId = Guid.NewGuid();
         TimeSpan leaseDuration = TimeSpan.FromSeconds(
             settings.GenerationQueueTimeoutSeconds + settings.GenerationTimeoutSeconds + 120);
-        await database.Database.ExecuteSqlInterpolatedAsync($"""
+        await database.Database.ExecuteSqlAsync($"""
             UPDATE preview_prewarms
             SET "State" = 'Processing', "AttemptCount" = {attempts}, "LeaseId" = {leaseId},
                 "LeaseUntil" = {now + leaseDuration}, "RetryAt" = NULL
@@ -74,7 +74,7 @@ internal sealed class EfPreviewPrewarmStore(ShutterSpoolDbContext database) : IP
             _ => throw new ArgumentOutOfRangeException(nameof(outcome)),
         };
         DateTimeOffset? retryAt = outcome == PreviewWarmOutcome.Retry ? now + Backoff(work.AttemptCount) : null;
-        return await database.Database.ExecuteSqlInterpolatedAsync($"""
+        return await database.Database.ExecuteSqlAsync($"""
             UPDATE preview_prewarms
             SET "State" = {state}, "LeaseId" = NULL, "LeaseUntil" = NULL,
                 "RetryAt" = {retryAt}, "CompletedWidth" = {work.Size.Width}, "CompletedHeight" = {work.Size.Height}
