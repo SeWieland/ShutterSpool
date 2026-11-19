@@ -286,6 +286,33 @@ public sealed class WebDavDestinationAdapterTests
         Assert.DoesNotContain(handler.Operations, item => item.Method is "GET" or "PUT" or "MOVE");
     }
 
+    [Theory]
+    [InlineData("HTTP/1.1 503 Unavailable", "invalid", DeliveryResultKind.TransientFailure, "PROVIDER_UNAVAILABLE")]
+    [InlineData("invalid", "HTTP/1.1 503 Unavailable", DeliveryResultKind.Uncertain, "DAV_RESPONSE_INVALID")]
+    public async Task First_failed_property_response_determines_the_prepublication_outcome(
+        string first, string second, DeliveryResultKind expectedKind, string expectedError)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes("synthetic original");
+        const string target = "/camera/test.raw";
+        string xml = $"""
+            <multistatus xmlns="DAV:"><response><href>{target}</href>
+              <propstat><prop/><status>{first}</status></propstat>
+              <propstat><prop/><status>{second}</status></propstat>
+            </response></multistatus>
+            """;
+        var handler = new FakeDavHandler { Intercept = request => Task.FromResult<HttpResponseMessage?>(
+            request.Method.Method == "PROPFIND" && request.RequestUri!.AbsolutePath == target
+                ? new(HttpStatusCode.MultiStatus) { Content = new StringContent(xml, Encoding.UTF8, "application/xml") } : null) };
+
+        DeliveryResult result = await new WebDavDestinationDeliveryAdapter(new FakeHttpClientFactory(handler))
+            .WriteAsync(Request(bytes, "test.raw"), new MemoryStream(bytes), CancellationToken.None);
+
+        Assert.Equal(expectedKind, result.Kind);
+        Assert.Equal(expectedError, result.ErrorCode);
+        Assert.Equal([("PROPFIND", "/camera"), ("PROPFIND", target)],
+            handler.Operations.Select(item => (item.Method, item.Path)));
+    }
+
     [Fact]
     public async Task Mismatching_provider_checksum_conflicts_without_reading_or_replacing_target()
     {
@@ -478,8 +505,7 @@ public sealed class WebDavDestinationAdapterTests
         DeliveryResult result = await adapter.WriteAsync(Request(bytes), new MemoryStream(bytes), CancellationToken.None);
 
         Assert.Equal(DeliveryResultKind.ConfigurationFailure, result.Kind);
-        Assert.Single(handler.Operations);
-        Assert.Equal("dav.example.test", handler.Operations[0].Host);
+        Assert.Equal("dav.example.test", Assert.Single(handler.Operations).Host);
     }
 
     [Theory]
@@ -794,7 +820,7 @@ public sealed class WebDavDestinationAdapterTests
 
         Assert.False(writable);
         Assert.Equal("PROBE_CLEANUP_FAILED", error);
-        Assert.Contains(handler.Resources.Values, bytes => bytes.SequenceEqual(Encoding.UTF8.GetBytes("unrelated concurrent resource")));
+        Assert.Equal(Encoding.UTF8.GetBytes("unrelated concurrent resource"), Assert.Single(handler.Resources.Values));
         Assert.Contains(handler.Operations, operation => operation.Method == "DELETE");
     }
 

@@ -151,8 +151,9 @@ Gallery delivery inspection groups destination names and variant/outcome rows, w
 preview-and-confirm Reevaluate first. Delivered rows stay compact; paths, rules and attempts use Details.
 Optional and secondary blockers remain visible. Metadata inspection stays read-only.
 Curation shows saved Held/Waiting workflow symbols and a slim white remaining-delay bar even without captions.
-Only authoritative timed waiting gets a bar; held/manual states do not. The final 20% breathes gently when motion
-is enabled. Zero means release is due. Each view's Appearance offers independent persisted server-side Newest first / Oldest first ordering.
+The bar appears only for authoritative timed waiting. Held and manual states have no countdown.
+A steady yellow cue marks the final 20%. Zero means release is due.
+Each view's Appearance offers independent persisted server-side Newest first / Oldest first ordering.
 
 Use a flat, nearly black, texture-free background with a large six-blade SVG aperture centered at the bottom right.
 Restrained lens rings and hairline blue construction curves give it a digital photographic character.

@@ -17,7 +17,7 @@ public sealed class CapturePolicyTests
         Assert.Equal("ambiguous_candidates", CaptureGroupingPolicy.Decide(jpeg, [first, second], []).Reason);
         Assert.Equal("missing_or_uncertain_time", CaptureGroupingPolicy.Decide(jpeg with { CaptureTimeUncertain = true }, [first], []).Reason);
         GroupingDecision replay = CaptureGroupingPolicy.Decide(raw with { Id = Guid.NewGuid() }, [first],
-            [new GroupingReplayFacts(first.Id, raw)]);
+            [new GroupingReplayFacts(first.Id, raw with { Id = Guid.AllBitsSet }), new GroupingReplayFacts(first.Id, raw)]);
         Assert.Equal(first.Id, replay.CaptureId);
         Assert.Equal(raw.Id, replay.RelatedAssetId);
         Assert.Equal("recognized_replay", replay.Reason);

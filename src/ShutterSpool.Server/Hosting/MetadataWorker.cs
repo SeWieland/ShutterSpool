@@ -2,7 +2,7 @@ using ShutterSpool.Application.Metadata;
 
 namespace ShutterSpool.Server.Hosting;
 
-internal sealed class MetadataWorker(IServiceScopeFactory scopes, ILogger<MetadataWorker> logger) : BackgroundService
+internal sealed partial class MetadataWorker(IServiceScopeFactory scopes, ILogger<MetadataWorker> logger) : BackgroundService
 {
     private readonly WorkspaceWorkerCursor tenants = new(scopes);
 
@@ -23,12 +23,15 @@ internal sealed class MetadataWorker(IServiceScopeFactory scopes, ILogger<Metada
             {
                 break;
             }
-            catch (Exception)
+            catch (Exception exception)
             {
-                logger.LogWarning("Metadata processing pass failed; retrying.");
+                LogMetadataProcessingFailure(logger, exception.GetType().Name);
             }
 
             if (!processed) await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
         }
     }
+
+    [LoggerMessage(EventId = 4003, Level = LogLevel.Warning, Message = "Metadata processing pass failed ({ExceptionType}). Retrying.")]
+    private static partial void LogMetadataProcessingFailure(ILogger logger, string exceptionType);
 }

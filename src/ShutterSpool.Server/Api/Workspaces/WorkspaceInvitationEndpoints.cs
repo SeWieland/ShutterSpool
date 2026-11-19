@@ -1,3 +1,4 @@
+using System.Net.Mime;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Mvc;
 using ShutterSpool.Application.Security;
@@ -50,19 +51,19 @@ internal static class WorkspaceInvitationEndpoints
             Results.Ok(new WorkspaceInvitationsResponse([.. (await store.ListInvitationsAsync(token)).Select(WorkspaceInvitationResponse.From)])))
             .Produces<WorkspaceInvitationsResponse>();
         invitations.MapPost("/invitations", CreateAsync)
-            .Produces<WorkspaceInvitationChangeResponse>().Produces<WorkspaceInvitationProblemDetails>(409, "application/problem+json")
-            .Produces<WorkspaceInvitationProblemDetails>(503, "application/problem+json")
-            .Produces<WorkspaceInvitationProblemDetails>(400, "application/problem+json");
+            .Produces<WorkspaceInvitationChangeResponse>().Produces<WorkspaceInvitationProblemDetails>(409, MediaTypeNames.Application.ProblemJson)
+            .Produces<WorkspaceInvitationProblemDetails>(503, MediaTypeNames.Application.ProblemJson)
+            .Produces<WorkspaceInvitationProblemDetails>(400, MediaTypeNames.Application.ProblemJson);
         invitations.MapPost("/invitations/{id:guid}/renew", RenewAsync)
-            .Produces<WorkspaceInvitationChangeResponse>().Produces<WorkspaceInvitationProblemDetails>(404, "application/problem+json")
-            .Produces<WorkspaceInvitationProblemDetails>(409, "application/problem+json").ProducesValidationProblem();
+            .Produces<WorkspaceInvitationChangeResponse>().Produces<WorkspaceInvitationProblemDetails>(404, MediaTypeNames.Application.ProblemJson)
+            .Produces<WorkspaceInvitationProblemDetails>(409, MediaTypeNames.Application.ProblemJson).ProducesValidationProblem();
         invitations.MapPost("/invitations/{id:guid}/cancel", CancelAsync)
-            .Produces<WorkspaceInvitationChangeResponse>().Produces<WorkspaceInvitationProblemDetails>(404, "application/problem+json")
-            .Produces<WorkspaceInvitationProblemDetails>(409, "application/problem+json").ProducesValidationProblem();
+            .Produces<WorkspaceInvitationChangeResponse>().Produces<WorkspaceInvitationProblemDetails>(404, MediaTypeNames.Application.ProblemJson)
+            .Produces<WorkspaceInvitationProblemDetails>(409, MediaTypeNames.Application.ProblemJson).ProducesValidationProblem();
         app.MapGet("/workspace-offers", DiscoverAsync).RequireAuthorization().Produces<WorkspaceOffersResponse>().ProducesProblem(401).ProducesProblem(503);
         app.MapPost("/workspace-offers/{workspaceId:guid}/{id:guid}/accept", AcceptAsync).RequireAuthorization()
-            .Produces<WorkspaceOfferAcceptanceResponse>().Produces<WorkspaceOfferProblemDetails>(403, "application/problem+json")
-            .Produces<WorkspaceOfferProblemDetails>(404, "application/problem+json").Produces<WorkspaceOfferProblemDetails>(409, "application/problem+json")
+            .Produces<WorkspaceOfferAcceptanceResponse>().Produces<WorkspaceOfferProblemDetails>(403, MediaTypeNames.Application.ProblemJson)
+            .Produces<WorkspaceOfferProblemDetails>(404, MediaTypeNames.Application.ProblemJson).Produces<WorkspaceOfferProblemDetails>(409, MediaTypeNames.Application.ProblemJson)
             .ProducesValidationProblem().ProducesProblem(401).ProducesProblem(503);
     }
 
@@ -91,7 +92,7 @@ internal static class WorkspaceInvitationEndpoints
         WorkspaceMemberResponse? member = result.Membership is null ? null : WorkspaceMemberResponse.From(result.Membership);
         if (result.Status is "applied" or "existingMember") return Results.Ok(new WorkspaceInvitationChangeResponse(result.OperationId, result.Status, offer, member, null, result.SetupEmailStatus));
         return Results.Json(new WorkspaceInvitationProblemDetails { Status = StatusCode(result.Status), Title = "Workspace invitation could not be changed",
-            ErrorCode = ErrorCode(result.Status), Offer = offer, Membership = member }, statusCode: StatusCode(result.Status), contentType: "application/problem+json");
+            ErrorCode = ErrorCode(result.Status), Offer = offer, Membership = member }, statusCode: StatusCode(result.Status), contentType: MediaTypeNames.Application.ProblemJson);
     }
 
     private static async Task<IResult> DiscoverAsync(HttpContext http, IWorkspaceRegistry registry, IServiceScopeFactory scopes)
@@ -145,7 +146,7 @@ internal static class WorkspaceInvitationEndpoints
         WorkspaceMemberResponse? member = result.Membership is null ? null : WorkspaceMemberResponse.From(result.Membership);
         if (result.Status is "applied" or "existingMember") return Results.Ok(new WorkspaceOfferAcceptanceResponse(request.OperationId, result.Status, offer, member, null));
         return Results.Json(new WorkspaceOfferProblemDetails { Status = StatusCode(result.Status), Title = "Workspace offer could not be accepted",
-            ErrorCode = ErrorCode(result.Status), Offer = offer, Membership = member }, statusCode: StatusCode(result.Status), contentType: "application/problem+json");
+            ErrorCode = ErrorCode(result.Status), Offer = offer, Membership = member }, statusCode: StatusCode(result.Status), contentType: MediaTypeNames.Application.ProblemJson);
     }
 
     private static bool TryRole(string text, out WorkspaceRole role) => Enum.TryParse(text, out role)

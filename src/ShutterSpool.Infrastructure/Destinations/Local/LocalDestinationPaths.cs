@@ -23,8 +23,10 @@ internal static class LocalDestinationPaths
                 {
                     if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) return false;
                 }
-                catch (FileNotFoundException) { }
-                catch (DirectoryNotFoundException) { }
+                catch (IOException exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
+                {
+                    // Missing components may be created later. Continue checking existing ancestors for redirection.
+                }
             }
             return true;
         }

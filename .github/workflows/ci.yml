@@ -34,6 +34,8 @@ jobs:
   verify:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    outputs:
+      coverage-artifact-id: ${{ steps.coverage.outputs.artifact-id }}
     services:
       postgres:
         image: postgres:17
@@ -65,13 +67,23 @@ jobs:
           cache: npm
           cache-dependency-path: src/ShutterSpool.Web/package-lock.json
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
         working-directory: src/ShutterSpool.Web
       - name: Check frontend types
         run: npm run typecheck
         working-directory: src/ShutterSpool.Web
       - name: Test frontend
-        run: npm test
+        id: frontend-tests
+        continue-on-error: true
+        run: |
+          test_status=0
+          npm test -- --coverage --coverage.reportsDirectory="$RUNNER_TEMP/vitest-coverage" || test_status=$?
+          mkdir -p "$RUNNER_TEMP/ci-coverage"
+          report="$RUNNER_TEMP/vitest-coverage/lcov.info"
+          if [ -s "$report" ]; then
+            sed 's|^SF:app/|SF:src/ShutterSpool.Web/app/|' "$report" > "$RUNNER_TEMP/ci-coverage/lcov.info"
+          fi
+          exit "$test_status"
         working-directory: src/ShutterSpool.Web
       - name: Build frontend
         run: npm run build
@@ -94,12 +106,20 @@ jobs:
         run: dotnet restore src/ShutterSpool.AppHost/ShutterSpool.AppHost.csproj --locked-mode
       - name: Build solution
         run: dotnet build --no-restore
+      - name: Install .NET coverage collector
+        run: dotnet tool install dotnet-coverage --version 18.12.0 --allow-roll-forward --tool-path "$RUNNER_TEMP/coverage-tools"
       - name: Test solution
         id: tests
         shell: bash
         run: |
-          mkdir -p "$RUNNER_TEMP/ci"
-          dotnet test --no-build 2>&1 | tee "$RUNNER_TEMP/ci/dotnet-tests.log"
+          mkdir -p "$RUNNER_TEMP/ci" "$RUNNER_TEMP/ci-coverage"
+          "$RUNNER_TEMP/coverage-tools/dotnet-coverage" collect -f xml -o "$RUNNER_TEMP/ci-coverage/dotnet.xml" -- \
+            bash -c 'dotnet test --no-build && touch "$RUNNER_TEMP/ci/dotnet-tests-passed"' \
+            2>&1 | tee "$RUNNER_TEMP/ci/dotnet-tests.log"
+          test -f "$RUNNER_TEMP/ci/dotnet-tests-passed"
+      - name: Fail CI if frontend tests failed
+        if: ${{ !cancelled() && steps.frontend-tests.outcome == 'failure' }}
+        run: exit 1
       - name: Restore .NET tools
         run: dotnet tool restore
       - name: Check for missing database migrations
@@ -123,3 +143,109 @@ jobs:
           name: dotnet-test-output
           path: ${{ runner.temp }}/ci/dotnet-tests.log
           retention-days: 7
+      - name: Upload coverage reports
+        id: coverage
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sonar-coverage
+          path: |
+            ${{ runner.temp }}/ci-coverage/dotnet.xml
+            ${{ runner.temp }}/ci-coverage/lcov.info
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 7
+
+  analyze:
+    name: SonarQube analysis
+    needs: verify
+    # Fork and Dependabot pull requests do not receive the analysis credential.
+    if: >-
+      !cancelled() && vars.SONAR_ORGANIZATION != '' && vars.SONAR_PROJECT_KEY != '' &&
+      github.actor != 'dependabot[bot]' &&
+      (github.event_name != 'pull_request' ||
+      (github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.repo.full_name == github.repository))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+      SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+      NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
+    steps:
+      - name: Check analysis credential
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [ -z "$SONAR_TOKEN" ]; then
+            echo '::error::Set the SONAR_TOKEN Actions secret before enabling SonarQube analysis.'
+            exit 1
+          fi
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages*.lock.json'
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: src/ShutterSpool.Web/package.json
+          cache: npm
+          cache-dependency-path: src/ShutterSpool.Web/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci --ignore-scripts
+        working-directory: src/ShutterSpool.Web
+      - name: Prepare frontend types
+        run: npm run typecheck
+        working-directory: src/ShutterSpool.Web
+      - name: Install SonarScanner
+        run: dotnet tool install dotnet-sonarscanner --version 12.1.0 --tool-path "$RUNNER_TEMP/sonar"
+      - name: Restore solution
+        run: dotnet restore ShutterSpool.slnx --locked-mode
+      - name: Download coverage reports
+        if: needs.verify.outputs.coverage-artifact-id != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.verify.outputs.coverage-artifact-id }}
+          path: ${{ runner.temp }}/ci-coverage
+      - name: Begin analysis
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          coverage_args=()
+          dotnet_report="$RUNNER_TEMP/ci-coverage/dotnet.xml"
+          if [ -s "$dotnet_report" ]; then
+            coverage_args+=("/d:sonar.cs.vscoveragexml.reportsPaths=$dotnet_report")
+          else
+            echo '::warning::.NET coverage report missing. SonarQube coverage will be incomplete.'
+          fi
+          frontend_report="$RUNNER_TEMP/ci-coverage/lcov.info"
+          if [ -s "$frontend_report" ]; then
+            coverage_args+=("/d:sonar.javascript.lcov.reportPaths=$frontend_report")
+          else
+            echo '::warning::Frontend coverage report missing. SonarQube coverage will be incomplete.'
+          fi
+          # Sonar classifies shared Vitest fixtures as source. Keep them in static analysis and out of coverage.
+          # The PostgreSQL bootstrap script uses psql syntax outside Sonar's Oracle PL/SQL dialect.
+          "$RUNNER_TEMP/sonar/dotnet-sonarscanner" begin \
+            /k:"$SONAR_PROJECT_KEY" \
+            /o:"$SONAR_ORGANIZATION" \
+            /d:sonar.token="$SONAR_TOKEN" \
+            /d:sonar.host.url="https://sonarcloud.io" \
+            /d:sonar.projectBaseDir="$GITHUB_WORKSPACE" \
+            /d:sonar.scanner.scanAll=true \
+            /d:sonar.python.version=3.10,3.11,3.12 \
+            /d:sonar.coverage.exclusions="src/ShutterSpool.Web/tests/**" \
+            /d:sonar.exclusions="**/bin/**,**/obj/**,**/node_modules/**,**/.nuxt/**,**/.output/**,**/dist/**,.nuget/**,artifacts/**,**/TestResults/**,**/coverage/**,src/ShutterSpool.Web/app/api/**,src/ShutterSpool.Server/openapi/**,src/ShutterSpool.Server/wwwroot/**,deploy/package/workspace-databases.sql" \
+            "${coverage_args[@]}"
+      - name: Build for analysis
+        run: dotnet build ShutterSpool.slnx --no-restore --no-incremental --disable-build-servers
+      - name: Upload analysis
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: '"$RUNNER_TEMP/sonar/dotnet-sonarscanner" end /d:sonar.token="$SONAR_TOKEN"'

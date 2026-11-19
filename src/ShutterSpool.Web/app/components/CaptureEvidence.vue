@@ -18,7 +18,9 @@ const evidence = ref<HTMLElement>();
 const decisions = ref<RoutingDecisionPageResponse>();
 const deliveries = ref<RoutingDeliveryPageResponse>();
 const actions = ref<RoutingActionPageResponse>();
-type SafeDeliveryPage = NonNullable<Awaited<ReturnType<ReturnType<typeof api.management.captures.byId>['deliverySummary']['get']>>>;
+type CaptureEndpoint = ReturnType<typeof api.management.captures.byId>;
+type EvidencePage = 'decisions' | 'deliveries' | 'actions';
+type SafeDeliveryPage = NonNullable<Awaited<ReturnType<CaptureEndpoint['deliverySummary']['get']>>>;
 const safeDeliveries = ref<SafeDeliveryPage>();
 const retrying = ref('');
 const retryUncertain = ref(false);
@@ -39,7 +41,32 @@ function clearEvidence() {
     retryUncertain.value = false;
     error.value = '';
 }
-async function read(kind?: 'decisions' | 'deliveries' | 'actions') {
+async function readNextPage(kind: EvidencePage, endpoint: CaptureEndpoint, signal: AbortSignal, isCurrent: () => boolean) {
+    const config = (cursor?: string | null) => ({ queryParameters: { limit: 30, cursor: cursor ?? undefined }, options: [cancellable(signal)] });
+    switch (kind) {
+        case 'decisions': {
+            const page = await endpoint.routing.get(config(decisions.value?.nextCursor));
+            if (!isCurrent()) return;
+            decisions.value = page;
+            break;
+        }
+        case 'deliveries': {
+            const page = await endpoint.deliveries.get(config(deliveries.value?.nextCursor));
+            if (!isCurrent()) return;
+            if (page) deliveryReadSequence.value++;
+            deliveries.value = page;
+            break;
+        }
+        case 'actions': {
+            const page = await endpoint.actions.get(config(actions.value?.nextCursor));
+            if (!isCurrent()) return;
+            actions.value = page;
+            break;
+        }
+    }
+    error.value = '';
+}
+async function read(kind?: EvidencePage) {
     if (!props.capture.id || !props.active)
         return;
     controller?.abort();
@@ -49,37 +76,30 @@ async function read(kind?: 'decisions' | 'deliveries' | 'actions') {
     const access = accessGeneration();
     const signal = controller.signal;
     const isCurrent = () => request === sequence && captureId === props.capture.id && access === accessGeneration();
-    const endpoint = api.management.captures.byId(String(captureId));
+    const endpoint = api.management.captures.byId(captureId);
     try {
         if (!mayAdminister.value) {
             const result = await endpoint.deliverySummary.get({ options: [cancellable(signal)] });
-            if (isCurrent()) { safeDeliveries.value = result; retryUncertain.value = false; error.value = ''; }
+            if (!isCurrent()) return;
+            safeDeliveries.value = result;
+            retryUncertain.value = false;
+            error.value = '';
             return;
         }
-        if (!kind) {
-            const options = { options: [cancellable(signal)] };
-            const pages = await Promise.all([endpoint.routing.get({ queryParameters: { limit: 30 }, ...options }), endpoint.deliveries.get({ queryParameters: { limit: 30 }, ...options }), props.deliveryOnly ? undefined : endpoint.actions.get({ queryParameters: { limit: 30 }, ...options })]);
-            if (isCurrent()) {
-                [decisions.value, deliveries.value, actions.value] = pages;
-                if (pages[1]) deliveryReadSequence.value++;
-            }
+        if (kind) {
+            await readNextPage(kind, endpoint, signal, isCurrent);
+            return;
         }
-        else {
-            const cursor = kind === 'decisions' ? decisions.value?.nextCursor : kind === 'deliveries' ? deliveries.value?.nextCursor : actions.value?.nextCursor;
-            const config = { queryParameters: { limit: 30, cursor: cursor ?? undefined }, options: [cancellable(signal)] };
-            const page = kind === 'decisions' ? await endpoint.routing.get(config) : kind === 'deliveries' ? await endpoint.deliveries.get(config) : await endpoint.actions.get(config);
-            if (!isCurrent())
-                return;
-            if (kind === 'deliveries' && page) deliveryReadSequence.value++;
-            if (kind === 'decisions')
-                decisions.value = page as RoutingDecisionPageResponse;
-            else if (kind === 'deliveries')
-                deliveries.value = page as RoutingDeliveryPageResponse;
-            else
-                actions.value = page as RoutingActionPageResponse;
-        }
-        if (isCurrent())
-            error.value = '';
+        const config = { queryParameters: { limit: 30 }, options: [cancellable(signal)] };
+        const pages = await Promise.all([
+            endpoint.routing.get(config),
+            endpoint.deliveries.get(config),
+            props.deliveryOnly ? undefined : endpoint.actions.get(config),
+        ]);
+        if (!isCurrent()) return;
+        [decisions.value, deliveries.value, actions.value] = pages;
+        if (pages[1]) deliveryReadSequence.value++;
+        error.value = '';
     }
     catch (failure) {
         if (!signal.aborted && isCurrent()) {

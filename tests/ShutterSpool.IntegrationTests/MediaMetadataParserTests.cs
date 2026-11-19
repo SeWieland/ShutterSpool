@@ -110,11 +110,15 @@ public sealed class MediaMetadataParserTests
         Assert.True(allocated < 32L * 1024 * 1024, $"Allocated {allocated} bytes");
     }
 
-    [Fact]
-    public async Task LeavesCaptureTimeUnknownWhenEmbeddedOffsetIsInvalid()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task LeavesCaptureTimeUnknownWhenEitherEmbeddedOffsetIsInvalid(bool invalidFirst)
     {
         var parser = new MetadataExtractorMediaMetadataParser();
-        byte[] bytes = MakeExifJpeg("+99:99");
+        byte[] first = MakeExifJpeg(invalidFirst ? "+99:99" : "+02:00");
+        byte[] second = MakeExifJpeg(invalidFirst ? "+02:00" : "+99:99");
+        byte[] bytes = [.. first[..^2], .. second[2..]];
         await using var original = new MemoryStream(bytes);
 
         AssetMetadata metadata = await parser.ParseAsync(original, "capture.jpg", bytes.Length, CancellationToken.None);
@@ -283,21 +287,25 @@ public sealed class MediaMetadataParserTests
         Assert.Equal(MetadataOutcome.Complete, metadata.Outcome);
     }
 
-    [Fact]
-    public async Task DoesNotTrustContradictoryEmbeddedOriginalTimes()
+    [Theory]
+    [InlineData("2024:02:03 04:06:06", "+02:00", "120")]
+    [InlineData("2024:02:03 04:05:06", "+01:00", "120")]
+    [InlineData("2024:02:03 04:05:06", "+02:00", "12")]
+    public async Task DoesNotTrustContradictoryEmbeddedOriginalTimes(string timestamp, string offset, string fraction)
     {
-        byte[] first = MakeExifJpeg();
-        byte[] second = MakeExifJpeg(timestamp: "2024:02:03 04:06:06");
+        byte[] first = MakeExifJpeg(fraction: "120");
+        byte[] second = MakeExifJpeg(offset, timestamp, fraction);
         byte[] bytes = [.. first[..^2], .. second[2..]];
         await using var original = new MemoryStream(bytes);
 
         AssetMetadata metadata = await new MetadataExtractorMediaMetadataParser()
             .ParseAsync(original, "capture.jpg", bytes.Length, CancellationToken.None);
 
-        Assert.True(metadata.CaptureTime is null || metadata.CaptureTime.IsUncertain);
+        Assert.Null(metadata.CaptureTime);
+        Assert.Equal(MetadataOutcome.Partial, metadata.Outcome);
     }
 
-    private static byte[] MakeExifJpeg(string offset = "+02:00", string timestamp = "2024:02:03 04:05:06")
+    private static byte[] MakeExifJpeg(string offset = "+02:00", string timestamp = "2024:02:03 04:05:06", string fraction = "123")
     {
         byte[] tiff = new byte[155];
         tiff[0] = (byte)'I';
@@ -316,7 +324,8 @@ public sealed class MediaMetadataParserTests
         Put16(tiff, 64, 4);
         Entry(tiff, 66, 0x9003, 2, 20, 118);
         Entry(tiff, 78, 0x9011, 2, 7, 142);
-        Entry(tiff, 90, 0x9291, 2, 4, 0x00333231);
+        Entry(tiff, 90, 0x9291, 2, fraction.Length + 1, 0);
+        WriteAscii(tiff, 98, fraction);
         Entry(tiff, 102, 0xa431, 2, 6, 149);
         Put32(tiff, 114, 0);
         WriteAscii(tiff, 142, offset);

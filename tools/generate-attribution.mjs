@@ -23,13 +23,14 @@ function sha256(data) {
 
 function readPinnedImage(compose) {
   const lines = compose.split(/\r?\n/);
-  const start = lines.findIndex(line => /^  camera-edge:\s*(?:#.*)?$/.test(line));
+  const start = lines.findIndex(line => /^ {2}camera-edge:\s*(?:#.*)?$/.test(line));
   if (start < 0) throw new Error('camera-edge service not found in deploy/images/compose.yaml');
-  const end = lines.findIndex((line, index) => index > start && /^  [^\s#][^:]*:\s*(?:#.*)?$/.test(line));
+  const end = lines.findIndex((line, index) => index > start && /^ {2}[^\s#][^:]*:\s*(?:#.*)?$/.test(line));
   const service = lines.slice(start + 1, end < 0 ? undefined : end);
-  const imageLines = service.filter(line => /^    image:\s*/.test(line));
+  const imagePrefix = '    image:';
+  const imageLines = service.filter(line => line.startsWith(imagePrefix));
   if (imageLines.length !== 1) throw new Error('camera-edge must declare exactly one image');
-  const image = imageLines[0].replace(/^    image:\s*/, '').trim();
+  const image = imageLines[0].slice(imagePrefix.length).trim();
   const match = /^drakkan\/sftpgo:([A-Za-z0-9._-]+)@(sha256:[a-f0-9]{64})$/.exec(image);
   if (!match) throw new Error(`camera-edge image must be a pinned drakkan/sftpgo reference: ${image}`);
   return { image, tag: match[1], digest: match[2] };
@@ -68,7 +69,7 @@ async function get(fetchImpl, url, token, maxBytes) {
       const location = response.headers.get('location');
       const next = location && new URL(location, current);
       if (redirects !== 0 || original.hostname !== 'registry-1.docker.io' || !original.pathname.includes('/blobs/') ||
-          !next || next.protocol !== 'https:' || !DOCKER_BLOB_HOSTS.includes(next.hostname) || next.username || next.password)
+          next?.protocol !== 'https:' || !DOCKER_BLOB_HOSTS.includes(next.hostname) || next.username || next.password)
         throw new Error(`Untrusted redirect from ${original.hostname} to ${next?.hostname || '(missing hostname)'}`);
       current = next;
       continue;
@@ -126,12 +127,12 @@ function metadataFromLabels(labels, tag) {
 }
 
 function replaceSection(template, metadata) {
-  template = template.replace(/\r\n/g, '\n');
+  template = template.replaceAll('\r\n', '\n');
   const startMark = '<!-- BEGIN GENERATED SFTPGo ATTRIBUTION -->';
   const endMark = '<!-- END GENERATED SFTPGo ATTRIBUTION -->';
   const start = template.indexOf(startMark);
   const end = template.indexOf(endMark);
-  if (start < 0 || end < start || template.indexOf(startMark, start + 1) >= 0 || template.indexOf(endMark, end + 1) >= 0)
+  if (start < 0 || end < start || template.includes(startMark, start + 1) || template.includes(endMark, end + 1))
     throw new Error('THIRD-PARTY-NOTICES.md must contain one valid SFTPGo attribution marker section');
   const section = [
     startMark,
@@ -175,11 +176,12 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     process.exitCode = 2;
   } else {
     const outputDir = args.length ? resolve(args[1]) : undefined;
-    generateAttribution({ outputDir }).then(({ metadata }) => {
+    try {
+      const { metadata } = await generateAttribution({ outputDir });
       console.log(`Generated attribution for ${metadata.image}`);
-    }).catch(error => {
+    } catch (error) {
       console.error(error.message);
       process.exitCode = 1;
-    });
+    }
   }
 }

@@ -24,6 +24,7 @@ using ShutterSpool.Server.Api.Captures;
 using ShutterSpool.Server.Api.Live;
 using ShutterSpool.Server.Api.Workspaces;
 using ShutterSpool.Server.Security;
+using WorkspaceFixture = ShutterSpool.IntegrationTests.WorkspaceTenancyPostgresTests.WorkspaceFixture;
 
 namespace ShutterSpool.IntegrationTests;
 
@@ -67,7 +68,7 @@ public sealed partial class WorkspaceTenancyHttpTests
         WorkspaceDefinition first = fixture.Workspaces[0], second = fixture.Workspaces[1];
         await fixture.SetGrantAsync(second, first.Name, true);
         using HttpClient client = fixture.Client(first.Name);
-        string tenantKey = fixture.Storage.ConnectionKey(1);
+        string tenantKey = WorkspaceFixture.ConnectionKey(1);
         string originalTenant = fixture.Storage.Configuration[tenantKey]!;
         await fixture.Storage.SetDatabaseAvailableAsync(2, false);
         try
@@ -164,9 +165,9 @@ public sealed partial class WorkspaceTenancyHttpTests
             using HttpResponseMessage denied = await SendAsync(client, HttpMethod.Get, path, first.Id);
             Assert.Equal(HttpStatusCode.NotFound, denied.StatusCode);
         }
-        await using (var scope = fixture.Storage.Scope(fixture.Server.Services, first))
+        await using (var scope = WorkspaceFixture.Scope(fixture.Server.Services, first))
             Assert.Equal(4, (await scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>().Captures.SingleAsync(Token)).Rating);
-        await using (var scope = fixture.Storage.Scope(fixture.Server.Services, second))
+        await using (var scope = WorkspaceFixture.Scope(fixture.Server.Services, second))
         {
             CaptureEntity[] untouched = await scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>().Captures.ToArrayAsync(Token);
             Assert.Equal(2, untouched.Length);
@@ -362,16 +363,16 @@ public sealed partial class WorkspaceTenancyHttpTests
         }
     }
 
-    private sealed class TenantHttpFixture(WorkspaceTenancyPostgresTests.WorkspaceFixture storage,
+    private sealed class TenantHttpFixture(WorkspaceFixture storage,
         WebApplicationFactory<Program> server, WorkspaceDefinition[] workspaces) : IAsyncDisposable
     {
-        public WorkspaceTenancyPostgresTests.WorkspaceFixture Storage { get; } = storage;
+        public WorkspaceFixture Storage { get; } = storage;
         public WebApplicationFactory<Program> Server { get; } = server;
         public WorkspaceDefinition[] Workspaces { get; } = workspaces;
 
         public static async Task<TenantHttpFixture> CreateAsync(Action<IServiceCollection>? configureServices = null)
         {
-            var storage = await WorkspaceTenancyPostgresTests.WorkspaceFixture.CreateAsync();
+            var storage = await WorkspaceFixture.CreateAsync();
             await storage.ProvisionAsync();
             storage.Configuration["ShutterSpool:Preview:PrewarmMode"] = "Off";
             storage.Configuration["Logging:LogLevel:Default"] = "Warning";
@@ -410,7 +411,7 @@ public sealed partial class WorkspaceTenancyHttpTests
 
         public async Task SetGrantAsync(WorkspaceDefinition workspace, string subject, bool active)
         {
-            await using var scope = Storage.Scope(Server.Services, workspace);
+            await using var scope = WorkspaceFixture.Scope(Server.Services, workspace);
             var database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
             AuthorizationGrant? grant = await database.AuthorizationGrants.SingleOrDefaultAsync(item => item.Issuer == Issuer && item.Subject == subject, Token);
             if (grant is null) database.AuthorizationGrants.Add(new() { Issuer = Issuer, Subject = subject, IsActive = active, Role = WorkspaceRole.Owner });
@@ -420,7 +421,7 @@ public sealed partial class WorkspaceTenancyHttpTests
 
         public async Task SeedAsync(WorkspaceDefinition workspace, Guid source, params (Guid Id, string Name)[] captures)
         {
-            await using var scope = Storage.Scope(Server.Services, workspace);
+            await using var scope = WorkspaceFixture.Scope(Server.Services, workspace);
             var database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
             database.Sources.Add(new() { Id = source, Name = workspace.Name, CollectionId = CollectionName.BuiltInId });
             DateTimeOffset time = DateTimeOffset.UtcNow.AddMinutes(-1);
@@ -433,7 +434,7 @@ public sealed partial class WorkspaceTenancyHttpTests
         public async Task<WebSocket> ConnectAsync(WorkspaceDefinition workspace, string subject)
         {
             WebSocketClient client = Server.Server.CreateWebSocketClient();
-            client.ConfigureRequest = request => request.Headers["Origin"] = "http://localhost";
+            client.ConfigureRequest = request => request.Headers.Origin = "http://localhost";
             WebSocket socket = await client.ConnectAsync(new Uri($"ws://localhost/live/changes?workspace={workspace.Id:D}&access_token={Uri.EscapeDataString(Bearer(subject))}"), Token);
             await socket.SendAsync("{\"protocol\":\"json\",\"version\":1}\u001e"u8.ToArray(), WebSocketMessageType.Text, true, Token);
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(Token);
@@ -444,7 +445,7 @@ public sealed partial class WorkspaceTenancyHttpTests
 
         public void Publish(WorkspaceDefinition workspace, Guid capture)
         {
-            using var scope = Storage.Scope(Server.Services, workspace);
+            using var scope = WorkspaceFixture.Scope(Server.Services, workspace);
             scope.ServiceProvider.GetRequiredService<LiveChangeNotifier>().CaptureChanged(capture, "curation");
         }
 

@@ -1,7 +1,8 @@
 export function chromeState() { return { visible: true }; }
+type Timer = number | ReturnType<typeof setTimeout>;
 interface Clock {
-    schedule?: (callback: () => void, milliseconds: number) => ReturnType<typeof setTimeout>;
-    cancel?: (timer: ReturnType<typeof setTimeout>) => void;
+    schedule?: (callback: () => void, milliseconds: number) => Timer;
+    cancel?: (timer: Timer) => void;
 }
 
 export class FullscreenChrome {
@@ -10,7 +11,7 @@ export class FullscreenChrome {
     private focused = false;
     private pinned = false;
     private generation = 0;
-    private timer?: ReturnType<typeof setTimeout>;
+    private timer?: Timer;
     constructor(readonly state: ReturnType<typeof chromeState>, readonly clock: Clock = {}) {}
     private cancel() {
         this.generation++;

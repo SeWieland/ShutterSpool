@@ -11,6 +11,8 @@ internal sealed class EfCaptureRetentionStore(ShutterSpoolDbContext database, Ti
     ICaptureRetentionMutationStore, ICaptureRetentionReadStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private const string CaptureNotFound = "CAPTURE_NOT_FOUND";
+    private const string RevisionConflict = "REVISION_CONFLICT";
 
     public async Task<CaptureRetentionSummary?> GetCaptureSummaryAsync(Guid captureId, DateTimeOffset asOf,
         CancellationToken cancellationToken)
@@ -37,30 +39,14 @@ internal sealed class EfCaptureRetentionStore(ShutterSpoolDbContext database, Ti
     public async Task<RetentionTrashPage> GetTrashPageAsync(int limit, string? cursor,
         CancellationToken cancellationToken)
     {
-        DateTimeOffset? before = null;
-        Guid beforeId = Guid.Empty;
-        if (cursor is not null)
-        {
-            if (cursor.Length > 128) throw new ArgumentException("The trash cursor is invalid.", nameof(cursor));
-            try
-            {
-                string decoded = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(cursor.Replace('-', '+').Replace('_', '/')
-                    .PadRight((cursor.Length + 3) / 4 * 4, '=')));
-                string[] parts = decoded.Split(':', 2);
-                if (parts.Length != 2 || !long.TryParse(parts[0], out long ticks)
-                    || !Guid.TryParseExact(parts[1], "N", out beforeId)) throw new FormatException();
-                before = new DateTimeOffset(ticks, TimeSpan.Zero);
-            }
-            catch (Exception exception) when (exception is FormatException or ArgumentOutOfRangeException)
-            { throw new ArgumentException("The trash cursor is invalid.", nameof(cursor)); }
-        }
+        var continuation = ParseTrashCursor(cursor);
         IQueryable<CaptureEntity> query = database.Captures.AsNoTracking()
             .Where(item => (item.RetentionDisposition == "Trash" || item.RetentionDisposition == "Purging")
                 && !database.PrivacyErasureAssets.Any(erased => database.CaptureAssets.Any(member =>
                     member.CaptureId == item.Id && member.AssetId == erased.AssetId)));
-        if (before is DateTimeOffset boundary)
-            query = query.Where(item => item.TrashEnteredAt > boundary
-                || item.TrashEnteredAt == boundary && item.Id.CompareTo(beforeId) > 0);
+        if (continuation is { } boundary)
+            query = query.Where(item => item.TrashEnteredAt > boundary.EnteredAt
+                || item.TrashEnteredAt == boundary.EnteredAt && item.Id.CompareTo(boundary.Id) > 0);
         CaptureEntity[] captures = await query.OrderBy(item => item.TrashEnteredAt).ThenBy(item => item.Id)
             .Take(limit + 1).ToArrayAsync(cancellationToken);
         bool more = captures.Length > limit;
@@ -91,16 +77,35 @@ internal sealed class EfCaptureRetentionStore(ShutterSpoolDbContext database, Ti
         return new([.. items], next);
     }
 
+    private static (DateTimeOffset EnteredAt, Guid Id)? ParseTrashCursor(string? cursor)
+    {
+        if (cursor is null) return null;
+        if (cursor.Length > 128) throw new ArgumentException("The trash cursor is invalid.", nameof(cursor));
+        try
+        {
+            string decoded = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(cursor.Replace('-', '+').Replace('_', '/')
+                .PadRight((cursor.Length + 3) / 4 * 4, '=')));
+            string[] parts = decoded.Split(':', 2);
+            if (parts.Length != 2 || !long.TryParse(parts[0], out long ticks)
+                || !Guid.TryParseExact(parts[1], "N", out Guid id)) throw new FormatException();
+            return (new DateTimeOffset(ticks, TimeSpan.Zero), id);
+        }
+        catch (Exception exception) when (exception is FormatException or ArgumentOutOfRangeException)
+        {
+            throw new ArgumentException("The trash cursor is invalid.", nameof(cursor));
+        }
+    }
+
     public async Task<RetentionOperationResult> TrashAsync(Guid captureId, int expectedRevision, string reason,
         DateTimeOffset now, CancellationToken cancellationToken)
     {
         await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await LockRoutingAsync(cancellationToken);
         CaptureEntity? capture = await LockCaptureAsync(captureId, cancellationToken);
-        if (capture is null) return await FinishAsync(transaction, RetentionOperationStatus.NotFound, null, "CAPTURE_NOT_FOUND", cancellationToken);
+        if (capture is null) return await FinishAsync(transaction, RetentionOperationStatus.NotFound, null, CaptureNotFound, cancellationToken);
         if (capture.Revision != expectedRevision)
-            return await FinishAsync(transaction, RetentionOperationStatus.Conflict, capture, "REVISION_CONFLICT", cancellationToken);
-        if (capture.RetentionDisposition != "Active")
+            return await FinishAsync(transaction, RetentionOperationStatus.Conflict, capture, RevisionConflict, cancellationToken);
+        if (capture.RetentionDisposition != nameof(RetentionDisposition.Active))
             return await FinishAsync(transaction, RetentionOperationStatus.Conflict, capture, "RETENTION_TRANSITION_IN_PROGRESS", cancellationToken);
         bool activeDelivery = await database.Deliveries.AnyAsync(delivery =>
             database.CaptureAssets.Any(member => member.CaptureId == captureId && member.AssetId == delivery.AssetId)
@@ -129,9 +134,9 @@ internal sealed class EfCaptureRetentionStore(ShutterSpoolDbContext database, Ti
         await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await LockRoutingAsync(cancellationToken);
         CaptureEntity? capture = await LockCaptureAsync(captureId, cancellationToken);
-        if (capture is null) return await FinishAsync(transaction, RetentionOperationStatus.NotFound, null, "CAPTURE_NOT_FOUND", cancellationToken);
+        if (capture is null) return await FinishAsync(transaction, RetentionOperationStatus.NotFound, null, CaptureNotFound, cancellationToken);
         if (capture.Revision != expectedRevision)
-            return await FinishAsync(transaction, RetentionOperationStatus.Conflict, capture, "REVISION_CONFLICT", cancellationToken);
+            return await FinishAsync(transaction, RetentionOperationStatus.Conflict, capture, RevisionConflict, cancellationToken);
         if (capture.RetentionDisposition != "Trash")
             return await FinishAsync(transaction, RetentionOperationStatus.Conflict, capture, "CAPTURE_NOT_RESTORABLE", cancellationToken);
         bool removalStarted = await database.CaptureAssets.AnyAsync(member => member.CaptureId == captureId
@@ -140,7 +145,7 @@ internal sealed class EfCaptureRetentionStore(ShutterSpoolDbContext database, Ti
             return await FinishAsync(transaction, RetentionOperationStatus.Blocked, capture, "PURGE_ALREADY_STARTED", cancellationToken);
 
         RetentionSettings settings = await ReadSettingsAsync(cancellationToken);
-        capture.RetentionDisposition = "Active";
+        capture.RetentionDisposition = nameof(RetentionDisposition.Active);
         capture.RetentionPaused = true;
         capture.RestoreProtectedUntil = now + settings.RestoreProtection;
         capture.RetentionFactsDirty = true;
@@ -157,10 +162,10 @@ internal sealed class EfCaptureRetentionStore(ShutterSpoolDbContext database, Ti
         await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await LockRoutingAsync(cancellationToken);
         CaptureEntity? capture = await LockCaptureAsync(captureId, cancellationToken);
-        if (capture is null) return await FinishAsync(transaction, RetentionOperationStatus.NotFound, null, "CAPTURE_NOT_FOUND", cancellationToken);
+        if (capture is null) return await FinishAsync(transaction, RetentionOperationStatus.NotFound, null, CaptureNotFound, cancellationToken);
         if (capture.Revision != expectedRevision)
-            return await FinishAsync(transaction, RetentionOperationStatus.Conflict, capture, "REVISION_CONFLICT", cancellationToken);
-        if (capture.RetentionDisposition != "Active" || !capture.RetentionPaused)
+            return await FinishAsync(transaction, RetentionOperationStatus.Conflict, capture, RevisionConflict, cancellationToken);
+        if (capture.RetentionDisposition != nameof(RetentionDisposition.Active) || !capture.RetentionPaused)
             return await FinishAsync(transaction, RetentionOperationStatus.Conflict, capture, "CAPTURE_NOT_PAUSED", cancellationToken);
         capture.RetentionPaused = false;
         capture.Revision = checked(capture.Revision + 1);
@@ -178,10 +183,10 @@ internal sealed class EfCaptureRetentionStore(ShutterSpoolDbContext database, Ti
         await LockRoutingAsync(cancellationToken);
         CaptureEntity? capture = await LockCaptureAsync(captureId, cancellationToken);
         if (capture is null)
-            return await FinishAsync(transaction, RetentionOperationStatus.NotFound, null, "CAPTURE_NOT_FOUND", cancellationToken);
+            return await FinishAsync(transaction, RetentionOperationStatus.NotFound, null, CaptureNotFound, cancellationToken);
         if (capture.Revision != expectedRevision)
-            return await FinishAsync(transaction, RetentionOperationStatus.Conflict, capture, "REVISION_CONFLICT", cancellationToken);
-        if (capture.RetentionDisposition != "Active")
+            return await FinishAsync(transaction, RetentionOperationStatus.Conflict, capture, RevisionConflict, cancellationToken);
+        if (capture.RetentionDisposition != nameof(RetentionDisposition.Active))
             return await FinishAsync(transaction, RetentionOperationStatus.Conflict, capture, "RETENTION_TRANSITION_IN_PROGRESS", cancellationToken);
 
         Guid[] assetIds = await database.CaptureAssets.AsNoTracking().Where(member => member.CaptureId == captureId)
@@ -226,7 +231,15 @@ internal sealed class EfCaptureRetentionStore(ShutterSpoolDbContext database, Ti
         if (captures.Length == 0) return new Dictionary<Guid, CaptureRetentionSummary>();
 
         Guid[] captureIds = [.. captures.Select(capture => capture.Id)];
+        RetentionAssetEvidence assets = await ReadAssetEvidenceAsync(captureIds, now, cancellationToken);
+        RetentionDeliveryEvidence deliveries = await ReadDeliveryEvidenceAsync(assets.Members, cancellationToken);
+        RetentionCaptureRoutingEvidence routing = await ReadRoutingEvidenceAsync(captureIds, assets.Members, cancellationToken);
+        return CaptureRetentionSummaryBuilder.Build(captures, now, settings, new(assets, deliveries, routing));
+    }
 
+    private async Task<RetentionAssetEvidence> ReadAssetEvidenceAsync(Guid[] captureIds, DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
         RetentionMemberFact[] members = await (
             from member in database.CaptureAssets.AsNoTracking()
             join asset in database.Assets.AsNoTracking() on member.AssetId equals asset.Id
@@ -258,13 +271,13 @@ internal sealed class EfCaptureRetentionStore(ShutterSpoolDbContext database, Ti
             .Where(item => policyRevisions.Contains(item.Revision))
             .ToDictionaryAsync(item => item.Revision, item => JsonSerializer.Deserialize<RetentionSettings>(item.PolicyJson, JsonOptions)
                 ?? new RetentionSettings(), cancellationToken);
+        return new(policies, members);
+    }
 
-        Guid[] evidenceAssetIds = [.. members.SelectMany(member =>
-                member.GroupingReason == "recognized_replay" && member.RelatedAssetId is Guid supplierAssetId
-                    ? new[] { member.AssetId, supplierAssetId }
-                    : [member.AssetId])
-            .Distinct()];
-
+    private async Task<RetentionDeliveryEvidence> ReadDeliveryEvidenceAsync(RetentionMemberFact[] members,
+        CancellationToken cancellationToken)
+    {
+        Guid[] evidenceAssetIds = [.. members.SelectMany(member => member.EvidenceAssetIds()).Distinct()];
         RetentionDeliveryFact[] deliveryFacts = await database.Deliveries.AsNoTracking()
             .Where(delivery => evidenceAssetIds.Contains(delivery.AssetId))
             .Select(delivery => new RetentionDeliveryFact(delivery.DecisionId, delivery.AssetId,
@@ -286,10 +299,13 @@ internal sealed class EfCaptureRetentionStore(ShutterSpoolDbContext database, Ti
 
         var deliveriesByDecision = deliveryFacts.GroupBy(delivery => delivery.DecisionId)
             .ToDictionary(group => group.Key, group => group.ToArray());
+        return new(deliveryFacts, intentDecisions, deliveryGroups, intentDecisionsByAsset, deliveriesByDecision);
+    }
 
+    private async Task<RetentionCaptureRoutingEvidence> ReadRoutingEvidenceAsync(Guid[] captureIds,
+        RetentionMemberFact[] members, CancellationToken cancellationToken)
+    {
         Guid[] memberAssetIds = [.. members.Select(member => member.AssetId).Distinct()];
-
-        var membersByCapture = members.ToLookup(member => member.CaptureId);
 
         HashSet<Guid> routedAssets = memberAssetIds.Length == 0 ? [] : await database.RoutedAssets.AsNoTracking()
             .Where(item => memberAssetIds.Contains(item.AssetId)).Select(item => item.AssetId).ToHashSetAsync(cancellationToken);
@@ -310,12 +326,7 @@ internal sealed class EfCaptureRetentionStore(ShutterSpoolDbContext database, Ti
         HashSet<Guid> erasedAssets = memberAssetIds.Length == 0 ? [] : await database.PrivacyErasureAssets.AsNoTracking()
             .Where(erased => memberAssetIds.Contains(erased.AssetId)).Select(erased => erased.AssetId).ToHashSetAsync(cancellationToken);
 
-        var evidence = new RetentionSummaryEvidence(
-            new(policies, membersByCapture),
-            new(deliveryFacts, intentDecisions, deliveryGroups, intentDecisionsByAsset, deliveriesByDecision),
-            new(routedAssets, noMatchAssets, matchedCaptures, erasedAssets));
-
-        return CaptureRetentionSummaryBuilder.Build(captures, now, settings, evidence);
+        return new(routedAssets, noMatchAssets, matchedCaptures, erasedAssets);
     }
 
     private async Task<CaptureEntity?> LockCaptureAsync(Guid captureId, CancellationToken cancellationToken) =>

@@ -3,6 +3,7 @@ import { ratingInterval } from '../lib/workspace-interactions';
 
 const props = defineProps<{ rating: number | null; maximum: number | null }>();
 const emit = defineEmits<{ change: [value: { rating: number | null; maximum: number | null }] }>();
+const handledIntervalKeys = new Set<string>();
 let anchor: number | undefined;
 let intervalAnchor: number | undefined;
 let dragged = false;
@@ -18,8 +19,30 @@ function selected(rating: number) {
     return props.rating != null && rating >= props.rating && rating <= (props.maximum ?? props.rating);
 }
 function ratingAt(target: EventTarget | null) {
-    const value = (target as HTMLElement | null)?.closest<HTMLElement>('[data-rating]')?.dataset.rating;
+    const value = (target as Element | null)?.closest<HTMLButtonElement>('button[data-rating]')?.dataset.rating;
     return value == null ? undefined : Number(value);
+}
+function selectIntervalFromKeyboard(event: KeyboardEvent) {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const key = event.code || event.key;
+    if (event.repeat) {
+        if (handledIntervalKeys.has(key)) event.preventDefault();
+        return;
+    }
+    handledIntervalKeys.delete(key);
+    if (!event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
+    const rating = ratingAt(event.target);
+    if (rating == null) return;
+    // Read Shift here because native keyboard activation varies by browser.
+    handledIntervalKeys.add(key);
+    event.preventDefault();
+    select(rating, true);
+}
+function releaseIntervalKey(event: KeyboardEvent) {
+    if (handledIntervalKeys.delete(event.code || event.key)) event.preventDefault();
+}
+function clearIntervalKeysWhenLeaving(event: FocusEvent) {
+    if (!(event.currentTarget as HTMLElement).contains(event.relatedTarget as Node | null)) handledIntervalKeys.clear();
 }
 function begin(event: PointerEvent) {
     if (event.button !== 0) return;
@@ -56,10 +79,12 @@ function click(event: MouseEvent) {
 </script>
 
 <template>
-    <div
+    <fieldset
         class="filter-group rating-interval"
-        role="group"
         aria-labelledby="rating-filter-title"
+        @keydown="selectIntervalFromKeyboard"
+        @keyup="releaseIntervalKey"
+        @focusout="clearIntervalKeysWhenLeaving"
         @pointerdown="begin"
         @pointermove="move"
         @pointerup="end"
@@ -72,5 +97,5 @@ function click(event: MouseEvent) {
         <button v-for="value in 5" :key="value" :data-rating="value" :aria-label="`${value} stars; Shift selects interval`" :aria-pressed="selected(value)" @click="select(value, $event.shiftKey)">
             {{ value }}<RatingStar />
         </button>
-    </div>
+    </fieldset>
 </template>

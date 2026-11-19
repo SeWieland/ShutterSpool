@@ -36,7 +36,7 @@ internal sealed class WorkspaceMaintenance(IConfiguration configuration)
         else if (args is ["--workspace-upgrade"]) await UpgradeAsync(ready, token);
         else if (args is ["--workspace-allocation", var selected, var expectedText, var nextText]
             && long.TryParse(expectedText, out long expected) && long.TryParse(nextText, out long next) && next >= 10)
-            await ChangeAllocationAsync(control, ready, selected, expected, next, token);
+            await ChangeAllocationAsync(control, selected, expected, next, token);
         else throw new ArgumentException("Use --workspace-control-init, --workspace-provision <name>, --workspace-upgrade or --workspace-allocation <name> <expected bytes> <new bytes>.");
     }
 
@@ -162,7 +162,7 @@ internal sealed class WorkspaceMaintenance(IConfiguration configuration)
         return database.Database.ExecuteSqlRawAsync(privileges, token);
     }
 
-    private async Task ChangeAllocationAsync(WorkspaceControlDbContext control, WorkspaceDefinition[] ready,
+    private async Task ChangeAllocationAsync(WorkspaceControlDbContext control,
         string name, long expected, long next, CancellationToken token)
     {
         name = WorkspaceManifest.CanonicalName(configuration, name);

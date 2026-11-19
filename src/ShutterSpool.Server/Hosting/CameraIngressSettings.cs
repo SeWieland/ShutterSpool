@@ -29,15 +29,30 @@ public sealed class CameraIngressSettings
     public void Validate()
     {
         if (!Enabled) return;
+        ValidateCallback();
+        ValidateLimits();
+        ValidateProfiles();
+    }
+
+    private void ValidateCallback()
+    {
         if (CallbackKey.Length < 32) throw new InvalidOperationException("Camera ingress callback key must contain at least 32 characters.");
         if (!Uri.TryCreate(CallbackBaseUrl.TrimEnd('/'), UriKind.Absolute, out Uri? callbackBase)
             || callbackBase.Scheme is not ("http" or "https") || callbackBase.AbsolutePath != "/internal/camera")
             throw new InvalidOperationException("Camera ingress callback base URL must point to /internal/camera.");
+    }
+
+    private void ValidateLimits()
+    {
         if (InternalPort is < 1 or > 65_535 || MaximumUploadBytes <= 0
             || MaximumConcurrentTransfers is < 1 or > 64 || MaximumSessionsPerSource is < 1 or > 16
             || UploadBandwidthKiBPerSecond <= 0 || TransferTimeoutSeconds is < 30 or > 3_600
             || MaximumUploadBytes > long.MaxValue / (MaximumConcurrentTransfers * 2L))
             throw new InvalidOperationException("Camera ingress limits are invalid.");
+    }
+
+    private void ValidateProfiles()
+    {
         if (string.IsNullOrWhiteSpace(Hostname) || Hostname.Contains('/') || Hostname.Contains(':'))
             throw new InvalidOperationException("Camera ingress hostname must be a host name without a scheme or port.");
         foreach (CameraIngressProfileSettings profile in new[] { Profiles.PlainFtpLan, Profiles.ModernFtps, Profiles.LegacyFtps })

@@ -17,7 +17,7 @@ export class SourceActivityState {
     available = false;
     coverageComplete = false;
     revision = 0;
-    private hintOrder = new Map<string, { version: number; observedAt: string; revision: number }>();
+    private readonly hintOrder = new Map<string, { version: number; observedAt: string; revision: number }>();
 
     clear() {
         this.items.clear();
@@ -42,18 +42,22 @@ export class SourceActivityState {
             accepted: previous?.accepted ?? false, previewReady: previous?.previewReady ?? false });
     }
 
+    private mergeSavedObservation(saved: SourceActivity, readRevision: number): SourceActivity {
+        const hint = this.items.get(saved.transferId);
+        const raced = (this.hintOrder.get(saved.transferId)?.revision ?? 0) > readRevision;
+        const current = hint && raced && !(saved.accepted && hint.phase === 'Receiving') ? hint : saved;
+        return { ...current, assetId: saved.assetId ?? hint?.assetId,
+            captureId: saved.captureId ?? hint?.captureId, accepted: saved.accepted || !!hint?.accepted,
+            previewReady: saved.previewReady };
+    }
+
     reconcile(snapshot: { epoch: string; coverageComplete: boolean; items: SourceActivity[] }, sourceIds: string[], readRevision = this.revision) {
         if (this.epoch && this.epoch !== snapshot.epoch) { this.items.clear(); this.hintOrder.clear(); }
         this.epoch = snapshot.epoch;
         const next = new Map<string, SourceActivity>();
         for (const saved of snapshot.items.slice(0, 100)) {
             if (!sourceIds.includes(saved.sourceId)) continue;
-            const hint = this.items.get(saved.transferId);
-            const raced = (this.hintOrder.get(saved.transferId)?.revision ?? 0) > readRevision;
-            const current = hint && raced && !(saved.accepted && hint.phase === 'Receiving') ? hint : saved;
-            next.set(saved.transferId, { ...current, assetId: saved.assetId ?? hint?.assetId,
-                captureId: saved.captureId ?? hint?.captureId, accepted: saved.accepted || !!hint?.accepted,
-                previewReady: saved.previewReady });
+            next.set(saved.transferId, this.mergeSavedObservation(saved, readRevision));
         }
         // A newer observation can race the snapshot; the follow-up read reconciles its mapping.
         for (const [id, hint] of this.items) if (!next.has(id) && sourceIds.includes(hint.sourceId) && next.size < 100 && !hint.accepted && (this.hintOrder.get(id)?.revision ?? 0) > readRevision)

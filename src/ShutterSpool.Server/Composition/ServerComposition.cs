@@ -51,25 +51,19 @@ internal static class ServerComposition
         TimeSpan shutdownTimeout = TimeSpan.FromSeconds(builder.Configuration.GetValue<int?>("ShutterSpool:ShutdownTimeoutSeconds") ?? 120);
         if (shutdownTimeout <= TimeSpan.Zero) throw new InvalidOperationException("The Server shutdown timeout must be positive.");
         builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = shutdownTimeout);
-        string[] trustedProxyNetworks = builder.Configuration.GetSection("ShutterSpool:ForwardedHeaders:KnownNetworks").Get<string[]>() ?? [];
-        if (trustedProxyNetworks.Length > 0)
-            builder.Services.Configure<ForwardedHeadersOptions>(options =>
-        {
-            options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost;
-            foreach (string network in trustedProxyNetworks)
-                options.KnownIPNetworks.Add(System.Net.IPNetwork.Parse(network));
-        });
+        ConfigureForwardedHeaders(builder);
         CameraIngressSettings cameraIngress = builder.Configuration.GetSection("ShutterSpool:CameraIngress").Get<CameraIngressSettings>() ?? new();
         cameraIngress.Validate();
         builder.Services.AddSingleton(cameraIngress);
         string? configuredMinimum = builder.Configuration["ShutterSpool:CameraCredentials:MinimumPasswordLength"];
-        CameraCredentialPolicy cameraCredentialPolicy = new()
+        var cameraCredentialPolicy = new CameraCredentialPolicy();
+        if (configuredMinimum is not null)
         {
-            MinimumLength = configuredMinimum is null ? 12
-                : int.TryParse(configuredMinimum, System.Globalization.NumberStyles.None,
-                    System.Globalization.CultureInfo.InvariantCulture, out int minimum) ? minimum
-                : throw new InvalidOperationException("Camera credential minimum password length must be an integer from 1 to 128."),
-        };
+            if (!int.TryParse(configuredMinimum, System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out int minimum))
+                throw new InvalidOperationException("Camera credential minimum password length must be an integer from 1 to 128.");
+            cameraCredentialPolicy.MinimumLength = minimum;
+        }
         cameraCredentialPolicy.Validate();
         builder.Services.AddSingleton(cameraCredentialPolicy);
         builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
@@ -121,18 +115,34 @@ internal static class ServerComposition
         });
         builder.Services.AddSingleton<SourceDisplayCacheKeys>();
         builder.Services.AddScoped<SourceDisplayCache>();
-        if (System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name != "GetDocument.Insider")
+        AddHostedWorkers(builder);
+    }
+
+    private static void ConfigureForwardedHeaders(WebApplicationBuilder builder)
+    {
+        string[] trustedProxyNetworks = builder.Configuration.GetSection("ShutterSpool:ForwardedHeaders:KnownNetworks").Get<string[]>() ?? [];
+        if (trustedProxyNetworks.Length == 0) return;
+
+        builder.Services.Configure<ForwardedHeadersOptions>(options =>
         {
-            builder.Services.AddHostedService(services => services.GetRequiredService<SourceAuthenticationObservationWorker>());
-            builder.Services.AddHostedService<MetadataWorker>();
-            builder.Services.AddHostedService<CaptureGroupingWorker>();
-            builder.Services.AddHostedService<CaptureReleaseWorker>();
-            builder.Services.AddHostedService<CaptureRoutingWorker>();
-            builder.Services.AddHostedService<CaptureDeliveryWorker>();
-            builder.Services.AddHostedService<RetentionRemovalWorker>();
-            var preview = builder.Configuration.GetSection("ShutterSpool:Preview").Get<PreviewSettings>() ?? new();
-            if (preview.PrewarmMode != PreviewPrewarmMode.Off) builder.Services.AddHostedService<PreviewPrewarmWorker>();
-        }
+            options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost;
+            foreach (string network in trustedProxyNetworks)
+                options.KnownIPNetworks.Add(System.Net.IPNetwork.Parse(network));
+        });
+    }
+
+    private static void AddHostedWorkers(WebApplicationBuilder builder)
+    {
+        if (System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name == "GetDocument.Insider") return;
+        builder.Services.AddHostedService(services => services.GetRequiredService<SourceAuthenticationObservationWorker>());
+        builder.Services.AddHostedService<MetadataWorker>();
+        builder.Services.AddHostedService<CaptureGroupingWorker>();
+        builder.Services.AddHostedService<CaptureReleaseWorker>();
+        builder.Services.AddHostedService<CaptureRoutingWorker>();
+        builder.Services.AddHostedService<CaptureDeliveryWorker>();
+        builder.Services.AddHostedService<RetentionRemovalWorker>();
+        var preview = builder.Configuration.GetSection("ShutterSpool:Preview").Get<PreviewSettings>() ?? new();
+        if (preview.PrewarmMode != PreviewPrewarmMode.Off) builder.Services.AddHostedService<PreviewPrewarmWorker>();
     }
 
     public static Task InitializeShutterSpoolServerAsync(this WebApplication app) =>
@@ -141,25 +151,7 @@ internal static class ServerComposition
     public static void MapShutterSpoolServer(this WebApplication app)
     {
         app.UseForwardedHeaders();
-        app.Use(async (context, next) =>
-        {
-            if (context.Request.Path.StartsWithSegments("/management"))
-            {
-                const long maximumBodyBytes = 2 * 1024 * 1024;
-                Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature? bodyLimit =
-                    context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
-                if (bodyLimit is { IsReadOnly: false }) bodyLimit.MaxRequestBodySize = maximumBodyBytes;
-                if (context.Request.ContentLength > maximumBodyBytes)
-                {
-                    await Results.Problem(statusCode: StatusCodes.Status413PayloadTooLarge,
-                        title: "Management request body is too large",
-                        extensions: new Dictionary<string, object?> { ["errorCode"] = "REQUEST_TOO_LARGE" })
-                        .ExecuteAsync(context);
-                    return;
-                }
-            }
-            await next(context);
-        });
+        app.Use(LimitManagementRequestBodyAsync);
         CameraIngressSettings cameraIngress = app.Services.GetRequiredService<CameraIngressSettings>();
         if (cameraIngress.Enabled)
         {
@@ -175,31 +167,7 @@ internal static class ServerComposition
                 await next(context);
             });
         }
-        app.UseExceptionHandler(handler => handler.Run(context =>
-        {
-            Exception? error = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
-            bool unavailable = error is not null && (error is Npgsql.NpgsqlException or System.Security.Cryptography.CryptographicException or TimeoutException
-                || error.InnerException is Npgsql.NpgsqlException or System.Security.Cryptography.CryptographicException);
-            int status = error is BadHttpRequestException badRequest ? badRequest.StatusCode
-                : unavailable ? StatusCodes.Status503ServiceUnavailable : StatusCodes.Status500InternalServerError;
-            string errorCode = status switch
-            {
-                StatusCodes.Status400BadRequest => "INVALID_REQUEST",
-                StatusCodes.Status413PayloadTooLarge => "REQUEST_TOO_LARGE",
-                StatusCodes.Status503ServiceUnavailable => "DEPENDENCY_UNAVAILABLE",
-                _ => "INTERNAL_ERROR",
-            };
-            string title = status switch
-            {
-                StatusCodes.Status400BadRequest => "The request is invalid",
-                StatusCodes.Status413PayloadTooLarge => "Management request body is too large",
-                StatusCodes.Status503ServiceUnavailable => "A required service is unavailable",
-                _ => "The operation could not be completed",
-            };
-            return Results.Problem(statusCode: status, title: title,
-                extensions: new Dictionary<string, object?> { ["errorCode"] = errorCode })
-                .ExecuteAsync(context);
-        }));
+        app.UseExceptionHandler(handler => handler.Run(WriteExceptionProblemAsync));
         app.UseCors();
         app.MapOpenApi();
         app.UseDefaultFiles();
@@ -254,6 +222,47 @@ internal static class ServerComposition
         app.MapCameraIngressEndpoints(cameraIngress);
         app.MapFallbackToFile("index.html");
         app.MapDefaultEndpoints();
+    }
+
+    private static async Task LimitManagementRequestBodyAsync(HttpContext context, RequestDelegate next)
+    {
+        if (context.Request.Path.StartsWithSegments("/management"))
+        {
+            const long maximumBodyBytes = 2 * 1024 * 1024;
+            Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature? bodyLimit =
+                context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
+            if (bodyLimit is { IsReadOnly: false }) bodyLimit.MaxRequestBodySize = maximumBodyBytes;
+            if (context.Request.ContentLength > maximumBodyBytes)
+            {
+                await Results.Problem(statusCode: StatusCodes.Status413PayloadTooLarge,
+                    title: "Management request body is too large",
+                    extensions: new Dictionary<string, object?> { ["errorCode"] = "REQUEST_TOO_LARGE" })
+                    .ExecuteAsync(context);
+                return;
+            }
+        }
+        await next(context);
+    }
+
+    private static Task WriteExceptionProblemAsync(HttpContext context)
+    {
+        Exception? error = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
+        int status = error switch
+        {
+            BadHttpRequestException badRequest => badRequest.StatusCode,
+            Npgsql.NpgsqlException or System.Security.Cryptography.CryptographicException or TimeoutException
+                or { InnerException: Npgsql.NpgsqlException or System.Security.Cryptography.CryptographicException } => StatusCodes.Status503ServiceUnavailable,
+            _ => StatusCodes.Status500InternalServerError,
+        };
+        (string errorCode, string title) = status switch
+        {
+            StatusCodes.Status400BadRequest => ("INVALID_REQUEST", "The request is invalid"),
+            StatusCodes.Status413PayloadTooLarge => ("REQUEST_TOO_LARGE", "Management request body is too large"),
+            StatusCodes.Status503ServiceUnavailable => ("DEPENDENCY_UNAVAILABLE", "A required service is unavailable"),
+            _ => ("INTERNAL_ERROR", "The operation could not be completed"),
+        };
+        return Results.Problem(statusCode: status, title: title,
+            extensions: new Dictionary<string, object?> { ["errorCode"] = errorCode }).ExecuteAsync(context);
     }
 
     private static void ConfigureCameraListener(WebApplicationBuilder builder, int internalPort)

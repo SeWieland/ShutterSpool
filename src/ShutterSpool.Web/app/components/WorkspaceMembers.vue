@@ -26,6 +26,41 @@ function roleChoice(member: Member) { return (member.role === 'Owner' ? 'Adminis
 function editable(member: Member) {
     return member.isActive && (member.role !== 'Owner' || workspaceAccess.value?.capabilities.canManageOwners);
 }
+function validMember(member: Member) {
+    return member.id && member.issuer && member.subject && Number.isSafeInteger(member.revision)
+        && ['Owner', 'Administrator', 'Curator', 'Viewer'].includes(member.role ?? '') && typeof member.isActive === 'boolean';
+}
+function mergeRoleDrafts(savedMembers: Member[]) {
+    const previous = new Map(members.value.map(member => [String(member.id), member]));
+    let reset = false;
+    for (const member of savedMembers) {
+        const id = String(member.id);
+        const prior = previous.get(id);
+        const choice = roles[id];
+        const draft = prior && choice !== roleChoice(prior);
+        const unchanged = prior && prior.revision === member.revision && prior.role === member.role && prior.isActive === member.isActive;
+        if (!(draft && unchanged && editable(member))) {
+            const savedRole = roleChoice(member);
+            if (draft && choice !== savedRole) reset = true;
+            roles[id] = savedRole;
+        }
+        previous.delete(id);
+    }
+    for (const [id, member] of previous) {
+        if (roles[id] !== roleChoice(member)) reset = true;
+        delete roles[id];
+    }
+    return reset;
+}
+function mergeViewerVisibility(savedVisibility: boolean, savedRevision: number) {
+    const draft = includeUnreleased.value !== savedIncludeUnreleased.value;
+    const unchanged = policyRevision.value === savedRevision && savedIncludeUnreleased.value === savedVisibility;
+    const reset = draft && !unchanged && includeUnreleased.value !== savedVisibility;
+    if (!draft || !unchanged) includeUnreleased.value = savedVisibility;
+    savedIncludeUnreleased.value = savedVisibility;
+    policyRevision.value = savedRevision;
+    return reset;
+}
 async function read() {
     if (!mayAdminister.value || !props.online) return;
     controller?.abort(); controller = new AbortController();
@@ -36,31 +71,10 @@ async function read() {
         const [page, policy] = await Promise.all([api.management.members.get(config), api.management.viewerPolicy.get(config)]);
         if (disposed || signal.aborted || request !== sequence || access !== accessGeneration()) return;
         if (!page?.items || !Number.isSafeInteger(policy?.revision) || typeof policy?.includeUnreleased !== 'boolean'
-            || page.items.some(member => !member.id || !member.issuer || !member.subject || !Number.isSafeInteger(member.revision)
-                || !['Owner', 'Administrator', 'Curator', 'Viewer'].includes(member.role ?? '') || typeof member.isActive !== 'boolean')) throw new Error('Membership unavailable');
-        const previous = new Map(members.value.map(member => [String(member.id), member]));
-        let resetRoles = false;
-        for (const member of page.items) {
-            const id = String(member.id), prior = previous.get(id), choice = roles[id];
-            const draft = prior && choice !== roleChoice(prior);
-            const unchanged = prior && prior.revision === member.revision && prior.role === member.role && prior.isActive === member.isActive;
-            if (!(draft && unchanged && editable(member))) {
-                if (draft && choice !== roleChoice(member)) resetRoles = true;
-                roles[id] = roleChoice(member);
-            }
-            previous.delete(id);
-        }
-        for (const [id, member] of previous) {
-            if (roles[id] !== roleChoice(member)) resetRoles = true;
-            delete roles[id];
-        }
-        const policyDraft = includeUnreleased.value !== savedIncludeUnreleased.value;
-        const policyUnchanged = policyRevision.value === policy!.revision && savedIncludeUnreleased.value === policy!.includeUnreleased;
-        const resetPolicy = policyDraft && !policyUnchanged && includeUnreleased.value !== policy!.includeUnreleased;
-        if (!policyDraft || !policyUnchanged) includeUnreleased.value = policy!.includeUnreleased!;
+            || page.items.some(member => !validMember(member))) throw new Error('Membership unavailable');
+        const resetRoles = mergeRoleDrafts(page.items);
+        const resetPolicy = mergeViewerVisibility(policy.includeUnreleased, policy.revision!);
         members.value = page.items;
-        savedIncludeUnreleased.value = policy!.includeUnreleased!;
-        policyRevision.value = policy!.revision!;
         if (resetRoles) feedback.value += `${feedback.value ? ' ' : ''}Some unsaved role choices were reset because those memberships changed or are no longer editable.`;
         if (resetPolicy) feedback.value += `${feedback.value ? ' ' : ''}Your unsaved Viewer visibility choice was reset because the policy changed elsewhere.`;
         loaded.value = true;
@@ -68,34 +82,48 @@ async function read() {
         if (!disposed && !signal.aborted && request === sequence && access === accessGeneration()) { handleFailure(failure); error.value = 'Members and Viewer visibility could not be loaded. Refresh to try again.'; }
     } finally { if (request === sequence) loading.value = false; }
 }
+function requestChange(operation: Pending) {
+    const body = { operationId: operation.operationId, expectedRevision: operation.expectedRevision };
+    if (operation.kind === 'policy') return api.management.viewerPolicy.put({ ...body, includeUnreleased: operation.includeUnreleased });
+
+    const member = api.management.members.byId(operation.id);
+    switch (operation.kind) {
+        case 'role': return member.role.post({ ...body, role: operation.role });
+        case 'promote': return member.promoteOwner.post({ ...body, confirmed: true });
+        case 'remove': return member.remove.post(body);
+    }
+}
+async function refreshMembership(isCurrent: () => boolean) {
+    await refreshWorkspaceAccess();
+    if (isCurrent()) await read();
+}
 async function submit(change?: Pending) {
     if (busy.value || loading.value || error.value || !props.online || !mayAdminister.value || pending.value && change) return;
     pending.value ??= change;
     const operation = pending.value;
     if (!operation) return;
-    const access = accessGeneration(); busy.value = true; feedback.value = '';
+    const access = accessGeneration();
+    const isCurrent = () => !disposed && access === accessGeneration();
+    busy.value = true;
+    feedback.value = '';
     try {
-        const body = { operationId: operation.operationId, expectedRevision: operation.expectedRevision };
-        const member = 'id' in operation ? api.management.members.byId(operation.id) : undefined;
-        const result = operation.kind === 'policy' ? await api.management.viewerPolicy.put({ ...body, includeUnreleased: operation.includeUnreleased })
-            : operation.kind === 'role' ? await member!.role.post({ ...body, role: operation.role })
-                : operation.kind === 'promote' ? await member!.promoteOwner.post({ ...body, confirmed: true }) : await member!.remove.post(body);
-        if (disposed || access !== accessGeneration()) return;
+        const result = await requestChange(operation);
+        if (!isCurrent()) return;
         if (result?.status !== 'applied') throw new Error('Membership outcome unavailable');
         pending.value = undefined;
         feedback.value = operation.kind === 'policy' ? 'Viewer visibility saved.' : 'Membership change saved.';
-        await refreshWorkspaceAccess();
-        if (!disposed && access === accessGeneration()) await read();
+        await refreshMembership(isCurrent);
     } catch (failure) {
-        if (disposed || access !== accessGeneration()) return;
+        if (!isCurrent()) return;
         const status = handleFailure(failure);
-        if ([403, 404, 409].includes(status ?? 0)) {
-            pending.value = undefined;
-            feedback.value = workspaceChangeError(failure) ?? 'This change is no longer permitted. Review the refreshed membership and Viewer visibility.';
-            await refreshWorkspaceAccess();
-            if (!disposed && access === accessGeneration()) await read();
-        } else feedback.value = 'The outcome is uncertain. Check the previous change before submitting another action.';
-    } finally { if (!disposed && access === accessGeneration()) busy.value = false; }
+        if (![403, 404, 409].includes(status ?? 0)) {
+            feedback.value = 'The outcome is uncertain. Check the previous change before submitting another action.';
+            return;
+        }
+        pending.value = undefined;
+        feedback.value = workspaceChangeError(failure) ?? 'This change is no longer permitted. Review the refreshed membership and Viewer visibility.';
+        await refreshMembership(isCurrent);
+    } finally { if (isCurrent()) busy.value = false; }
 }
 function changeRole(member: Member) {
     if (!editable(member) || member.revision == null || !roles[String(member.id)]) return;

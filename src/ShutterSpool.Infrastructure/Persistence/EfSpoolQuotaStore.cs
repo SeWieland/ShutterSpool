@@ -1,7 +1,9 @@
 using Microsoft.EntityFrameworkCore;
+using ShutterSpool.Application.Ingest;
+using ShutterSpool.Application.Ingress;
 using ShutterSpool.Application.Retention;
-using System.Diagnostics.Metrics;
 using ShutterSpool.Application.Workspaces;
+using System.Diagnostics.Metrics;
 
 namespace ShutterSpool.Infrastructure.Persistence;
 
@@ -11,6 +13,16 @@ internal sealed class EfSpoolQuotaStore(
     TimeProvider timeProvider, WorkspaceContext? workspace = null) : ISpoolQuotaStore, IQuotaReservationCommitter
 {
     private const int MaximumReconciledRows = 100_000;
+    private const string ActiveReservation = "Active";
+    private const string CommittedReservation = "Committed";
+    private const string SpoolCategory = nameof(SpoolQuotaReservationCategory.Spool);
+    private const string PreviewCategory = nameof(SpoolQuotaReservationCategory.DiskPreview);
+    private const string InvalidReservation = "invalid_reservation";
+    private const string UnknownAccounting = "unknown_accounting";
+    private const string FilesystemReserve = "filesystem_reserve";
+    private const string QuotaCapacity = "quota_capacity";
+    private const string AccountingIncomplete = "Filesystem accounting could not complete.";
+    private const string FilesNotReconciled = "Filesystem accounting could not reconcile managed files.";
     private static readonly TimeSpan MaximumObservationAge = TimeSpan.FromSeconds(60);
     private static readonly Meter Meter = new("ShutterSpool.Retention");
     private static readonly Counter<long> RejectedReservations = Meter.CreateCounter<long>("quota.admission.rejected");
@@ -27,12 +39,12 @@ internal sealed class EfSpoolQuotaStore(
         List<SpoolQuotaReservationEntity> reservations = await GetReservationsAsync(cancellationToken);
         if (reservations.Count > MaximumReconciledRows)
         {
-            await PersistUnknownAsync("Filesystem accounting could not complete.", cancellationToken);
+            await PersistUnknownAsync(AccountingIncomplete, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
-            return UnknownSnapshot(settings, "Filesystem accounting could not complete.", timeProvider.GetUtcNow(), long.MaxValue);
+            return UnknownSnapshot(settings, AccountingIncomplete, timeProvider.GetUtcNow(), long.MaxValue);
         }
 
-        HashSet<string> reservedKeys = reservations.Where(item => item.State == "Active")
+        HashSet<string> reservedKeys = reservations.Where(item => item.State == ActiveReservation)
             .SelectMany(item => item.SpoolKeys).ToHashSet(KeyComparer);
         SpoolQuotaObservationEntity observation = await database.SpoolQuotaObservations.SingleAsync(item => item.Id == 1, cancellationToken);
         bool canEstablishMarker = observation.StorageMarker is null
@@ -48,19 +60,19 @@ internal sealed class EfSpoolQuotaStore(
         await database.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return BuildCachedSnapshot(settings, observation,
-            ToTotals(reservations.Where(item => item.State == "Active").ToArray()), timeProvider.GetUtcNow());
+            ToTotals(reservations.Where(item => item.State == ActiveReservation).ToArray()), timeProvider.GetUtcNow());
     }
 
     private static void ReconcilePreviewReservations(IEnumerable<SpoolQuotaReservationEntity> reservations,
         SpoolQuotaInventory inventory)
     {
         foreach (SpoolQuotaReservationEntity reservation in reservations.Where(item =>
-                     item.State == "Active" && item.Category == "DiskPreview"))
+                     item.State == ActiveReservation && item.Category == PreviewCategory))
         {
             SpoolQuotaFile? retained = inventory.Files.SingleOrDefault(file =>
                 reservation.SpoolKeys.Contains(file.Key, KeyComparer));
             if (retained is null) continue;
-            reservation.State = "Committed";
+            reservation.State = CommittedReservation;
             reservation.ReservedBytes = retained.SizeBytes;
             reservation.WrittenBytes = retained.SizeBytes;
             reservation.FilesystemReservedBytes = retained.SizeBytes;
@@ -83,7 +95,7 @@ internal sealed class EfSpoolQuotaStore(
 
     private void RetireCommittedReservations(IEnumerable<SpoolQuotaReservationEntity> reservations)
     {
-        foreach (SpoolQuotaReservationEntity reservation in reservations.Where(item => item.State == "Committed"))
+        foreach (SpoolQuotaReservationEntity reservation in reservations.Where(item => item.State == CommittedReservation))
             database.SpoolQuotaReservations.Remove(reservation);
     }
 
@@ -126,7 +138,7 @@ internal sealed class EfSpoolQuotaStore(
     {
         if (!IsValid(reservation))
         {
-            Reject("invalid_reservation");
+            Reject(InvalidReservation);
             return false;
         }
 
@@ -136,12 +148,12 @@ internal sealed class EfSpoolQuotaStore(
             .SingleOrDefaultAsync(item => item.OperationId == reservation.OperationId, cancellationToken);
         if (existing is not null)
             return reservation.Category != SpoolQuotaReservationCategory.DiskPreview
-                && existing.State == "Active" && IsSame(existing, reservation);
+                && existing.State == ActiveReservation && IsSame(existing, reservation);
 
         ReservationTotals totals = await GetReservationTotalsAsync(cancellationToken);
         if (totals.Count > MaximumReconciledRows)
         {
-            Reject("unknown_accounting");
+            Reject(UnknownAccounting);
             return false;
         }
         SpoolQuotaSettings settings = ToContract(await database.SpoolQuotaSettings.SingleAsync(item => item.Id == 1, cancellationToken));
@@ -173,35 +185,23 @@ internal sealed class EfSpoolQuotaStore(
     private static string? GetReservationRejection(SpoolQuotaSettings settings, SpoolQuotaSnapshot snapshot,
         ReservationTotals totals, SpoolQuotaReservation reservation)
     {
-        // While quota enforcement is inactive, keep a durable bound for every
-        // admission that has one. This closes the race with an operator
-        // activating quota while the upload is in flight. Existing installs
-        // may still have no trusted storage marker, so do not make that
-        // unknown inventory block previously accepted bounded uploads.
-        bool canUseUnmeasuredInactiveReservation = !settings.IsActive && !snapshot.IsKnown;
-        if (!snapshot.IsKnown && !canUseUnmeasuredInactiveReservation)
-            return "unknown_accounting";
-
-        if (!canUseUnmeasuredInactiveReservation)
-        {
-            if (snapshot.FilesystemReserveBytes is not long || snapshot.DriveAvailableBytes is not long)
-                return "filesystem_reserve";
-            long filesystemReserve = snapshot.FilesystemReserveBytes.Value;
-            long available = snapshot.DriveAvailableBytes.Value;
-            if (available <= filesystemReserve)
-                return "filesystem_reserve";
-
-            long existingFilesystemReserved = totals.FilesystemReservedBytes;
-            long filesystemHeadroom = available - filesystemReserve;
-            if (existingFilesystemReserved >= filesystemHeadroom
-                || reservation.FilesystemReservedBytes >= filesystemHeadroom - existingFilesystemReserved)
-                return "filesystem_reserve";
-        }
+        // A bounded admission made before quota activation still needs a durable reservation.
+        if (!snapshot.IsKnown) return settings.IsActive ? UnknownAccounting : null;
+        if (!HasFilesystemHeadroom(snapshot.FilesystemReserveBytes, snapshot.DriveAvailableBytes,
+                totals.FilesystemReservedBytes, reservation.FilesystemReservedBytes))
+            return FilesystemReserve;
         if (settings.IsActive && (settings.QuotaBytes is not long quota
             || snapshot.UsedBytes > quota || snapshot.ReservedBytes > quota - snapshot.UsedBytes
             || reservation.ReservedBytes > quota - snapshot.UsedBytes - snapshot.ReservedBytes))
-            return snapshot.AdmissionBlockedReason == "unknown_accounting" ? "unknown_accounting" : "quota_capacity";
+            return QuotaCapacity;
         return null;
+    }
+
+    private static bool HasFilesystemHeadroom(long? reserveBytes, long? availableBytes, long existing, long requested)
+    {
+        if (reserveBytes is not long reserve || availableBytes is not long available || available <= reserve) return false;
+        long headroom = available - reserve;
+        return existing < headroom && requested < headroom - existing;
     }
 
     public async Task<bool> UpdateReservationAsync(Guid operationId, Guid? assetId, IReadOnlyList<string> spoolKeys,
@@ -210,7 +210,7 @@ internal sealed class EfSpoolQuotaStore(
         if (reservedBytes <= 0 || writtenBytes < 0 || writtenBytes > reservedBytes || filesystemReservedBytes < 0
             || !AreValidKeys(spoolKeys))
         {
-            Reject("invalid_reservation");
+            Reject(InvalidReservation);
             return false;
         }
         await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
@@ -218,7 +218,7 @@ internal sealed class EfSpoolQuotaStore(
         SpoolQuotaReservationEntity? reservation = await database.SpoolQuotaReservations
             .SingleOrDefaultAsync(item => item.OperationId == operationId, cancellationToken);
         if (reservation is null) return false;
-        if (reservation.State != "Active") return false;
+        if (reservation.State != ActiveReservation) return false;
         reservation.AssetId = assetId;
         reservation.SpoolKeys = [.. spoolKeys];
         reservation.ReservedBytes = reservedBytes;
@@ -233,19 +233,19 @@ internal sealed class EfSpoolQuotaStore(
     {
         if (actualBytes <= 0)
         {
-            Reject("invalid_reservation");
+            Reject(InvalidReservation);
             return false;
         }
         await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await LockSettingsAsync(cancellationToken);
         SpoolQuotaReservationEntity? reservation = await database.SpoolQuotaReservations
             .SingleOrDefaultAsync(item => item.OperationId == operationId, cancellationToken);
-        if (reservation is null || reservation.State != "Active" || reservation.Category != "DiskPreview"
+        if (reservation is null || reservation.State != ActiveReservation || reservation.Category != PreviewCategory
             || actualBytes > reservation.ReservedBytes) return false;
         reservation.ReservedBytes = actualBytes;
         reservation.WrittenBytes = actualBytes;
         reservation.FilesystemReservedBytes = actualBytes;
-        reservation.State = "Committed";
+        reservation.State = CommittedReservation;
         await database.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return true;
@@ -263,7 +263,7 @@ internal sealed class EfSpoolQuotaStore(
         SpoolQuotaSettings settings = ToContract(await database.SpoolQuotaSettings.SingleAsync(item => item.Id == 1, cancellationToken));
         SpoolQuotaObservationEntity currentObservation = await database.SpoolQuotaObservations.AsNoTracking()
             .SingleAsync(item => item.Id == 1, cancellationToken);
-        HashSet<string> otherKeys = reservations.Where(item => item.OperationId != operationId && item.State == "Active")
+        HashSet<string> otherKeys = reservations.Where(item => item.OperationId != operationId && item.State == ActiveReservation)
             .SelectMany(item => item.SpoolKeys).ToHashSet(KeyComparer);
         SpoolQuotaInventory inventory = await accounting.ObserveAsync(otherKeys, currentObservation.StorageMarker,
             allowInitializeStorageMarker: false, cancellationToken: cancellationToken);
@@ -275,7 +275,7 @@ internal sealed class EfSpoolQuotaStore(
         SpoolQuotaReservationEntity[] others = [.. reservations.Where(item => item.OperationId != operationId)];
         ApplyObservation(observation, snapshot, others);
         observation.StorageMarker = inventory.IsKnown ? inventory.StorageMarker : observation.StorageMarker;
-        foreach (SpoolQuotaReservationEntity committed in others.Where(item => item.State == "Committed"))
+        foreach (SpoolQuotaReservationEntity committed in others.Where(item => item.State == CommittedReservation))
             database.SpoolQuotaReservations.Remove(committed);
         database.SpoolQuotaReservations.Remove(reservation);
         await database.SaveChangesAsync(cancellationToken);
@@ -288,7 +288,7 @@ internal sealed class EfSpoolQuotaStore(
         await LockSettingsAsync(cancellationToken);
         SpoolQuotaReservationEntity? reservation = await database.SpoolQuotaReservations
             .SingleOrDefaultAsync(item => item.OperationId == operationId, cancellationToken);
-        if (reservation is null || reservation.State != "Active" || reservation.Category != "Spool"
+        if (reservation is null || reservation.State != ActiveReservation || reservation.Category != SpoolCategory
             || reservation.SpoolKeys.Length != 1 || !reservation.SpoolKeys[0].StartsWith("spool/", StringComparison.Ordinal)) return;
 
         bool hasIngestOperation = await database.Operations.AnyAsync(item => item.Id == operationId, cancellationToken);
@@ -305,15 +305,16 @@ internal sealed class EfSpoolQuotaStore(
         _ = await GetSnapshotAsync(cancellationToken);
         List<SpoolQuotaReservationEntity> reservations = await GetReservationsAsync(cancellationToken);
         if (reservations.Count > MaximumReconciledRows) return;
-        foreach (SpoolQuotaReservationEntity reservation in reservations)
+        foreach (Guid operationId in reservations.Select(reservation => reservation.OperationId))
         {
-            string? operationState = await database.Operations.AsNoTracking().Where(item => item.Id == reservation.OperationId)
+            string? operationState = await database.Operations.AsNoTracking().Where(item => item.Id == operationId)
                 .Select(item => item.State).SingleOrDefaultAsync(cancellationToken);
             string? admissionState = await database.CameraUploadAdmissions.AsNoTracking()
-                .Where(item => item.Id == reservation.OperationId).Select(item => item.State.ToString()).SingleOrDefaultAsync(cancellationToken);
-            if (admissionState is "Quarantined" or "Failed" || operationState is "Quarantined"
+                .Where(item => item.Id == operationId).Select(item => item.State.ToString()).SingleOrDefaultAsync(cancellationToken);
+            if (admissionState is nameof(CameraTransferState.Quarantined) or nameof(CameraTransferState.Failed)
+                || operationState is nameof(IngestOperationState.Quarantined)
                 || operationState is null && admissionState is null)
-                await ReleaseReservationAsync(reservation.OperationId, cancellationToken);
+                await ReleaseReservationAsync(operationId, cancellationToken);
         }
     }
 
@@ -324,7 +325,7 @@ internal sealed class EfSpoolQuotaStore(
         await LockSettingsAsync(cancellationToken);
         SpoolQuotaReservationEntity? reservation = await database.SpoolQuotaReservations
             .SingleOrDefaultAsync(item => item.OperationId == operationId, cancellationToken);
-        if (reservation is not null) reservation.State = "Committed";
+        if (reservation is not null) reservation.State = CommittedReservation;
     }
 
     private async Task<SpoolQuotaSnapshot> BuildSnapshotAsync(SpoolQuotaSettings settings,
@@ -332,21 +333,21 @@ internal sealed class EfSpoolQuotaStore(
         CancellationToken cancellationToken)
     {
         if (!inventory.IsKnown || reservations.Count > MaximumReconciledRows)
-            return UnknownSnapshot(settings, inventory.UnknownReason ?? "Filesystem accounting could not complete.", inventory.ObservedAt,
+            return UnknownSnapshot(settings, inventory.UnknownReason ?? AccountingIncomplete, inventory.ObservedAt,
                 ReservationRemainder(reservations));
 
         try
         {
             SnapshotEvidence? evidence = await LoadSnapshotEvidenceAsync(inventory, cancellationToken);
             if (evidence is null)
-                return UnknownSnapshot(settings, "Filesystem accounting could not complete.", inventory.ObservedAt,
+                return UnknownSnapshot(settings, AccountingIncomplete, inventory.ObservedAt,
                     ReservationRemainder(reservations));
 
             return CalculateSnapshot(settings, reservations, inventory, evidence);
         }
         catch (Exception error) when (error is OverflowException or InvalidOperationException or ArgumentException)
         {
-            return UnknownSnapshot(settings, "Filesystem accounting could not reconcile managed files.", inventory.ObservedAt);
+            return UnknownSnapshot(settings, FilesNotReconciled, inventory.ObservedAt);
         }
     }
 
@@ -370,12 +371,12 @@ internal sealed class EfSpoolQuotaStore(
         if (assets.Count > MaximumReconciledRows) return null;
 
         bool hasUnreservedOperation = await database.Operations.AsNoTracking().AnyAsync(operation =>
-            operation.State != "Committed" && operation.State != "Quarantined"
+            operation.State != nameof(IngestOperationState.Committed) && operation.State != nameof(IngestOperationState.Quarantined)
             && !database.SpoolQuotaReservations.Any(reservation => reservation.OperationId == operation.Id), cancellationToken);
         bool hasUnreservedCameraAdmission = await database.CameraUploadAdmissions.AsNoTracking().AnyAsync(admission =>
-            admission.State != ShutterSpool.Application.Ingress.CameraTransferState.Completed
-            && admission.State != ShutterSpool.Application.Ingress.CameraTransferState.Failed
-            && admission.State != ShutterSpool.Application.Ingress.CameraTransferState.Quarantined
+            admission.State != CameraTransferState.Completed
+            && admission.State != CameraTransferState.Failed
+            && admission.State != CameraTransferState.Quarantined
             && !database.SpoolQuotaReservations.Any(reservation => reservation.OperationId == admission.Id), cancellationToken);
         var remainingFiles = new HashSet<string>(managed.Keys, KeyComparer);
         foreach (AssetQuotaRow asset in assets)
@@ -394,9 +395,31 @@ internal sealed class EfSpoolQuotaStore(
         IReadOnlyCollection<SpoolQuotaReservationEntity> reservations, SpoolQuotaInventory inventory,
         SnapshotEvidence evidence)
     {
+        var originals = CountOriginalBytes(evidence);
+        var transient = CountTransientBytes(evidence);
+        long quarantine = Sum(evidence.Physical, SpoolQuotaFileCategory.Quarantine);
+        long previews = Sum(evidence.Physical, SpoolQuotaFileCategory.DiskPreview);
+        if (CountActiveReservationBytes(reservations) is not { } reserved)
+            return UnknownSnapshot(settings, AccountingIncomplete, inventory.ObservedAt, ReservationRemainder(reservations));
+
+        long partial = checked(transient.Bytes + reserved.Spool);
+        previews = checked(previews + reserved.Previews);
+        long used = checked(originals.Active + originals.Trash + partial + (quarantine + previews));
+        long total = checked(used + reserved.Remaining);
+        long deficit = settings.RecoveryTargetBytes is long target ? Math.Max(0, total - target) : 0;
+        string? blocked = GetBlockedReason(settings, inventory.FilesystemReserveBytes, inventory.DriveAvailableBytes,
+            used, reserved.Remaining, SumFilesystemReservations(reservations));
+        bool known = evidence.HasOnlyReservedOperations && originals.Known && transient.Known;
+        return new SpoolQuotaSnapshot(settings, inventory.ObservedAt, known, used, reserved.Remaining,
+            originals.Active, originals.Trash, partial, quarantine, previews, inventory.DriveTotalBytes,
+            inventory.DriveAvailableBytes, inventory.FilesystemReserveBytes, deficit, blocked, known ? null : FilesNotReconciled);
+    }
+
+    private static (long Active, long Trash, bool Known) CountOriginalBytes(SnapshotEvidence evidence)
+    {
         long active = 0;
         long trash = 0;
-        bool known = evidence.HasOnlyReservedOperations;
+        bool known = true;
         foreach (AssetQuotaRow asset in evidence.Assets)
         {
             if (asset.RemovalState == "Removed") continue;
@@ -405,13 +428,19 @@ internal sealed class EfSpoolQuotaStore(
                 known = false;
                 continue;
             }
-            string disposition = asset.RetentionDisposition ?? "Active";
-            if (disposition is "Trash" or "Purging") trash = checked(trash + file.SizeBytes);
-            else if (disposition == "Active") active = checked(active + file.SizeBytes);
+            if (asset.RetentionDisposition is nameof(RetentionDisposition.Trash) or nameof(RetentionDisposition.Purging))
+                trash = checked(trash + file.SizeBytes);
+            else if (asset.RetentionDisposition is null or nameof(RetentionDisposition.Active))
+                active = checked(active + file.SizeBytes);
             else known = false;
         }
+        return (active, trash, known);
+    }
 
+    private static (long Bytes, bool Known) CountTransientBytes(SnapshotEvidence evidence)
+    {
         long partial = 0;
+        bool known = true;
         foreach (string key in evidence.TransientKeys)
         {
             SpoolQuotaFile file = evidence.Managed[key];
@@ -420,42 +449,33 @@ internal sealed class EfSpoolQuotaStore(
                 known = false;
                 continue;
             }
-            if (state is "Quarantined" or "Failed") known = false;
+            if (state is nameof(IngestOperationState.Quarantined) or "Failed") known = false;
             partial = checked(partial + file.SizeBytes);
         }
+        return (partial, known);
+    }
 
-        long quarantine = Sum(evidence.Physical, SpoolQuotaFileCategory.Quarantine);
-        long previews = Sum(evidence.Physical, SpoolQuotaFileCategory.DiskPreview);
+    private static (long Spool, long Previews, long Remaining)? CountActiveReservationBytes(
+        IReadOnlyCollection<SpoolQuotaReservationEntity> reservations)
+    {
         long reservedPartial = 0;
         long reservedPreviews = 0;
         long reservedRemaining = 0;
         foreach (SpoolQuotaReservationEntity reservation in reservations)
         {
             if (reservation.ReservedBytes <= 0 || reservation.WrittenBytes < 0 || reservation.WrittenBytes > reservation.ReservedBytes
-                || reservation.FilesystemReservedBytes < 0 || reservation.State is not ("Active" or "Committed")
-                || reservation.Category is not ("Spool" or "DiskPreview") || !AreValidKeys(reservation.SpoolKeys))
-                return UnknownSnapshot(settings, "Filesystem accounting could not complete.", inventory.ObservedAt,
-                    ReservationRemainder(reservations));
-            if (reservation.State == "Active")
-            {
-                if (reservation.Category == "DiskPreview") reservedPreviews = checked(reservedPreviews + reservation.WrittenBytes);
-                else reservedPartial = checked(reservedPartial + reservation.WrittenBytes);
-                reservedRemaining = checked(reservedRemaining + reservation.ReservedBytes - reservation.WrittenBytes);
-            }
+                || reservation.FilesystemReservedBytes < 0 || reservation.State is not (ActiveReservation or CommittedReservation)
+                || reservation.Category is not (SpoolCategory or PreviewCategory) || !AreValidKeys(reservation.SpoolKeys))
+                return null;
+            if (reservation.State != ActiveReservation) continue;
+            if (reservation.Category == PreviewCategory) reservedPreviews = checked(reservedPreviews + reservation.WrittenBytes);
+            else reservedPartial = checked(reservedPartial + reservation.WrittenBytes);
+            reservedRemaining = checked(reservedRemaining + reservation.ReservedBytes - reservation.WrittenBytes);
         }
-        partial = checked(partial + reservedPartial);
-        previews = checked(previews + reservedPreviews);
-        long used = checked(checked(checked(active + trash) + partial) + checked(quarantine + previews));
-        long total = checked(used + reservedRemaining);
-        long deficit = settings.RecoveryTargetBytes is long target ? Math.Max(0, total - target) : 0;
-        string? blocked = GetBlockedReason(settings, inventory, used, reservedRemaining, SumFilesystemReservations(reservations));
-        return new SpoolQuotaSnapshot(settings, inventory.ObservedAt, known, used, reservedRemaining,
-            active, trash, partial, quarantine, previews, inventory.DriveTotalBytes, inventory.DriveAvailableBytes,
-            inventory.FilesystemReserveBytes, deficit, blocked,
-            known ? null : "Filesystem accounting could not reconcile managed files.");
+        return (reservedPartial, reservedPreviews, reservedRemaining);
     }
 
-    private async Task<Dictionary<string, string>> FindOperationKeysAsync(IReadOnlyList<string> keys,
+    private async Task<Dictionary<string, string>> FindOperationKeysAsync(List<string> keys,
         CancellationToken cancellationToken)
     {
         var result = new Dictionary<string, string>(KeyComparer);
@@ -504,9 +524,9 @@ internal sealed class EfSpoolQuotaStore(
     private static void ApplyObservation(SpoolQuotaObservationEntity observation, SpoolQuotaSnapshot snapshot,
         IReadOnlyCollection<SpoolQuotaReservationEntity> reservations)
     {
-        long activeWritten = reservations.Where(item => item.State == "Active" && item.Category == "Spool")
+        long activeWritten = reservations.Where(item => item.State == ActiveReservation && item.Category == SpoolCategory)
             .Aggregate(0L, (sum, item) => checked(sum + item.WrittenBytes));
-        long previewWritten = reservations.Where(item => item.State == "Active" && item.Category == "DiskPreview")
+        long previewWritten = reservations.Where(item => item.State == ActiveReservation && item.Category == PreviewCategory)
             .Aggregate(0L, (sum, item) => checked(sum + item.WrittenBytes));
         observation.ObservedAt = snapshot.ObservedAt;
         observation.IsKnown = snapshot.IsKnown;
@@ -529,9 +549,9 @@ internal sealed class EfSpoolQuotaStore(
         var value = await database.SpoolQuotaReservations.AsNoTracking().GroupBy(_ => 1)
             .Select(group => new
             {
-                WrittenSpool = group.Where(item => item.Category == "Spool").Select(item => (decimal?)item.WrittenBytes).Sum() ?? 0,
-                WrittenPreviews = group.Where(item => item.Category == "DiskPreview").Select(item => (decimal?)item.WrittenBytes).Sum() ?? 0,
-                Remaining = group.Where(item => item.State == "Active")
+                WrittenSpool = group.Where(item => item.Category == SpoolCategory).Select(item => (decimal?)item.WrittenBytes).Sum() ?? 0,
+                WrittenPreviews = group.Where(item => item.Category == PreviewCategory).Select(item => (decimal?)item.WrittenBytes).Sum() ?? 0,
+                Remaining = group.Where(item => item.State == ActiveReservation)
                     .Select(item => (decimal?)(item.ReservedBytes - item.WrittenBytes)).Sum() ?? 0,
                 FilesystemReserved = group.Select(item => (decimal?)item.FilesystemReservedBytes).Sum() ?? 0,
             }).SingleOrDefaultAsync(cancellationToken);
@@ -541,21 +561,21 @@ internal sealed class EfSpoolQuotaStore(
                 ClampReservationTotal(value.FilesystemReserved));
     }
 
-    private static ReservationTotals ToTotals(IReadOnlyCollection<SpoolQuotaReservationEntity> reservations)
+    private static ReservationTotals ToTotals(SpoolQuotaReservationEntity[] reservations)
     {
         long writtenSpool = 0, writtenPreviews = 0, remaining = 0, filesystem = 0;
         foreach (SpoolQuotaReservationEntity item in reservations)
         {
-            if (item.State is not ("Active" or "Committed") || item.Category is not ("Spool" or "DiskPreview")
+            if (item.State is not (ActiveReservation or CommittedReservation) || item.Category is not (SpoolCategory or PreviewCategory)
                 || item.ReservedBytes < 0 || item.WrittenBytes < 0 || item.WrittenBytes > item.ReservedBytes
                 || item.FilesystemReservedBytes < 0)
                 throw new InvalidOperationException("The persisted quota reservation is invalid.");
-            if (item.Category == "Spool") writtenSpool = checked(writtenSpool + item.WrittenBytes);
+            if (item.Category == SpoolCategory) writtenSpool = checked(writtenSpool + item.WrittenBytes);
             else writtenPreviews = checked(writtenPreviews + item.WrittenBytes);
-            if (item.State == "Active") remaining = checked(remaining + item.ReservedBytes - item.WrittenBytes);
+            if (item.State == ActiveReservation) remaining = checked(remaining + item.ReservedBytes - item.WrittenBytes);
             filesystem = checked(filesystem + item.FilesystemReservedBytes);
         }
-        return new ReservationTotals(reservations.Count, writtenSpool, writtenPreviews, remaining, filesystem);
+        return new ReservationTotals(reservations.Length, writtenSpool, writtenPreviews, remaining, filesystem);
     }
 
     private static SpoolQuotaSnapshot BuildCachedSnapshot(SpoolQuotaSettings settings, SpoolQuotaObservationEntity observation,
@@ -563,7 +583,7 @@ internal sealed class EfSpoolQuotaStore(
     {
         if (!observation.IsKnown || now < observation.ObservedAt || now - observation.ObservedAt > MaximumObservationAge
             || reservations.Count > MaximumReconciledRows)
-            return UnknownSnapshot(settings, observation.UnknownReason ?? "Filesystem accounting could not complete.", observation.ObservedAt,
+            return UnknownSnapshot(settings, observation.UnknownReason ?? AccountingIncomplete, observation.ObservedAt,
                 reservations.Count > MaximumReconciledRows ? long.MaxValue : reservations.RemainingBytes);
 
         try
@@ -571,13 +591,10 @@ internal sealed class EfSpoolQuotaStore(
             long partial = checked(observation.PartialBytes + reservations.WrittenSpoolBytes);
             long previews = checked(observation.DiskPreviewBytes + reservations.WrittenPreviewBytes);
             long reserved = reservations.RemainingBytes;
-            long filesystemReserved = reservations.FilesystemReservedBytes;
             long used = checked(observation.ActiveBytes + observation.TrashBytes + partial + observation.QuarantineBytes + previews);
             long deficit = settings.RecoveryTargetBytes is long target ? Math.Max(0, checked(used + reserved) - target) : 0;
-            string? blocked = observation.FilesystemReserveBytes is not long reserve || observation.DriveAvailableBytes is not long available
-                || available <= reserve || filesystemReserved >= available - reserve ? "filesystem_reserve"
-                : settings.IsActive && settings.QuotaBytes is long quota && (used >= quota || reserved >= quota - used)
-                    ? "quota_capacity" : null;
+            string? blocked = GetBlockedReason(settings, observation.FilesystemReserveBytes, observation.DriveAvailableBytes,
+                used, reserved, reservations.FilesystemReservedBytes);
             return new SpoolQuotaSnapshot(settings, observation.ObservedAt, true, used, reserved,
                 observation.ActiveBytes, observation.TrashBytes, partial, observation.QuarantineBytes, previews,
                 observation.DriveTotalBytes, observation.DriveAvailableBytes, observation.FilesystemReserveBytes,
@@ -585,17 +602,15 @@ internal sealed class EfSpoolQuotaStore(
         }
         catch (OverflowException)
         {
-            return UnknownSnapshot(settings, "Filesystem accounting could not complete.", observation.ObservedAt);
+            return UnknownSnapshot(settings, AccountingIncomplete, observation.ObservedAt);
         }
     }
 
-    private static string? GetBlockedReason(SpoolQuotaSettings settings, SpoolQuotaInventory inventory,
+    private static string? GetBlockedReason(SpoolQuotaSettings settings, long? reserveBytes, long? availableBytes,
         long used, long reserved, long filesystemReserved)
     {
-        if (!inventory.IsKnown) return "unknown_accounting";
-        if (inventory.FilesystemReserveBytes is not long reserve || inventory.DriveAvailableBytes is not long available
-            || available <= reserve || filesystemReserved >= available - reserve) return "filesystem_reserve";
-        if (settings.IsActive && settings.QuotaBytes is long quota && (used >= quota || reserved >= quota - used)) return "quota_capacity";
+        if (!HasFilesystemHeadroom(reserveBytes, availableBytes, filesystemReserved, requested: 0)) return FilesystemReserve;
+        if (settings.IsActive && settings.QuotaBytes is long quota && (used >= quota || reserved >= quota - used)) return QuotaCapacity;
         return null;
     }
 
@@ -606,7 +621,7 @@ internal sealed class EfSpoolQuotaStore(
     {
         try
         {
-            return reservations.Where(item => item.State == "Active")
+            return reservations.Where(item => item.State == ActiveReservation)
                 .Aggregate(0L, (sum, item) => checked(sum + item.ReservedBytes - item.WrittenBytes));
         }
         catch (OverflowException)
@@ -647,7 +662,7 @@ internal sealed class EfSpoolQuotaStore(
     private static SpoolQuotaSnapshot UnknownSnapshot(SpoolQuotaSettings settings, string reason, DateTimeOffset? observedAt = null,
         long reservedBytes = 0) =>
         new(settings, observedAt ?? DateTimeOffset.MinValue, false, 0, reservedBytes, 0, 0, 0, 0, 0, null, null, null, 0,
-            "unknown_accounting", reason);
+            UnknownAccounting, reason);
 
     private static StringComparer KeyComparer => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
     private static void Reject(string reason) => RejectedReservations.Add(1, new KeyValuePair<string, object?>("reason", reason));

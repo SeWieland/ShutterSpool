@@ -35,12 +35,7 @@ internal sealed class DestinationRoutingAdminService(ShutterSpoolDbContext datab
         DestinationEntity destination = await database.Destinations.FromSqlInterpolated($"SELECT * FROM destinations WHERE \"Id\" = {routing.DestinationId} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken) ?? throw new InvalidOperationException("Destination does not exist.");
         if (routing.Enabled) (capabilities ?? DestinationCapabilities.All).EnsureEnabled(destination.Kind);
-        if (destination.IsArchived)
-        {
-            await transaction.CommitAsync(cancellationToken);
-            return new(false, await GetAsync(routing.DestinationId, cancellationToken));
-        }
-        if (destination.ConfigurationRevision != expectedRevision)
+        if (destination.IsArchived || destination.ConfigurationRevision != expectedRevision)
         {
             await transaction.CommitAsync(cancellationToken);
             return new(false, await GetAsync(routing.DestinationId, cancellationToken));
@@ -55,15 +50,18 @@ internal sealed class DestinationRoutingAdminService(ShutterSpoolDbContext datab
             { DestinationId = routing.DestinationId, RulesJson = rulesJson });
         else config.RulesJson = rulesJson;
         if (wasEnabled != routing.Enabled)
-        {
-            DeliveryEntity[] pending = await database.Deliveries.Where(delivery => delivery.DestinationId == routing.DestinationId
-                && (routing.Enabled ? delivery.State == DeliveryState.Disabled
-                    : delivery.State == DeliveryState.Pending || delivery.State == DeliveryState.RetryWait)).ToArrayAsync(cancellationToken);
-            foreach (DeliveryEntity delivery in pending) delivery.State = routing.Enabled ? DeliveryState.Pending : DeliveryState.Disabled;
-        }
+            await UpdateDeliveryStatesAsync(routing.DestinationId, routing.Enabled, cancellationToken);
         await database.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return new(true, new DestinationRouting(destination.Id, destination.Enabled, routing.Rules,
             destination.ConfigurationRevision));
+    }
+
+    private async Task UpdateDeliveryStatesAsync(Guid destinationId, bool enabled, CancellationToken cancellationToken)
+    {
+        DeliveryEntity[] deliveries = await database.Deliveries.Where(delivery => delivery.DestinationId == destinationId
+            && (enabled ? delivery.State == DeliveryState.Disabled
+                : delivery.State == DeliveryState.Pending || delivery.State == DeliveryState.RetryWait)).ToArrayAsync(cancellationToken);
+        foreach (DeliveryEntity delivery in deliveries) delivery.State = enabled ? DeliveryState.Pending : DeliveryState.Disabled;
     }
 }

@@ -26,6 +26,16 @@ internal static class SuppressionRestoreGate
         if (manifest.SnapshotId != expectedId) throw Rejected();
         PrivacyErasureImportStatus status = await service.BeginReconciliationAsync(manifest.Payload, expectedId, cancellationToken);
         if (status.ErrorCode is not null) throw Rejected();
+        await ReconcilePagesAsync(directory, expectedId, service, status, cancellationToken);
+        status = await service.CompleteReconciliationAsync(expectedId, cancellationToken);
+        if (!status.Ready || status.ErrorCode is not null) throw Rejected();
+        status = await erasure.DrainPendingAsync(expectedId, cancellationToken);
+        if (!status.Ready || status.ErrorCode is not null) throw Rejected();
+    }
+
+    private static async Task ReconcilePagesAsync(string directory, Guid expectedId, PrivacyErasureSuppressionService service,
+        PrivacyErasureImportStatus status, CancellationToken cancellationToken)
+    {
         for (int index = 0; index < status.ExpectedPageCount; index++)
         {
             PrivacyErasureProtectedPage page = await ReadAsync<PrivacyErasureProtectedPage>(
@@ -34,10 +44,6 @@ internal static class SuppressionRestoreGate
             status = await service.ReconcilePageAsync(page.Payload, cancellationToken);
             if (status.ErrorCode is not null) throw Rejected();
         }
-        status = await service.CompleteReconciliationAsync(expectedId, cancellationToken);
-        if (!status.Ready || status.ErrorCode is not null) throw Rejected();
-        status = await erasure.DrainPendingAsync(expectedId, cancellationToken);
-        if (!status.Ready || status.ErrorCode is not null) throw Rejected();
     }
 
     private static async Task<T> ReadAsync<T>(string path, CancellationToken cancellationToken) where T : class

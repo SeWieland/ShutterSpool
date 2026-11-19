@@ -9,12 +9,14 @@ All pull requests, including stacked changes targeting another feature branch, r
 Dependabot checks GitHub Actions, npm, NuGet and Docker images weekly; updates still require the normal checks and maintainer review.
 Docker scans the literal build-stage references in `deploy/Server.Dockerfile`, the shared `deploy/images/compose.yaml` pins, and the packaged component/proxy YAML files. Tags identify the update stream; digests remain the executable identity. SDK updates must still satisfy `global.json`, and database major-version changes need a supported migration path.
 GitHub-managed CodeQL scans Actions, C#, JavaScript/TypeScript and Python on supported pushes and pull requests and on its scheduled runs. Static analysis complements the checks below; it does not qualify camera or recovery behavior.
-The [SonarQube workflow](../.github/workflows/sonarqube.yml) scans .NET and Vue/TypeScript on `main` pushes and same-repository pull requests targeting `main`; fork and Dependabot changes are scanned after merge.
-Generated clients and build output are excluded. SonarQube Cloud reports an advisory quality gate separately; test coverage is not imported.
+The [CI workflow](../.github/workflows/ci.yml) runs SonarQube analysis on `main` pushes and same-repository pull requests targeting `main`. Fork and Dependabot changes are scanned after merge.
+On noncancelled runs, CI uploads available coverage even when tests fail. Eligible SonarQube analysis imports the .NET XML report and a single frontend `lcov.info` when available.
+Vitest maps coverage to the original TypeScript and Vue files. SonarQube excludes `src/ShutterSpool.Web/tests/` from coverage. Generated clients and build output are excluded.
+SonarQube Cloud reports an advisory quality gate separately.
 
 Pushes to `main` and all pull requests run the .NET suites with PostgreSQL, frontend type/test/build checks, migration and generated-client consistency checks, camera-client security, edge certificate validation and release-builder checks.
 The release-builder tests use temporary fixtures and perform no application builds or registry writes.
-`node --test tools/generate-attribution.test.mjs` checks metadata generation with controlled registry responses and also runs through `npm test`. Frontend builds resolve the actual pinned SFTPGo metadata; they require outbound access to Docker Hub.
+The [attribution checks](../src/ShutterSpool.Web/README.md#build-and-check) exercise metadata generation with controlled registry responses and run as part of `npm test`. Frontend builds resolve the pinned SFTPGo metadata and require outbound access to Docker Hub.
 Version tags on commits in `main` with successful CI run the [`release.yml` workflow](../.github/workflows/release.yml), which builds and pushes the image with the official Docker action, packages the Compose ZIP, checks anonymous manifest retrieval and release assets, then publishes the GitHub Release.
 Available package files are retained as a seven-day Actions artifact. Offline tests do not establish live GHCR access or anonymous retrieval. See the [release workflow conventions](../docs/release-policy.md#publish-from-a-version-tag).
 Backup/restore rehearsals and the opt-in runtime/provider checks below are separate qualification work; run the affected checks when changing those boundaries and before claiming release readiness.
@@ -53,8 +55,9 @@ Preserve meaningful regression expectations when changing implementation boundar
 ## Frontend checks
 
 From `src/ShutterSpool.Web`, run `npm ci`, `npm run typecheck`, `npm test` and `npm run build` as described in the [Web guide](../src/ShutterSpool.Web/README.md#build-and-check).
-The native Node checks cover browser state, autosave, reconciliation, private preview handling, Collections, retention presentation and interaction policies.
-Use browser inspection for actual layout, focus, keyboard/touch behavior and visible failure states; Node checks alone do not establish usability.
+The Vitest suite covers browser state, autosave, reconciliation, private preview handling, Collections, retention presentation and interaction policies.
+Mounted Nuxt tests exercise rendering and interactions with synthetic DOM events.
+Use a real browser to verify layout, focus, keyboard and touch behavior, and visible failure states.
 
 ## Controlled Nextcloud delivery checks
 
@@ -76,15 +79,16 @@ Run checks from the repository root with Python 3.10+ unless noted. These use co
 | Check | Purpose and prerequisites |
 | --- | --- |
 | `python tests/verify-camera-ftp-client.py` | Exercise the shared `tests/camera_ftp.py` client's certificate/hostname validation, protected-data and no-plaintext-fallback behavior. |
-| `python tests/verify-edge-startup.py` | Reject absent, expired, wrong-host or wrong-key edge certificates; requires a POSIX shell and OpenSSL. |
+| `python tests/verify-edge-startup.py` | Check that the packaged edge entrypoint accepts a valid supplied certificate and refuses missing or expired certificates, hostname mismatches and mismatched private keys. Uses an SFTPGo stub and requires a POSIX shell and OpenSSL. |
 | `python tests/verify-release-build.py` | Check Compose package construction and refusal paths with controlled fixtures. |
-| `python tests/verify-ftps-edge.py` | Exercise the pinned disposable edge's protocol behavior and controlled certificate replacement; requires Docker and OpenSSL. Add `--legacy` for the separate RSA AES-CBC profile. |
+| `python tests/verify-ftps-edge.py` | Exercise the pinned disposable edge's protocol behavior and controlled certificate replacement. Requires OpenSSL and a Docker setup that lets the container reach the fixture callback at `host.docker.internal`, as Docker Desktop does. Add `--legacy` for the separate RSA AES-CBC profile. |
 | `python tests/verify-keycloak-theme.py` | Check native enrollment defaults/verified-email mapper and theme preflight, selection and fallback; shell cases use the pinned Keycloak image and a controlled administrative-command stub. Requires Docker; this optional check does not prove email delivery or account enrollment. |
 | `python tests/verify-sftpgo-httpfs.py` | Characterize synchronous completion, same-name uploads, rejected append/resume and hook-failure cleanup with synthetic bytes on a disposable loopback FTP endpoint; requires Docker. |
 
 `camera_ftp.py` is the reusable synthetic client, not a standalone acceptance run. It keeps the socket address separate from the TLS hostname and never falls back to plaintext after TLS failure.
 
-The FTPS edge check validates a synthetic replacement certificate's chain, hostname and key, rejects an invalid candidate without changing the served certificate, then verifies a controlled restart serves the replacement.
+In the pinned FTPS fixture, a protected upload completes and the session closes before the edge restarts with a second valid synthetic certificate.
+A fresh FTPS client validates the chain and hostname and checks that the served certificate fingerprint matches the replacement.
 It does not exercise ACME issuance, unattended renewal or a physical camera's trust store.
 The SFTPGo check removes its own uniquely named container and temporary callback listener; it characterizes the dependency rather than proving ShutterSpool's end-to-end durability.
 

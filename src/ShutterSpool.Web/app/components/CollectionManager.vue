@@ -14,47 +14,101 @@ const unused = ref<CollectionResponse[]>([]), unusedReady = ref(false), unusedLi
 let sequence = 0;
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 let previousFocus: HTMLElement | null = null;
+async function rereadCollection(id: string) {
+    try {
+        return await api.management.collections.byId(id).get() ?? undefined;
+    } catch (failure) {
+        if (handleFailure(failure) === 404) return undefined;
+        throw failure;
+    }
+}
+function applyReadDraft(review: boolean, preserveDraft: boolean, draft: string, current?: CollectionResponse) {
+    if (review) {
+        selected.value = current;
+        name.value = draft;
+        const guidance = current
+            ? `Current name: ${current.path ?? current.name}. Your entered name is retained.`
+            : 'Review the results before deliberately creating another Collection.';
+        feedback.value = `Saved Collections checked. ${guidance}`;
+        return;
+    }
+    if (!preserveDraft) {
+        selected.value = undefined;
+        name.value = '';
+    }
+    feedback.value = 'Saved Collections checked. Choose a Collection to review before another change.';
+}
 async function read(next = false, preserveDraft = false) {
     clearTimeout(searchTimer);
     next = next && loadedSearch === search.value;
     const request = ++sequence, access = accessGeneration(); busy.value = true;
     const review = checking.value, draft = name.value, owner = selected.value;
-    const query = review && !owner ? [...draft.replace(/^\//, '')].slice(0, 64).join('') : search.value;
+    const ownerId = owner?.id;
+    const reviewingCreate = review && !owner;
+    const query = reviewingCreate ? [...draft.replace(/^\//, '')].slice(0, 64).join('') : search.value;
     try {
         const page = await api.management.collections.get({ queryParameters: { q: query || undefined, limit: 30, cursor: next ? cursor.value ?? undefined : undefined } });
-        let current = owner;
-        if (review && owner?.id) {
-            try { current = await api.management.collections.byId(String(owner.id)).get() ?? undefined; }
-            catch (failure) { if (handleFailure(failure) !== 404) throw failure; current = undefined; }
-        }
+        const current = review && ownerId ? await rereadCollection(String(ownerId)) : owner;
         if (request !== sequence || access !== accessGeneration()) return;
         if (!page?.items) throw new Error('Unavailable');
         items.value = next ? [...items.value, ...page.items] : page.items; cursor.value = page.nextCursor;
         loadedSearch = query;
-        if (review && !owner) search.value = query;
+        if (reviewingCreate) search.value = query;
         checking.value = false;
-        if (!preserveDraft || review) { selected.value = review ? current : undefined; name.value = review ? draft : ''; }
-        feedback.value = review ? `Saved Collections checked. ${current ? `Current name: ${current.path ?? current.name}. Your entered name is retained.` : 'Review the results before deliberately creating another Collection.'}` : 'Saved Collections checked. Choose a Collection to review before another change.';
-    } catch (failure) { handleFailure(failure); if (request === sequence && access === accessGeneration()) { checking.value = true; feedback.value = 'Unable to check saved Collections. Retry before changing them.'; } }
-    finally { if (request === sequence) busy.value = false; }
+        applyReadDraft(review, preserveDraft, draft, current);
+    } catch (failure) {
+        handleFailure(failure);
+        if (request !== sequence || access !== accessGeneration()) return;
+        checking.value = true;
+        feedback.value = 'Unable to check saved Collections. Retry before changing them.';
+    } finally { if (request === sequence) busy.value = false; }
 }
 function choose(item?: CollectionResponse) { selected.value = item; name.value = item?.path ?? item?.name ?? ''; feedback.value = ''; }
+function deleteCollection(id: string, revision?: number | null) {
+    return api.management.collections.byId(id).delete({ queryParameters: { expectedRevision: revision ?? undefined } });
+}
+function writeCollection(item: CollectionResponse | undefined, remove: boolean) {
+    if (!item?.id) return api.management.collections.post({ name: name.value });
+    const id = String(item.id);
+    if (remove) return deleteCollection(id, item.revision);
+    return api.management.collections.byId(id).put({ expectedRevision: item.revision, name: name.value });
+}
+function describeWriteFailure(status: number | undefined, duplicate: boolean) {
+    if (duplicate) return 'A Collection already uses this name. Enter a different name.';
+    if (status === 409) return 'Collection changed or remains referenced by Sources or retained photographs. Check saved Collections and review its reference counts.';
+    if (status === 400) return 'Name was not accepted. Check the name and its folder segments.';
+    return 'Outcome uncertain. Check saved Collections before deliberately trying again.';
+}
 async function save(remove = false) {
     if (busy.value || checking.value) return;
     clearTimeout(searchTimer);
     const access = accessGeneration(), item = selected.value; busy.value = true; mutating.value = true; unusedReady.value = false;
     try {
-        if (remove && item?.id) await api.management.collections.byId(String(item.id)).delete({ queryParameters: { expectedRevision: item.revision ?? undefined } });
-        else if (item?.id) await api.management.collections.byId(String(item.id)).put({ expectedRevision: item.revision, name: name.value });
-        else await api.management.collections.post({ name: name.value });
+        await writeCollection(item, remove);
         if (access !== accessGeneration()) return;
         await read(); feedback.value = remove ? 'Collection deleted.' : 'Collection saved.';
     } catch (failure) {
         const status = handleFailure(failure); if (access !== accessGeneration()) return;
         const duplicate = status === 409 && !remove && (!item || (failure as { errorCode?: string }).errorCode === 'COLLECTION_NAME_CONFLICT');
         checking.value = status !== 400 && !duplicate;
-        feedback.value = duplicate ? 'A Collection already uses this name. Enter a different name.' : status === 409 ? 'Collection changed or remains referenced by Sources or retained photographs. Check saved Collections and review its reference counts.' : status === 400 ? 'Name was not accepted. Check the name and its folder segments.' : 'Outcome uncertain. Check saved Collections before deliberately trying again.';
+        feedback.value = describeWriteFailure(status, duplicate);
     } finally { busy.value = false; mutating.value = false; }
+}
+async function findUnusedCollections(request: number, access: ReturnType<typeof accessGeneration>) {
+    let next: string | undefined;
+    const cursors = new Set<string>();
+    const candidates: CollectionResponse[] = [];
+    do {
+        const page = await api.management.collections.get({ queryParameters: { limit: Math.min(30, 100 - candidates.length), cursor: next } });
+        if (request !== sequence || access !== accessGeneration()) return;
+        if (!page?.items) throw new Error('Unavailable');
+        candidates.push(...page.items.filter(item => !item.isBuiltIn && item.id && item.revision != null && item.sourceReferences === 0 && item.captureReferences === 0));
+        next = page.nextCursor ?? undefined;
+        if (!next) break;
+        if (!page.items.length || cursors.has(next)) throw new Error('Search did not progress');
+        cursors.add(next);
+    } while (candidates.length < 100);
+    return { candidates, limited: !!next };
 }
 async function prepareClearUnused() {
     if (busy.value || checking.value) return;
@@ -62,20 +116,12 @@ async function prepareClearUnused() {
     const request = ++sequence, access = accessGeneration(); busy.value = true; mutating.value = true;
     unused.value = []; unusedReady.value = false; unusedLimited.value = false;
     try {
-        let next: string | undefined;
-        const cursors = new Set<string>();
-        const candidates: CollectionResponse[] = [];
-        do {
-            const page = await api.management.collections.get({ queryParameters: { limit: Math.min(30, 100 - candidates.length), cursor: next } });
-            if (request !== sequence || access !== accessGeneration()) return;
-            if (!page?.items) throw new Error('Unavailable');
-            candidates.push(...page.items.filter(item => !item.isBuiltIn && item.id && item.revision != null && item.sourceReferences === 0 && item.captureReferences === 0));
-            next = page.nextCursor ?? undefined;
-            if (next && (!page.items.length || cursors.has(next))) throw new Error('Search did not progress');
-            if (next) cursors.add(next);
-        } while (next && candidates.length < 100);
-        unused.value = candidates; unusedReady.value = true; unusedLimited.value = !!next;
-        feedback.value = candidates.length ? '' : 'No unused Collections found in the checked batch.';
+        const batch = await findUnusedCollections(request, access);
+        if (!batch || request !== sequence || access !== accessGeneration()) return;
+        unused.value = batch.candidates;
+        unusedReady.value = true;
+        unusedLimited.value = batch.limited;
+        feedback.value = batch.candidates.length ? '' : 'No unused Collections found in the checked batch.';
     } catch (failure) {
         handleFailure(failure);
         if (request === sequence && access === accessGeneration()) feedback.value = 'Unable to check unused Collections. Try again.';
@@ -90,7 +136,7 @@ async function clearUnused() {
     try {
         for (const item of candidates) {
             try {
-                await api.management.collections.byId(String(item.id)).delete({ queryParameters: { expectedRevision: item.revision ?? undefined } });
+                await deleteCollection(String(item.id), item.revision);
                 deleted++;
             } catch (failure) {
                 const status = handleFailure(failure);

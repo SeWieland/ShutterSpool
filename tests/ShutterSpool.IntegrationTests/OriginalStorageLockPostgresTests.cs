@@ -10,8 +10,10 @@ namespace ShutterSpool.IntegrationTests;
 
 public sealed class OriginalStorageLockPostgresTests
 {
-    [Fact]
-    public async Task Returned_original_stream_holds_shared_session_lock_until_disposal()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Returned_original_stream_holds_shared_session_lock_until_disposal(bool disposeSynchronously)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         deadline.CancelAfter(TimeSpan.FromSeconds(20));
@@ -34,8 +36,13 @@ public sealed class OriginalStorageLockPostgresTests
         await WaitForBlockedAdvisoryLockAsync(database, token);
         Assert.False(removalTask.IsCompleted);
 
-        await original.DisposeAsync();
+        if (disposeSynchronously)
+            original.Dispose();
+        else
+            await original.DisposeAsync();
         await using IOriginalAssetLockLease removal = await removalTask.WaitAsync(token);
+        original.Dispose();
+        await original.DisposeAsync();
     }
 
     [Fact]

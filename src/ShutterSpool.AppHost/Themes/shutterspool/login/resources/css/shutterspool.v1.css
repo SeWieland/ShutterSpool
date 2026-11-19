@@ -72,6 +72,8 @@ body::before {
 #keycloak-bg .pf-v5-c-login__container > :is(header, main) { grid-column: 1; }
 #kc-header { padding: 0; }
 #kc-header-wrapper {
+    /* The parent theme reads this token for its important header color. */
+    --pf-v5-global--Color--light-100: var(--ss-text);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -81,7 +83,6 @@ body::before {
     text-transform: none;
     letter-spacing: -.025em;
     line-height: 1.25;
-    color: var(--ss-text) !important;
     overflow-wrap: anywhere;
 }
 #kc-header-wrapper::before {

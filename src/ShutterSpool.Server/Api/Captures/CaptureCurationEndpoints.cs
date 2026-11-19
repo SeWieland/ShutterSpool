@@ -4,6 +4,7 @@ using ShutterSpool.Application.Curation;
 using ShutterSpool.Application.Security;
 using ShutterSpool.Server.Api.Live;
 using ShutterSpool.Server.Security;
+using System.Net.Mime;
 using System.Text.Json.Serialization;
 
 namespace ShutterSpool.Server.Api.Captures;
@@ -47,6 +48,8 @@ public sealed class CaptureConflictProblemDetails : ProblemDetails
 
 public static class CaptureCurationEndpoints
 {
+    private const string ReleaseHint = "release";
+
     public static RouteGroupBuilder MapCaptureCurationEndpoints(this RouteGroupBuilder management)
     {
         RouteGroupBuilder captures = management.MapGroup("/captures");
@@ -56,20 +59,20 @@ public static class CaptureCurationEndpoints
         captures.MapPut("/{id:guid}/curation", UpdateAsync).RequireAuthorization(WorkspacePolicies.Curate)
             .WithSummary("Update Capture rating, label and tags")
             .WithDescription("Supply the current Capture revision. A stale revision returns 409 with the current state in the ProblemDetails current extension. Post-release edits update current curation only.")
-            .Produces<CaptureCurationResponse>().Produces<CaptureConflictProblemDetails>(StatusCodes.Status409Conflict, "application/problem+json")
+            .Produces<CaptureCurationResponse>().Produces<CaptureConflictProblemDetails>(StatusCodes.Status409Conflict, MediaTypeNames.Application.ProblemJson)
             .ProducesValidationProblem().ProducesProblem(StatusCodes.Status404NotFound);
         captures.MapPost("/{id:guid}/hold", HoldAsync).RequireAuthorization(WorkspacePolicies.Curate)
             .WithSummary("Hold an unreleased Capture indefinitely")
-            .Produces<CaptureCurationResponse>().Produces<CaptureConflictProblemDetails>(StatusCodes.Status409Conflict, "application/problem+json")
+            .Produces<CaptureCurationResponse>().Produces<CaptureConflictProblemDetails>(StatusCodes.Status409Conflict, MediaTypeNames.Application.ProblemJson)
             .ProducesValidationProblem().ProducesProblem(StatusCodes.Status404NotFound);
         captures.MapPost("/{id:guid}/restore", RestoreAsync).RequireAuthorization(WorkspacePolicies.Curate)
             .WithSummary("Restore the Capture's saved Source policy")
-            .Produces<CaptureCurationResponse>().Produces<CaptureConflictProblemDetails>(StatusCodes.Status409Conflict, "application/problem+json")
+            .Produces<CaptureCurationResponse>().Produces<CaptureConflictProblemDetails>(StatusCodes.Status409Conflict, MediaTypeNames.Application.ProblemJson)
             .ProducesValidationProblem().ProducesProblem(StatusCodes.Status404NotFound);
         captures.MapPost("/{id:guid}/release", ReleaseAsync).RequireAuthorization(WorkspacePolicies.Curate)
             .WithSummary("Release a Capture now")
             .WithDescription("Repeated calls return the existing release decision. A stale revision conflict includes the latest Capture state in the ProblemDetails current extension.")
-            .Produces<CaptureCurationResponse>().Produces<CaptureConflictProblemDetails>(StatusCodes.Status409Conflict, "application/problem+json")
+            .Produces<CaptureCurationResponse>().Produces<CaptureConflictProblemDetails>(StatusCodes.Status409Conflict, MediaTypeNames.Application.ProblemJson)
             .ProducesValidationProblem().ProducesProblem(StatusCodes.Status404NotFound);
         captures.MapPost("/batch/curation", UpdateManyAsync).RequireAuthorization(WorkspacePolicies.Curate).WithSummary("Update selected Capture curation").Produces<CaptureBulkResponse>().ProducesValidationProblem();
         captures.MapPost("/batch/hold", HoldManyAsync).RequireAuthorization(WorkspacePolicies.Curate).WithSummary("Hold selected Captures").Produces<CaptureBulkResponse>().ProducesValidationProblem();
@@ -103,38 +106,38 @@ public static class CaptureCurationEndpoints
     private static async Task<IResult> HoldAsync(Guid id, CaptureRevisionRequest request, CaptureCurationService service,
         LiveChangeNotifier changes, CancellationToken cancellationToken) =>
         request.ExpectedRevision < 0 ? Invalid("expectedRevision", "The Capture revision is invalid.")
-            : Mutation(id, await service.HoldAsync(id, request.ExpectedRevision, cancellationToken), changes, "release");
+            : Mutation(id, await service.HoldAsync(id, request.ExpectedRevision, cancellationToken), changes, ReleaseHint);
 
     private static async Task<IResult> RestoreAsync(Guid id, CaptureRevisionRequest request, CaptureCurationService service,
         LiveChangeNotifier changes, CancellationToken cancellationToken) =>
         request.ExpectedRevision < 0 ? Invalid("expectedRevision", "The Capture revision is invalid.")
-            : Mutation(id, await service.RestoreAsync(id, request.ExpectedRevision, cancellationToken), changes, "release");
+            : Mutation(id, await service.RestoreAsync(id, request.ExpectedRevision, cancellationToken), changes, ReleaseHint);
 
     private static async Task<IResult> ReleaseAsync(Guid id, CaptureRevisionRequest request, CaptureCurationService service,
         LiveChangeNotifier changes, CancellationToken cancellationToken) =>
         request.ExpectedRevision < 0 ? Invalid("expectedRevision", "The Capture revision is invalid.")
-            : Mutation(id, await service.ReleaseNowAsync(id, request.ExpectedRevision, cancellationToken), changes, "release");
+            : Mutation(id, await service.ReleaseNowAsync(id, request.ExpectedRevision, cancellationToken), changes, ReleaseHint);
 
     private static Task<IResult> UpdateManyAsync(CaptureBulkRequest request, CaptureCurationService service,
         LiveChangeNotifier changes, IAuthorizationService authorization, HttpContext context,
-            CancellationToken token) => BulkAsync(request, service, changes, authorization, context, "curation",
-            items => service.UpdateManyAsync(items, token), token);
+        CancellationToken token) => BulkAsync(request, changes, authorization, context, "curation",
+            items => service.UpdateManyAsync(items, token));
     private static Task<IResult> HoldManyAsync(CaptureBulkRequest request, CaptureCurationService service,
         LiveChangeNotifier changes, IAuthorizationService authorization, HttpContext context,
-            CancellationToken token) => BulkAsync(request, service, changes, authorization, context, "release",
-            items => service.HoldManyAsync(items, token), token);
+        CancellationToken token) => BulkAsync(request, changes, authorization, context, ReleaseHint,
+            items => service.HoldManyAsync(items, token));
     private static Task<IResult> RestoreManyAsync(CaptureBulkRequest request, CaptureCurationService service,
         LiveChangeNotifier changes, IAuthorizationService authorization, HttpContext context,
-            CancellationToken token) => BulkAsync(request, service, changes, authorization, context, "release",
-            items => service.RestoreManyAsync(items, token), token);
+        CancellationToken token) => BulkAsync(request, changes, authorization, context, ReleaseHint,
+            items => service.RestoreManyAsync(items, token));
     private static Task<IResult> ReleaseManyAsync(CaptureBulkRequest request, CaptureCurationService service,
         LiveChangeNotifier changes, IAuthorizationService authorization, HttpContext context,
-            CancellationToken token) => BulkAsync(request, service, changes, authorization, context, "release",
-            items => service.ReleaseManyAsync(items, token), token);
+        CancellationToken token) => BulkAsync(request, changes, authorization, context, ReleaseHint,
+            items => service.ReleaseManyAsync(items, token));
 
-    private static async Task<IResult> BulkAsync(CaptureBulkRequest request, CaptureCurationService service,
-        LiveChangeNotifier changes, IAuthorizationService authorization, HttpContext context, string kind,
-        Func<CaptureBulkCurationItem[], Task<CaptureBulkResult[]>> apply, CancellationToken token)
+    private static async Task<IResult> BulkAsync(CaptureBulkRequest request, LiveChangeNotifier changes,
+        IAuthorizationService authorization, HttpContext context, string kind,
+        Func<CaptureBulkCurationItem[], Task<CaptureBulkResult[]>> apply)
     {
         if (request.Items is null || request.Items.Length is < 1 or > 100 || request.Items.Any(item => item is null)
             || request.Items.Select(item => item.Id).Distinct().Count() != request.Items.Length)
@@ -164,15 +167,17 @@ public static class CaptureCurationEndpoints
 
     private static IResult Mutation(Guid captureId, CaptureMutationResult result, LiveChangeNotifier changes, string kind)
     {
-        if (result.Succeeded && result.State is not null) changes.CaptureChanged(captureId, kind);
-        return result.State is null
-        ? Missing()
-        : result.Succeeded ? Results.Ok(CaptureCurationResponse.From(result.State))
-            : Results.Json(new CaptureConflictProblemDetails
-            {
-                Status = StatusCodes.Status409Conflict, Title = "Capture revision conflict",
-                Current = CaptureCurationResponse.From(result.State),
-            }, statusCode: StatusCodes.Status409Conflict, contentType: "application/problem+json");
+        if (result.State is null) return Missing();
+        if (result.Succeeded)
+        {
+            changes.CaptureChanged(captureId, kind);
+            return Results.Ok(CaptureCurationResponse.From(result.State));
+        }
+        return Results.Json(new CaptureConflictProblemDetails
+        {
+            Status = StatusCodes.Status409Conflict, Title = "Capture revision conflict",
+            Current = CaptureCurationResponse.From(result.State),
+        }, statusCode: StatusCodes.Status409Conflict, contentType: MediaTypeNames.Application.ProblemJson);
     }
 
     private static IResult Missing() => Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Capture not found");

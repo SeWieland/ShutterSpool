@@ -70,11 +70,12 @@ internal static class ComposePackage
 
         foreach (var (name, edge) in file.Services.Where(item => item.Key.StartsWith("camera-edge", StringComparison.Ordinal)))
         {
+            var (profile, authSuffix) = CameraProfileForEdge(name);
             edge.Entrypoint = ["/bin/sh", "/opt/package/edge-entrypoint.sh"];
             edge.Command.Clear();
             edge.Volumes.Add(Mount("bind", "./package/edge-entrypoint.sh", "/opt/package/edge-entrypoint.sh", true));
             edge.Environment["SFTPGO_DATA_PROVIDER__EXTERNAL_AUTH_HOOK"] = "http://server:8081/internal/camera/"
-                + (name.EndsWith("legacy", StringComparison.Ordinal) ? "legacy-auth" : name.EndsWith("plain", StringComparison.Ordinal) ? "plain-auth" : "auth");
+                + authSuffix;
             edge.Environment["SFTPGO_COMMON__ACTIONS__HOOK"] = "http://server:8081/internal/camera/hook";
             edge.Environment.Remove("SFTPGO_HTTP__HEADERS__0__VALUE");
             edge.Environment["SFTPGO_FTPD__BINDINGS__0__FORCE_PASSIVE_IP"] = "${INGEST_ADVERTISED_ADDRESS:?Set the camera-reachable passive IPv4 address}";
@@ -84,7 +85,6 @@ internal static class ComposePackage
             edge.StopSignal = "SIGINT";
             edge.StopGracePeriod = "330s";
             Secret(file, edge, "camera-callback-key");
-            string profile = name.EndsWith("legacy", StringComparison.Ordinal) ? "LegacyFtps" : name.EndsWith("plain", StringComparison.Ordinal) ? "PlainFtpLan" : "ModernFtps";
             int control = int.Parse(ingressPorts[$"ShutterSpool__CameraIngress__Profiles__{profile}__ControlPort"]);
             edge.Ports.Add($"${{INGEST_LISTEN_ADDRESS:?Set the local ingress IPv4 binding}}:{control}:2121");
             int start = int.Parse(edge.Environment["SFTPGO_FTPD__PASSIVE_PORT_RANGE__START"]);
@@ -114,6 +114,13 @@ internal static class ComposePackage
         file.Services.Remove("keycloak-reconciler");
         foreach (string name in file.Secrets.Keys.Where(name => !file.Services.Values.Any(service => service.Secrets.Any(secret => secret.Source == name))).ToArray())
             file.Secrets.Remove(name);
+    }
+
+    private static (string Profile, string AuthSuffix) CameraProfileForEdge(string name)
+    {
+        if (name.EndsWith("legacy", StringComparison.Ordinal)) return ("LegacyFtps", "legacy-auth");
+        if (name.EndsWith("plain", StringComparison.Ordinal)) return ("PlainFtpLan", "plain-auth");
+        return ("ModernFtps", "auth");
     }
 
     private static Volume Mount(string type, string source, string target, bool readOnly = false) =>

@@ -66,21 +66,26 @@ function body() {
     return { expectedSettingsRevision: settings.value?.settings?.revision, expectedQuotaRevision: settings.value?.quota?.revision,
         previewCache: { cacheMode: cacheMode.value, memoryCacheBytes: Math.round(memoryMiB.value * 1024 ** 2) }, settings: policy, quota: { ...settings.value?.quota, quotaBytes: Math.round(quotaGiB.value * 1024 ** 3), highWatermarkBytes: Math.round(highGiB.value * 1024 ** 3), recoveryTargetBytes: Math.round(recoveryGiB.value * 1024 ** 3), isActive: quotaActive.value } };
 }
-const validationErrors = computed(() => {
-    const positive = (value: number) => Number.isFinite(value) && value > 0;
-    const quotaBytes = Math.round(quotaGiB.value * 1024 ** 3);
-    const exceedsWorkspaceAllocation = workspaceAllocationBytes.value !== undefined && quotaBytes > workspaceAllocationBytes.value;
-    const allocationNeedsActiveQuota = workspaceAllocationBytes.value !== undefined && !quotaActive.value;
-    return {
-        quota: allocationNeedsActiveQuota ? 'A storage limit is required for this workspace.' : exceedsWorkspaceAllocation ? 'The storage limit cannot exceed this workspace’s assigned allocation.' : [quotaGiB.value, highGiB.value, recoveryGiB.value].every(positive) && recoveryGiB.value < highGiB.value && highGiB.value <= quotaGiB.value ? '' : 'Use a positive cleanup target below the cleanup starting point, and keep both within the storage limit.',
-        automatic: automatic.value && !quotaActive.value ? 'Enable a storage limit before allowing automatic cleanup.' : '',
-        trash: positive(trashHours.value) ? '' : 'Trash recovery must be greater than zero hours.',
-        restore: positive(restoreHours.value) ? '' : 'Restore protection must be greater than zero hours.',
-        gallery: positive(galleryDays.value) ? '' : 'Maximum gallery protection must be greater than zero days.',
-        memory: Number.isFinite(memoryMiB.value) && memoryMiB.value >= 1 && memoryMiB.value <= 1024 ? '' : 'Memory budget must be between 1 and 1024 MiB.',
-        lifetimes: Object.fromEntries(lifetimeKeys.map(key => [key, positive(lifetimes[key].pressureHours) && positive(lifetimes[key].ordinaryDays) && lifetimes[key].pressureHours <= lifetimes[key].ordinaryDays * 24 ? '' : 'Both cleanup ages must be greater than zero. Space-saving cleanup must be no later than regular cleanup.'])) as Record<typeof lifetimeKeys[number], string>,
-    };
-});
+const positive = (value: number) => Number.isFinite(value) && value > 0;
+function quotaValidationError() {
+    const allocation = workspaceAllocationBytes.value;
+    if (allocation !== undefined && !quotaActive.value) return 'A storage limit is required for this workspace.';
+    if (allocation !== undefined && Math.round(quotaGiB.value * 1024 ** 3) > allocation) {
+        return 'The storage limit cannot exceed this workspace’s assigned allocation.';
+    }
+    const [limit, high, recovery] = [quotaGiB.value, highGiB.value, recoveryGiB.value] as const;
+    if ([limit, high, recovery].every(positive) && recovery < high && high <= limit) return '';
+    return 'Use a positive cleanup target below the cleanup starting point, and keep both within the storage limit.';
+}
+const validationErrors = computed(() => ({
+    quota: quotaValidationError(),
+    automatic: automatic.value && !quotaActive.value ? 'Enable a storage limit before allowing automatic cleanup.' : '',
+    trash: positive(trashHours.value) ? '' : 'Trash recovery must be greater than zero hours.',
+    restore: positive(restoreHours.value) ? '' : 'Restore protection must be greater than zero hours.',
+    gallery: positive(galleryDays.value) ? '' : 'Maximum gallery protection must be greater than zero days.',
+    memory: Number.isFinite(memoryMiB.value) && memoryMiB.value >= 1 && memoryMiB.value <= 1024 ? '' : 'Memory budget must be between 1 and 1024 MiB.',
+    lifetimes: Object.fromEntries(lifetimeKeys.map(key => [key, positive(lifetimes[key].pressureHours) && positive(lifetimes[key].ordinaryDays) && lifetimes[key].pressureHours <= lifetimes[key].ordinaryDays * 24 ? '' : 'Both cleanup ages must be greater than zero. Space-saving cleanup must be no later than regular cleanup.'])) as Record<typeof lifetimeKeys[number], string>,
+}));
 const valid = computed(() => !validationErrors.value.quota && !validationErrors.value.automatic && !validationErrors.value.trash && !validationErrors.value.restore && !validationErrors.value.gallery && !validationErrors.value.memory && lifetimeKeys.every(key => !validationErrors.value.lifetimes[key]));
 const impactBlocked = computed(() => !impact.value || automatic.value && impact.value.complete !== true
     || (impact.value.impactAcknowledgementRequired === true || impact.value.quotaActivationAcknowledgementRequired === true || automatic.value && settings.value?.settings?.automaticRemovalEnabled !== true)
@@ -93,11 +98,9 @@ function displaySetting(value: unknown, format: SettingFormat) {
     if (format === 'boolean') return value ? 'On' : 'Off';
     if (format === 'bytes') return formatFileSize(Number(value));
     if (format === 'cache') return value === 'Memory' ? 'Memory only' : 'Disk';
-    if (format === 'duration') {
-        const hours = durationHours(String(value));
-        return hours === undefined ? 'Not confirmed' : hours >= 24 && hours % 24 === 0 ? `${hours / 24} days` : `${hours} hours`;
-    }
-    return String(value);
+    const hours = typeof value === 'string' ? durationHours(value) : undefined;
+    if (hours === undefined) return 'Not confirmed';
+    return hours >= 24 && hours % 24 === 0 ? `${hours / 24} days` : `${hours} hours`;
 }
 function invalidateReview() {
     reviewSequence++; cancelReview(); reviewing.value = false; impact.value = undefined; reviewDraft.value = undefined; acknowledge.value = false; stage.value = 'editing';
@@ -115,52 +118,101 @@ function freezeDraft(value: ReturnType<typeof body>) {
     return Object.freeze(value);
 }
 watch([quotaGiB, highGiB, recoveryGiB, automatic, quotaActive, cacheMode, memoryMiB, trashHours, restoreHours, galleryDays, lifetimes], () => { invalidateReview(); emit('dirty', !valid.value || !baseline.value || hasChanges.value); }, { deep: true });
+function applySavedSettings(saved: Settings, initial: boolean) {
+    policyChanged.value = !initial && !!settings.value && (saved.settings?.revision !== settings.value.settings?.revision || saved.quota?.revision !== settings.value.quota?.revision);
+    if (policyChanged.value) {
+        invalidateReview();
+        feedback.value = 'Settings changed elsewhere. Your edits are kept. Reload the saved settings before reviewing them.';
+    }
+    if (!initial && settings.value) return false;
+
+    settings.value = saved;
+    cacheMode.value = saved.previewCache?.cacheMode === 'Memory' ? 'Memory' : 'Disk';
+    const memoryCacheBytes = saved.previewCache?.memoryCacheBytes ?? 64 * 1024 ** 2;
+    memoryMiB.value = memoryCacheBytes / 1024 ** 2;
+    quotaGiB.value = (saved.quota?.quotaBytes ?? 0) / 1024 ** 3;
+    highGiB.value = (saved.quota?.highWatermarkBytes ?? 0) / 1024 ** 3;
+    recoveryGiB.value = (saved.quota?.recoveryTargetBytes ?? 0) / 1024 ** 3;
+    const savedQuotaActive = saved.quota?.isActive === true;
+    quotaActive.value = savedQuotaActive || saved.workspaceAllocatedBytes != null;
+    automatic.value = saved.settings?.automaticRemovalEnabled === true;
+    trashHours.value = durationHours(saved.settings?.trashRecoveryWindow) ?? 0;
+    restoreHours.value = durationHours(saved.settings?.restoreProtection) ?? 0;
+    galleryDays.value = (durationHours(saved.settings?.galleryMaximum) ?? 0) / 24;
+    for (const key of lifetimeKeys) {
+        lifetimes[key].pressureHours = durationHours(saved.settings?.[key]?.pressureAge) ?? 0;
+        lifetimes[key].ordinaryDays = (durationHours(saved.settings?.[key]?.ordinaryAge) ?? 0) / 24;
+    }
+    baseline.value = {
+        settings: { ...saved.settings, automaticRemovalEnabled: automatic.value },
+        quota: { ...saved.quota, isActive: savedQuotaActive },
+        previewCache: { cacheMode: cacheMode.value, memoryCacheBytes },
+    };
+    return true;
+}
+function applyRefreshFeedback(saved: boolean, snapshot: boolean, clearFeedbackOnSuccess: boolean) {
+    stale.value = !saved || !snapshot;
+    if (!saved && !snapshot) {
+        feedback.value = 'We could not check storage or saved settings. Your edits are kept. Refresh before saving.';
+    } else if (!saved) {
+        feedback.value = 'Capacity refreshed, but saved settings could not be checked. Refresh saved settings before saving.';
+    } else if (!snapshot) {
+        feedback.value = 'We could not check storage. Your edits are kept. Refresh before saving.';
+    } else if (clearFeedbackOnSuccess && !policyChanged.value) {
+        feedback.value = '';
+    }
+}
+function refreshReadValue<T>(read: PromiseSettledResult<T>) {
+    if (read.status === 'fulfilled') return read.value;
+    handleFailure(read.reason);
+}
+function applyRefreshFailure(failure: unknown, isCurrentLoad: () => boolean) {
+    if (!isCurrentLoad()) return;
+    handleFailure(failure);
+    if (!isCurrentLoad()) return;
+    stale.value = true;
+    feedback.value = 'We could not check storage. Your edits are kept. Refresh before saving.';
+}
 async function load(initial = false, clearFeedbackOnSuccess = true) {
     if (initial) invalidateReview();
     cancelLoad();
     const access = accessGeneration(), request = ++sequence, controller = new AbortController(); loadController = controller; busy.value = true; refreshing.value = true;
+    const isCurrentLoad = () => !disposed && !controller.signal.aborted && access === accessGeneration() && request === sequence;
     try {
         const options = { options: [cancellable(controller.signal)] };
         const [settingsRead, capacityRead] = await Promise.allSettled([api.management.retention.settings.get(options), api.management.retention.capacity.get(options)]);
-        if (disposed || controller.signal.aborted || access !== accessGeneration() || request !== sequence) return;
-        if (settingsRead.status === 'rejected') handleFailure(settingsRead.reason);
-        if (capacityRead.status === 'rejected') handleFailure(capacityRead.reason);
-        const saved = settingsRead.status === 'fulfilled' ? settingsRead.value : undefined;
-        const snapshot = capacityRead.status === 'fulfilled' ? capacityRead.value : undefined;
+        if (!isCurrentLoad()) return;
+        const saved = refreshReadValue(settingsRead);
+        if (!isCurrentLoad()) return;
+        const snapshot = refreshReadValue(capacityRead);
+        if (!isCurrentLoad()) return;
         if (snapshot) capacity.value = snapshot;
-        if (saved) {
-            policyChanged.value = !initial && !!settings.value && (saved.settings?.revision !== settings.value.settings?.revision || saved.quota?.revision !== settings.value.quota?.revision);
-            if (policyChanged.value) { invalidateReview(); feedback.value = 'Settings changed elsewhere. Your edits are kept. Reload the saved settings before reviewing them.'; }
-            if (initial || !settings.value) {
-                settings.value = saved; cacheMode.value = saved.previewCache?.cacheMode === 'Memory' ? 'Memory' : 'Disk'; memoryMiB.value = (saved.previewCache?.memoryCacheBytes ?? 64 * 1024 ** 2) / 1024 ** 2; quotaGiB.value = (saved.quota?.quotaBytes ?? 0) / 1024 ** 3; highGiB.value = (saved.quota?.highWatermarkBytes ?? 0) / 1024 ** 3; recoveryGiB.value = (saved.quota?.recoveryTargetBytes ?? 0) / 1024 ** 3; quotaActive.value = saved.quota?.isActive === true || saved.workspaceAllocatedBytes != null; automatic.value = saved.settings?.automaticRemovalEnabled === true;
-                trashHours.value = durationHours(saved.settings?.trashRecoveryWindow) ?? 0; restoreHours.value = durationHours(saved.settings?.restoreProtection) ?? 0; galleryDays.value = (durationHours(saved.settings?.galleryMaximum) ?? 0) / 24;
-                for (const key of lifetimeKeys) { lifetimes[key].pressureHours = durationHours(saved.settings?.[key]?.pressureAge) ?? 0; lifetimes[key].ordinaryDays = (durationHours(saved.settings?.[key]?.ordinaryAge) ?? 0) / 24; }
-                baseline.value = {
-                    settings: { ...saved.settings, automaticRemovalEnabled: saved.settings?.automaticRemovalEnabled === true },
-                    quota: { ...saved.quota, isActive: saved.quota?.isActive === true },
-                    previewCache: { cacheMode: saved.previewCache?.cacheMode === 'Memory' ? 'Memory' : 'Disk', memoryCacheBytes: saved.previewCache?.memoryCacheBytes ?? 64 * 1024 ** 2 },
-                };
-                await nextTick(); if (!disposed && access === accessGeneration() && request === sequence) emit('dirty', false);
-            }
+        if (saved && applySavedSettings(saved, initial)) {
+            await nextTick();
+            if (!isCurrentLoad()) return;
+            emit('dirty', false);
         }
-        stale.value = !saved || !snapshot;
-        if (saved && snapshot && clearFeedbackOnSuccess && !policyChanged.value) feedback.value = '';
-        if (!saved || !snapshot) feedback.value = saved && !snapshot
-            ? 'We could not check storage. Your edits are kept. Refresh before saving.'
-            : snapshot && !saved
-                ? 'Capacity refreshed, but saved settings could not be checked. Refresh saved settings before saving.'
-                : 'We could not check storage or saved settings. Your edits are kept. Refresh before saving.';
+        if (!isCurrentLoad()) return;
+        applyRefreshFeedback(!!saved, !!snapshot, clearFeedbackOnSuccess);
         await loadHistory();
     } catch (failure) {
-        if (!controller.signal.aborted && !disposed && access === accessGeneration() && request === sequence) { handleFailure(failure); stale.value = true; feedback.value = 'We could not check storage. Your edits are kept. Refresh before saving.'; }
-    } finally { if (loadController === controller) loadController = undefined; if (request === sequence) { busy.value = false; refreshing.value = false; } }
+        applyRefreshFailure(failure, isCurrentLoad);
+    } finally {
+        if (loadController === controller) loadController = undefined;
+        if (request === sequence) {
+            busy.value = false;
+            refreshing.value = false;
+        }
+    }
 }
 async function loadHistory(next = false) {
     cancelHistory();
     const access = accessGeneration(), request = ++historySequence, controller = new AbortController(); historyController = controller; historyError.value = '';
     try {
         const result = await api.management.retention.history.get({ queryParameters: { pageSize: 30, cursor: next ? history.value?.nextCursor ?? undefined : undefined }, options: [cancellable(controller.signal)] });
-        if (!controller.signal.aborted && access === accessGeneration() && !disposed && request === historySequence) { if (!result) throw new Error('History unavailable'); history.value = next ? { ...result, items: [...(history.value?.items ?? []), ...(result.items ?? [])] } : result; }
+        if (controller.signal.aborted || access !== accessGeneration() || disposed || request !== historySequence) return;
+        if (!result) throw new Error('History unavailable');
+        history.value = next ? { ...result, items: [...(history.value?.items ?? []), ...(result.items ?? [])] } : result;
     } catch (failure) { if (!controller.signal.aborted && access === accessGeneration() && !disposed && request === historySequence) { handleFailure(failure); historyError.value = 'Cleanup history could not be loaded. Retry to check again.'; } }
     finally { if (historyController === controller) historyController = undefined; }
 }
@@ -180,7 +232,10 @@ async function preview() {
         impact.value = result;
     } catch (failure) {
         if (!controller.signal.aborted && !disposed && access === accessGeneration() && request === reviewSequence) { handleFailure(failure); feedback.value = 'We could not review these changes. Return to editing and try again.'; }
-    } finally { if (reviewController === controller) reviewController = undefined; if (request === reviewSequence) reviewing.value = false; }
+    } finally {
+        if (reviewController === controller) reviewController = undefined;
+        if (request === reviewSequence) reviewing.value = false;
+    }
 }
 async function save() {
     if (impactBlocked.value || !reviewDraft.value || !valid.value || busy.value || reviewing.value || stale.value || policyChanged.value || !props.online) return;
@@ -245,7 +300,7 @@ onUnmounted(() => { disposed = true; sequence++; historySequence++; cancelLoad()
                     <p class="storage-running">Running: {{ settings.effectivePreviewCache?.cacheMode === 'Memory' ? 'Memory only' : settings.effectivePreviewCache?.cacheMode === 'Disk' ? 'Disk' : 'not confirmed' }} · {{ formatFileSize(settings.effectivePreviewCache?.memoryCacheBytes) }} memory budget.<span v-if="settings.restartRequired"> Saved changes need a restart.</span></p>
                     <p v-if="cacheMode === 'Memory'" class="muted">Memory previews can disappear on restart or when space is needed. System paging and crash dumps remain an operator consideration; previews never authorize deletion of originals.</p>
                 </section>
-                <div class="storage-editor-actions"><span class="muted">{{ !hasChanges && valid ? 'No changes to review.' : 'Shared settings · review before saving' }}</span><button ref="reviewTrigger" class="primary" :disabled="busy || stale || policyChanged || !online || !valid || !hasChanges">Review changes<UIcon name="i-lucide-arrow-right" /></button></div>
+                <div class="storage-editor-actions"><span class="muted">{{ !hasChanges && valid ? 'No changes to review.' : 'Shared settings · review before saving' }}</span><button ref="reviewTrigger" type="submit" class="primary" :disabled="busy || stale || policyChanged || !online || !valid || !hasChanges">Review changes<UIcon name="i-lucide-arrow-right" /></button></div>
             </form>
             <div class="storage-secondary">
                 <details class="section-disclosure settings-advanced cleanup-history"><summary><UIcon name="i-lucide-chevron-right" class="disclosure-chevron" aria-hidden="true" />Cleanup history</summary><p class="muted">Completed delivery attempts are retained for {{ settings?.settings?.completedAttemptHistoryDays ?? 'the configured number of' }} days; pressure history for {{ settings?.settings?.completedPressureHistoryDays ?? 'the configured number of' }} days.</p><p v-if="historyError" class="notice" role="alert">{{ historyError }} <button @click="loadHistory()">Retry history</button></p><p v-if="history?.hasGap" class="notice">Some history has expired or could not be loaded. Missing history does not mean nothing happened.</p><p v-if="history && !history.items?.length" class="muted">No saved cleanup events.</p><article v-for="event in history?.items" :key="event.eventId ?? undefined" class="cleanup-history-event"><h4>{{ historyStatus(event.kind) }}</h4><p>{{ event.committedAt?.toLocaleString() }} · {{ historyStatus(event.state) }}</p><dl class="capacity-values"><dt>Planned reclamation</dt><dd>{{ formatFileSize(event.plannedReclamationBytes) }}</dd><dt>Physically purged</dt><dd>{{ formatFileSize(event.purgedBytes) }}</dd></dl><p v-for="blocker in event.blockers" :key="blocker">{{ storageMessage(blocker) }}</p><details class="section-disclosure"><summary><UIcon name="i-lucide-chevron-right" class="disclosure-chevron" aria-hidden="true" />Details</summary><p>{{ event.kind }} · {{ event.state }}</p><ul><li v-for="blocker in event.blockers" :key="blocker">{{ blocker }}</li></ul></details></article><button v-if="history?.nextCursor" :disabled="busy || !online" @click="loadHistory(true)">Older cleanup history</button></details>

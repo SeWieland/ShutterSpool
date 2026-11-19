@@ -10,10 +10,13 @@ internal sealed class FileSystemSpoolAccounting : ISpoolAccounting
     private const string StorageMarkerName = ".shutterspool-root.marker";
     private readonly string spoolRoot;
     private readonly string previewRoot;
+    private readonly ScanRoot[] managedRoots;
     private readonly long? reserveBytes;
     private readonly double? reservePercent;
     private readonly TimeProvider timeProvider;
     private readonly int maximumFiles;
+
+    private sealed record ScanRoot(string Directory, SpoolQuotaFileCategory Category, string KeyPrefix);
 
     public FileSystemSpoolAccounting(IConfiguration configuration, TimeProvider timeProvider)
         : this(configuration["ShutterSpool:Spool:RootPath"] ?? throw new InvalidOperationException("The spool root path is not configured."),
@@ -33,15 +36,21 @@ internal sealed class FileSystemSpoolAccounting : ISpoolAccounting
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumFiles);
         this.spoolRoot = Path.GetFullPath(spoolRoot);
         this.previewRoot = Path.GetFullPath(previewRoot);
-        if (new[] { Path.Combine(this.spoolRoot, "spool"), Path.Combine(this.spoolRoot, "incoming"),
-                Path.Combine(this.spoolRoot, "quarantine") }
-            .Any(directory => IsSameOrChild(directory, this.previewRoot)))
+        managedRoots = [
+            ManagedRoot(FileSystemSpool.SpoolDirectory, SpoolQuotaFileCategory.Spool),
+            ManagedRoot(FileSystemSpool.IncomingDirectory, SpoolQuotaFileCategory.Incoming),
+            ManagedRoot(FileSystemSpool.QuarantineDirectory, SpoolQuotaFileCategory.Quarantine),
+        ];
+        if (managedRoots.Any(root => IsSameOrChild(root.Directory, this.previewRoot)))
             throw new InvalidOperationException("The preview cache root cannot contain a managed spool directory.");
         this.reserveBytes = reserveBytes;
         this.reservePercent = reservePercent;
         this.timeProvider = timeProvider;
         this.maximumFiles = maximumFiles;
     }
+
+    private ScanRoot ManagedRoot(string directory, SpoolQuotaFileCategory category) =>
+        new(Path.Combine(spoolRoot, directory), category, directory);
 
     public Task<SpoolQuotaInventory> ObserveAsync(IReadOnlySet<string> reservedSpoolKeys, string? expectedStorageMarker,
         bool allowInitializeStorageMarker, CancellationToken cancellationToken)
@@ -53,19 +62,14 @@ internal sealed class FileSystemSpoolAccounting : ISpoolAccounting
             int visitedEntries = 0;
             if (!Directory.Exists(spoolRoot)) throw new IOException("The configured spool root is unavailable.");
             string previewPath = NormalizePath(previewRoot);
-            foreach ((string directory, SpoolQuotaFileCategory category, string prefix) in new[]
+            foreach (ScanRoot root in managedRoots)
             {
-                (Path.Combine(spoolRoot, "spool"), SpoolQuotaFileCategory.Spool, "spool"),
-                (Path.Combine(spoolRoot, "incoming"), SpoolQuotaFileCategory.Incoming, "incoming"),
-                (Path.Combine(spoolRoot, "quarantine"), SpoolQuotaFileCategory.Quarantine, "quarantine"),
-            })
-            {
-                if (expectedStorageMarker is not null && !Directory.Exists(directory))
+                if (expectedStorageMarker is not null && !Directory.Exists(root.Directory))
                     throw new IOException("A managed spool directory is unavailable.");
-                Scan(directory, category, prefix, files, reservedSpoolKeys, previewPath, ref visitedEntries, cancellationToken);
+                Scan(root, files, reservedSpoolKeys, previewPath, ref visitedEntries, cancellationToken);
             }
 
-            Scan(previewRoot, SpoolQuotaFileCategory.DiskPreview, "previews", files, null, null, ref visitedEntries, cancellationToken);
+            Scan(new(previewRoot, SpoolQuotaFileCategory.DiskPreview, "previews"), files, null, null, ref visitedEntries, cancellationToken);
 
             (string? storageMarker, bool needsCommit) = ObserveStorageMarker(expectedStorageMarker, allowInitializeStorageMarker);
 
@@ -98,11 +102,10 @@ internal sealed class FileSystemSpoolAccounting : ISpoolAccounting
         if (!Guid.TryParseExact(marker, "N", out _)) return Task.FromResult(false);
         try
         {
-            foreach (string directory in new[] { "spool", "incoming", "quarantine" })
+            foreach (ScanRoot root in managedRoots)
             {
-                string managedDirectory = Path.Combine(spoolRoot, directory);
-                Directory.CreateDirectory(managedDirectory);
-                EnsureNoReparsePoints(managedDirectory);
+                Directory.CreateDirectory(root.Directory);
+                EnsureNoReparsePoints(root.Directory);
             }
             string path = Path.Combine(spoolRoot, StorageMarkerName);
             EnsureNoReparsePoints(path);
@@ -159,13 +162,13 @@ internal sealed class FileSystemSpoolAccounting : ISpoolAccounting
         return Guid.TryParseExact(marker, "N", out _) ? marker : null;
     }
 
-    private void Scan(string directory, SpoolQuotaFileCategory category, string keyPrefix, List<SpoolQuotaFile> files,
+    private void Scan(ScanRoot root, List<SpoolQuotaFile> files,
         IReadOnlySet<string>? excludedKeys, string? skipDirectory, ref int visitedEntries, CancellationToken cancellationToken)
     {
-        if (!Directory.Exists(directory)) return;
-        EnsureNoReparsePoints(directory);
+        if (!Directory.Exists(root.Directory)) return;
+        EnsureNoReparsePoints(root.Directory);
         var pending = new Stack<string>();
-        pending.Push(directory);
+        pending.Push(root.Directory);
         while (pending.TryPop(out string? current))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -173,27 +176,33 @@ internal sealed class FileSystemSpoolAccounting : ISpoolAccounting
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (++visitedEntries > maximumFiles) throw new IOException("Filesystem accounting reached its scan bound.");
-                if (skipDirectory is not null && string.Equals(NormalizePath(path), skipDirectory, PathComparison)) continue;
-                string relative = Path.GetRelativePath(directory, path).Replace(Path.DirectorySeparatorChar, '/');
-                string key = $"{keyPrefix}/{relative}";
-                if (excludedKeys is not null && excludedKeys.Contains(key)) continue;
-                FileAttributes attributes = File.GetAttributes(path);
-                if (attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException("Managed spool storage contains a linked path.");
-                if (attributes.HasFlag(FileAttributes.Directory))
-                {
-                    pending.Push(path);
-                    continue;
-                }
-
-                var before = new FileInfo(path);
-                long size = before.Length;
-                DateTime lastWrite = before.LastWriteTimeUtc;
-                var after = new FileInfo(path);
-                if (!after.Exists || after.Length != size || after.LastWriteTimeUtc != lastWrite)
-                    throw new IOException("A managed spool file changed during accounting.");
-                files.Add(new SpoolQuotaFile(key, size, category));
+                ObserveEntry(root, path, excludedKeys, skipDirectory, pending, files);
             }
         }
+    }
+
+    private static void ObserveEntry(ScanRoot root, string path, IReadOnlySet<string>? excludedKeys, string? skipDirectory,
+        Stack<string> pending, List<SpoolQuotaFile> files)
+    {
+        if (skipDirectory is not null && string.Equals(NormalizePath(path), skipDirectory, PathComparison)) return;
+        string relative = Path.GetRelativePath(root.Directory, path).Replace(Path.DirectorySeparatorChar, '/');
+        string key = $"{root.KeyPrefix}/{relative}";
+        if (excludedKeys is not null && excludedKeys.Contains(key)) return;
+        FileAttributes attributes = File.GetAttributes(path);
+        if (attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException("Managed spool storage contains a linked path.");
+        if (attributes.HasFlag(FileAttributes.Directory))
+        {
+            pending.Push(path);
+            return;
+        }
+
+        var before = new FileInfo(path);
+        long size = before.Length;
+        DateTime lastWrite = before.LastWriteTimeUtc;
+        var after = new FileInfo(path);
+        if (!after.Exists || after.Length != size || after.LastWriteTimeUtc != lastWrite)
+            throw new IOException("A managed spool file changed during accounting.");
+        files.Add(new SpoolQuotaFile(key, size, root.Category));
     }
 
     private static bool IsSameOrChild(string candidate, string parent)

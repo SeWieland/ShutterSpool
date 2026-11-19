@@ -65,8 +65,31 @@ async function readAttempts(next = false) {
         if (attemptsController === controller) attemptsController = undefined;
     }
 }
-async function command(action: 'retry' | 'resend', confirm = false) {
-    if (commandState.value !== 'idle' || reevaluating.value || props.online !== true || props.readOnly === true || action === 'retry' && !canRetry.value || action === 'resend' && props.deliveryOnly)
+type WorkAction = 'retry' | 'preview-resend' | 'resend';
+function requestAction(workId: string, action: WorkAction) {
+    const delivery = api.management.deliveries.byId(workId);
+    switch (action) {
+        case 'retry': return delivery.retry.post();
+        case 'preview-resend': return delivery.resend.preview.post();
+        case 'resend': return delivery.resend.post({ confirmationToken: preview.value?.confirmationToken });
+    }
+}
+function actionFailed(failure: unknown) {
+    const status = handleFailure(failure);
+    preview.value = undefined;
+    if (status === 400) {
+        commandState.value = 'idle';
+        feedback.value = 'Action rejected. Check the saved work details.';
+        return;
+    }
+    commandState.value = 'uncertain';
+    feedback.value = status === 409 ? 'State changed. Refresh and preview the action again.' : 'Outcome uncertain. Refresh work before issuing another action.';
+    emit('refresh');
+}
+async function command(action: WorkAction) {
+    if (commandState.value !== 'idle' || reevaluating.value || props.online !== true || props.readOnly === true)
+        return;
+    if (action === 'retry' ? !canRetry.value : props.deliveryOnly)
         return;
     const access = accessGeneration();
     const request = ++sequence;
@@ -79,25 +102,16 @@ async function command(action: 'retry' | 'resend', confirm = false) {
     commandState.value = 'pending';
     feedback.value = '';
     try {
-        const delivery = api.management.deliveries.byId(String(workId));
-        let result: RoutingActionResponse | undefined;
-        let pendingPreview: RoutingActionResponse | undefined;
-        if (action === 'retry')
-            result = await delivery.retry.post();
-        else if (confirm) {
-            const body = { confirmationToken: preview.value?.confirmationToken };
-            result = await delivery.resend.post(body);
-        }
-        else {
-            pendingPreview = await delivery.resend.preview.post();
-        }
+        const result = await requestAction(String(workId), action);
         if (!isCurrent())
             return;
         commandState.value = 'idle';
-        if (confirm)
+        if (action === 'preview-resend') {
+            if (result) preview.value = result;
+            return;
+        }
+        if (action === 'resend')
             preview.value = undefined;
-        else if (pendingPreview)
-            preview.value = pendingPreview;
         if (result) {
             feedback.value = `${result.status}: ${result.explanation ?? 'Work updated; queued does not mean confirmed.'}`;
             emit('refresh');
@@ -105,11 +119,7 @@ async function command(action: 'retry' | 'resend', confirm = false) {
     }
     catch (failure) {
         if (!isCurrent()) return;
-        const status = handleFailure(failure);
-        commandState.value = status === 400 ? 'idle' : 'uncertain';
-        preview.value = undefined;
-        feedback.value = status === 409 ? 'State changed. Refresh and preview the action again.' : status === 400 ? 'Action rejected. Check the saved work details.' : 'Outcome uncertain. Refresh work before issuing another action.';
-        if (status !== 400) emit('refresh');
+        actionFailed(failure);
     }
     finally {
         if (request === sequence && commandState.value === 'pending')
@@ -180,7 +190,7 @@ onUnmounted(() => { sequence++; attemptsSequence++; attemptsController?.abort();
             <button v-if="canRetry" :disabled="busy || reevaluating || uncertain || online !== true" @click="command('retry')">
                 Retry
             </button>
-            <button v-if="!deliveryOnly" :disabled="busy || reevaluating || uncertain || online !== true" @click="command('resend')">
+            <button v-if="!deliveryOnly" :disabled="busy || reevaluating || uncertain || online !== true" @click="command('preview-resend')">
                 Preview Resend
             </button>
             <ReevaluateAction :asset-id="work.assetId" :destination-id="work.destinationId" :online="online" :disabled="busy || uncertain" @busy="reevaluating = $event" @refresh="emit('refresh')" />
@@ -199,7 +209,7 @@ onUnmounted(() => { sequence++; attemptsSequence++; attemptsController?.abort();
                 Proposed target:
                 {{ preview.proposedTarget ?? 'None' }}
             </p>
-            <button :disabled="!preview.confirmationToken || busy || reevaluating || uncertain" @click="command('resend', true)">
+            <button :disabled="!preview.confirmationToken || busy || reevaluating || uncertain" @click="command('resend')">
                 Confirm
                 Resend
             </button>

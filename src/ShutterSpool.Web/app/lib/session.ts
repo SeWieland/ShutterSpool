@@ -153,7 +153,7 @@ async function recoverUser(active: UserManager, current: number) {
         await active.removeUser();
         throw new Error("Access ended.");
     }
-    if (!user || user.expired) throw { error: "login_required" };
+    if (!user || user.expired) throw Object.assign(new Error("Sign in to continue."), { error: "login_required" });
     session.value = user;
     return user;
 }

@@ -20,7 +20,7 @@ public sealed class FileSystemExactOriginalRemovalTests
         fixture.Write(transientKey, [5, 6, 7]);
         string unrelated = fixture.Write($"spool/2026/10/{Guid.NewGuid():N}", [8, 9]);
         var removal = fixture.CreateAdapter();
-        var request = fixture.Request(assetId, spoolKey, 4, [transientKey]);
+        var request = RemovalFixture.Request(assetId, spoolKey, 4, [transientKey]);
 
         ExactOriginalRemovalResult result = await removal.RemoveAsync(request, TestContext.Current.CancellationToken);
         ExactOriginalRemovalResult retry = await removal.RemoveAsync(request, TestContext.Current.CancellationToken);
@@ -45,9 +45,9 @@ public sealed class FileSystemExactOriginalRemovalTests
         var removal = fixture.CreateAdapter();
 
         ExactOriginalRemovalResult markerMismatch = await removal.RemoveAsync(
-            fixture.Request(assetId, spoolKey, 4, [], Guid.NewGuid().ToString("N")), TestContext.Current.CancellationToken);
+            RemovalFixture.Request(assetId, spoolKey, 4, [], Guid.NewGuid().ToString("N")), TestContext.Current.CancellationToken);
         ExactOriginalRemovalResult sizeMismatch = await removal.RemoveAsync(
-            fixture.Request(assetId, spoolKey, 5, []), TestContext.Current.CancellationToken);
+            RemovalFixture.Request(assetId, spoolKey, 5, []), TestContext.Current.CancellationToken);
 
         Assert.Equal(ExactOriginalRemovalStatus.Blocked, markerMismatch.Status);
         Assert.Equal("storage_marker_mismatch", markerMismatch.FailureCode);
@@ -65,7 +65,7 @@ public sealed class FileSystemExactOriginalRemovalTests
         Guid assetId = Guid.NewGuid();
 
         ExactOriginalRemovalResult result = await removal.RemoveAsync(
-            fixture.Request(assetId, SpoolKey(assetId), 4, []), TestContext.Current.CancellationToken);
+            RemovalFixture.Request(assetId, SpoolKey(assetId), 4, []), TestContext.Current.CancellationToken);
 
         Assert.Equal(ExactOriginalRemovalStatus.Blocked, result.Status);
         Assert.Equal("storage_marker_unavailable", result.FailureCode);
@@ -82,11 +82,32 @@ public sealed class FileSystemExactOriginalRemovalTests
         var removal = fixture.CreateAdapter();
 
         ExactOriginalRemovalResult result = await removal.RemoveAsync(
-            fixture.Request(assetId, spoolKey, 4, [anotherAssetKey]), TestContext.Current.CancellationToken);
+            RemovalFixture.Request(assetId, spoolKey, 4, [anotherAssetKey]), TestContext.Current.CancellationToken);
 
         Assert.Equal(ExactOriginalRemovalStatus.Blocked, result.Status);
         Assert.Equal("storage_key_asset_mismatch", result.FailureCode);
         Assert.True(File.Exists(target));
+    }
+
+    [Fact]
+    public async Task Authorized_transient_directory_blocks_removal_before_the_original_is_deleted()
+    {
+        using var fixture = new RemovalFixture();
+        CancellationToken token = TestContext.Current.CancellationToken;
+        Guid assetId = Guid.NewGuid();
+        string spoolKey = SpoolKey(assetId);
+        byte[] original = [1, 2, 3, 4];
+        string originalPath = fixture.Write(spoolKey, original);
+        string transientKey = $"incoming/{Guid.NewGuid():N}/{assetId:N}.partial";
+        Directory.CreateDirectory(Path.Combine(fixture.Root, transientKey));
+
+        ExactOriginalRemovalResult result = await fixture.CreateAdapter().RemoveAsync(
+            RemovalFixture.Request(assetId, spoolKey, original.Length, [transientKey]), token);
+
+        Assert.Equal(ExactOriginalRemovalStatus.Blocked, result.Status);
+        Assert.Equal("authorized_key_is_directory", result.FailureCode);
+        Assert.Equal(0, result.RemovedBytes);
+        Assert.Equal(original, await File.ReadAllBytesAsync(originalPath, token));
     }
 
     [Theory]
@@ -111,7 +132,7 @@ public sealed class FileSystemExactOriginalRemovalTests
             Assert.Equal(4, written.FinalKey.Split('/').Length);
 
             ExactOriginalRemovalResult writtenResult = await removal.RemoveAsync(
-                fixture.Request(writtenAssetId, written.FinalKey, written.Size, [written.PartialKey]),
+                RemovalFixture.Request(writtenAssetId, written.FinalKey, written.Size, [written.PartialKey]),
                 TestContext.Current.CancellationToken);
 
             Guid receivedAssetId = Guid.NewGuid();
@@ -122,7 +143,7 @@ public sealed class FileSystemExactOriginalRemovalTests
             Assert.Equal(4, received.FinalKey.Split('/').Length);
 
             ExactOriginalRemovalResult receivedResult = await removal.RemoveAsync(
-                fixture.Request(receivedAssetId, received.FinalKey, received.Size, [received.PartialKey]),
+                RemovalFixture.Request(receivedAssetId, received.FinalKey, received.Size, [received.PartialKey]),
                 TestContext.Current.CancellationToken);
 
             Assert.Equal(ExactOriginalRemovalStatus.Removed, writtenResult.Status);
@@ -146,13 +167,13 @@ public sealed class FileSystemExactOriginalRemovalTests
         var removal = fixture.CreateAdapter();
 
         ExactOriginalRemovalResult mismatch = await removal.RemoveAsync(
-            fixture.Request(Guid.NewGuid(), legacyKey, 3, []), TestContext.Current.CancellationToken);
+            RemovalFixture.Request(Guid.NewGuid(), legacyKey, 3, []), TestContext.Current.CancellationToken);
         Assert.Equal(ExactOriginalRemovalStatus.Blocked, mismatch.Status);
         Assert.Equal("storage_key_asset_mismatch", mismatch.FailureCode);
         Assert.True(File.Exists(target));
 
         ExactOriginalRemovalResult authorized = await removal.RemoveAsync(
-            fixture.Request(assetId, legacyKey, 3, []), TestContext.Current.CancellationToken);
+            RemovalFixture.Request(assetId, legacyKey, 3, []), TestContext.Current.CancellationToken);
 
         Assert.Equal(ExactOriginalRemovalStatus.Removed, authorized.Status);
         Assert.Equal(3, authorized.RemovedBytes);
@@ -182,7 +203,7 @@ public sealed class FileSystemExactOriginalRemovalTests
         try
         {
             ExactOriginalRemovalResult result = await fixture.CreateAdapter().RemoveAsync(
-                fixture.Request(assetId, SpoolKey(assetId), 4, []), TestContext.Current.CancellationToken);
+                RemovalFixture.Request(assetId, SpoolKey(assetId), 4, []), TestContext.Current.CancellationToken);
 
             Assert.Equal(ExactOriginalRemovalStatus.Blocked, result.Status);
             Assert.Equal("storage_path_crosses_link", result.FailureCode);
@@ -218,7 +239,7 @@ public sealed class FileSystemExactOriginalRemovalTests
 
         public FileSystemExactOriginalRemoval CreateAdapter() => new(Root);
 
-        public ExactOriginalRemovalRequest Request(Guid assetId, string spoolKey, long size,
+        public static ExactOriginalRemovalRequest Request(Guid assetId, string spoolKey, long size,
             IReadOnlyList<string> transients, string? marker = null) =>
             new(assetId, spoolKey, size, marker ?? Marker, transients);
 

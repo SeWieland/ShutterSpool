@@ -31,7 +31,7 @@ public static class PreviewEndpoint
 
     private static void Describe(RouteHandlerBuilder route) => route
         .RequireAuthorization(WorkspacePolicies.Member)
-        .Produces<byte[]>(StatusCodes.Status200OK, contentType: "image/webp", additionalContentTypes: ["image/svg+xml"])
+        .Produces<byte[]>(StatusCodes.Status200OK, "image/webp", "image/svg+xml")
         .Produces(StatusCodes.Status304NotModified)
         .ProducesProblem(StatusCodes.Status404NotFound)
         .ProducesValidationProblem()

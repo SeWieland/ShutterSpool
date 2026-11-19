@@ -10,6 +10,8 @@ namespace ShutterSpool.Infrastructure.Persistence;
 internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, EfCaptureRetentionStore captures,
     TimeProvider clock) : IRetentionRemovalStore
 {
+    private const string RemovalHistoryKind = "removal";
+    private const string RemovedOperationState = "Removed";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     public async Task RecordCapacityObservationAsync(SpoolQuotaSnapshot snapshot,
@@ -40,17 +42,25 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
         long occupancy = checked(snapshot.UsedBytes + snapshot.ReservedBytes);
         bool pressureObserved = snapshot.Settings.IsActive
             && snapshot.Settings.HighWatermarkBytes is long high && occupancy >= high;
-        if (!activeEpisode && pressureObserved) return new("Planning", true, StartsEpisode: true);
-        if (activeEpisode && snapshot.Settings.RecoveryTargetBytes is long target
-            && occupancy <= target && snapshot.AdmissionBlockedReason is null)
+        if (!activeEpisode)
+        {
+            if (pressureObserved) return new("Planning", true, StartsEpisode: true);
+            return new(pressure.EpisodeId is null ? "Normal" : null, false);
+        }
+        if (snapshot.Settings.RecoveryTargetBytes is long target && occupancy <= target
+            && snapshot.AdmissionBlockedReason is null)
             return new("Recovered", true);
-        if (!activeEpisode) return new(pressure.EpisodeId is null ? "Normal" : null, false);
-        string state = snapshot.AdmissionBlockedReason is not null ? "AdmissionBlocked"
-            : !automaticRemovalEnabled ? "AutomaticRemovalDisabled"
-            : pass.Failed > 0 ? "ReclamationFailed"
-            : pass.Completed > 0 ? "Reclaiming"
-            : pressureObserved ? "ReclamationStalled" : "BelowHighWatermark";
-        return new(state, true);
+        return new(ActivePressureState(snapshot, pass, automaticRemovalEnabled, pressureObserved), true);
+    }
+
+    private static string ActivePressureState(SpoolQuotaSnapshot snapshot, RetentionRemovalPassResult pass,
+        bool automaticRemovalEnabled, bool pressureObserved)
+    {
+        if (snapshot.AdmissionBlockedReason is not null) return "AdmissionBlocked";
+        if (!automaticRemovalEnabled) return "AutomaticRemovalDisabled";
+        if (pass.Failed > 0) return "ReclamationFailed";
+        if (pass.Completed > 0) return "Reclaiming";
+        return pressureObserved ? "ReclamationStalled" : "BelowHighWatermark";
     }
 
     private async Task ApplyPressureTransitionAsync(RetentionPressureStateEntity pressure, PressureTransition transition,
@@ -68,8 +78,9 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
         pressure.Revision = checked(pressure.Revision + 1);
         pressure.UpdatedAt = now;
         if (pressure.EpisodeId is not Guid episodeId || episodeId == Guid.Empty) return;
-        AddHistory(episodeId, "pressure", transition.State, now, 0, pass.RemovedBytes, revision: pressure.Revision,
-            usedBytes: snapshot.UsedBytes, reservedBytes: snapshot.ReservedBytes,
+        AddHistory(episodeId, "pressure", transition.State, now,
+            new(Purged: pass.RemovedBytes, Used: snapshot.UsedBytes, Reserved: snapshot.ReservedBytes),
+            revision: pressure.Revision,
             blockers: snapshot.AdmissionBlockedReason is null ? [] : [snapshot.AdmissionBlockedReason]);
         await database.SaveChangesAsync(cancellationToken);
     }
@@ -117,7 +128,7 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
 
         // Do not select from a partially classified population. Once all due facts are
         // authoritative, PostgreSQL orders the entire eligible scope before the bounded take.
-        bool dirtyRemain = await database.Captures.AnyAsync(capture => capture.RetentionDisposition == "Active"
+        bool dirtyRemain = await database.Captures.AnyAsync(capture => capture.RetentionDisposition == nameof(RetentionDisposition.Active)
             && capture.RetentionFactsDirty, cancellationToken);
         if (dirtyRemain) return new(classified, 0, 0);
 
@@ -134,7 +145,7 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
         DateTimeOffset now, CancellationToken cancellationToken)
     {
         IQueryable<CaptureEntity> eligible = database.Captures.AsNoTracking()
-            .Where(capture => capture.RetentionDisposition == "Active" && !capture.RetentionFactsDirty
+            .Where(capture => capture.RetentionDisposition == nameof(RetentionDisposition.Active) && !capture.RetentionFactsDirty
                 && capture.RetentionTier != null);
         IOrderedQueryable<CaptureEntity> ordered = underPressure
             ? eligible.Where(capture => capture.RetentionPressureEligibleAt <= now)
@@ -158,11 +169,9 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
             CaptureRetentionSummary summary = await captures.BuildSummaryAsync(capture, now, policy,
                 cancellationToken);
             DateTimeOffset? eligibleAt = underPressure ? summary.PressureEligibleAt : summary.TrashEligibleAt;
-            DateTimeOffset? indexedAt = underPressure ? capture.RetentionPressureEligibleAt : capture.RetentionTrashEligibleAt;
-            if (capture.RetentionTier != (summary.Tier is null ? null : (int)summary.Tier.Value)
-                || indexedAt != eligibleAt)
+            if (!IndexedEligibilityMatches(capture, summary, eligibleAt, underPressure))
             {
-                await database.Captures.Where(item => item.Id == id && item.RetentionDisposition == "Active")
+                await database.Captures.Where(item => item.Id == id && item.RetentionDisposition == nameof(RetentionDisposition.Active))
                     .ExecuteUpdateAsync(update => update.SetProperty(item => item.RetentionFactsDirty, true), cancellationToken);
                 factsMismatch = true;
                 continue;
@@ -208,7 +217,7 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
         CancellationToken cancellationToken)
     {
         Guid[] ids = await database.Captures.AsNoTracking()
-            .Where(capture => capture.RetentionDisposition == "Active" && capture.RetentionFactsDirty)
+            .Where(capture => capture.RetentionDisposition == nameof(RetentionDisposition.Active) && capture.RetentionFactsDirty)
             .OrderBy(capture => capture.FirstAcceptedAt).ThenBy(capture => capture.Id)
             .Take(maximumCount).Select(capture => capture.Id).ToArrayAsync(cancellationToken);
         foreach (Guid id in ids)
@@ -216,7 +225,7 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
             await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
             await LockRoutingAsync(cancellationToken);
             CaptureEntity? capture = await LockCaptureAsync(id, cancellationToken);
-            if (capture is null || capture.RetentionDisposition != "Active" || !capture.RetentionFactsDirty)
+            if (capture is null || capture.RetentionDisposition != nameof(RetentionDisposition.Active) || !capture.RetentionFactsDirty)
             {
                 await transaction.CommitAsync(cancellationToken);
                 continue;
@@ -248,7 +257,7 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
         await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await LockRoutingAsync(cancellationToken);
         CaptureEntity? capture = await LockCaptureAsync(candidate.CaptureId, cancellationToken);
-        if (capture is null || capture.Revision != candidate.Revision || capture.RetentionDisposition != "Active")
+        if (capture is null || capture.Revision != candidate.Revision || capture.RetentionDisposition != nameof(RetentionDisposition.Active))
         {
             await transaction.CommitAsync(cancellationToken);
             return false;
@@ -276,14 +285,14 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
             return false;
         }
 
-        capture.RetentionDisposition = "Trash";
+        capture.RetentionDisposition = nameof(RetentionDisposition.Trash);
         capture.TrashReason = underPressure ? "pressure" : "age";
         capture.TrashEnteredAt = now;
         capture.RecoverableUntil = now + policy.TrashRecoveryWindow;
         capture.RetentionPaused = true;
         capture.Revision = checked(capture.Revision + 1);
         await database.SaveChangesAsync(cancellationToken);
-        AddHistory(Guid.NewGuid(), "selection", capture.TrashReason, now, candidate.Bytes, 0);
+        AddHistory(Guid.NewGuid(), "selection", capture.TrashReason, now, new(Planned: candidate.Bytes));
         await database.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return true;
@@ -292,12 +301,17 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
     private static bool SelectionFactsMatch(CaptureEntity capture, CaptureRetentionSummary summary,
         DateTimeOffset? eligibleAt, bool underPressure)
     {
-        int? summarizedTier = summary.Tier is null ? null : (int)summary.Tier.Value;
-        DateTimeOffset? indexedAt = underPressure ? capture.RetentionPressureEligibleAt : capture.RetentionTrashEligibleAt;
         DateTimeOffset? attentionAt = RetentionPolicy.AttentionAt(summary.Tier,
             summary.Timeline?.StartedAt, summary.Timeline?.EndsAt);
-        return !capture.RetentionFactsDirty && capture.RetentionTier == summarizedTier && indexedAt == eligibleAt
-            && capture.RetentionAttentionAt == attentionAt;
+        return !capture.RetentionFactsDirty && capture.RetentionAttentionAt == attentionAt
+            && IndexedEligibilityMatches(capture, summary, eligibleAt, underPressure);
+    }
+
+    private static bool IndexedEligibilityMatches(CaptureEntity capture, CaptureRetentionSummary summary,
+        DateTimeOffset? eligibleAt, bool underPressure)
+    {
+        DateTimeOffset? indexedAt = underPressure ? capture.RetentionPressureEligibleAt : capture.RetentionTrashEligibleAt;
+        return capture.RetentionTier == (int?)summary.Tier && indexedAt == eligibleAt;
     }
 
     private async Task<bool> HasActiveCaptureIoAsync(CaptureRetentionSummary summary, CancellationToken cancellationToken)
@@ -356,11 +370,11 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
             return await FinishAuthorizationAsync(transaction, RetentionOperationStatus.Blocked, capture,
                 "TRANSIENT_COPY_SET_UNBOUNDED", [], cancellationToken);
 
-        capture.RetentionDisposition = "Purging";
+        capture.RetentionDisposition = nameof(RetentionDisposition.Purging);
         capture.RetentionPaused = true;
         capture.Revision = checked(capture.Revision + 1);
         await database.SaveChangesAsync(cancellationToken);
-        AddHistory(Guid.NewGuid(), "removal", "authorized", now, assets.Sum(asset => asset.Size), 0);
+        AddHistory(Guid.NewGuid(), RemovalHistoryKind, "authorized", now, new(Planned: assets.Sum(asset => asset.Size)));
         await database.SaveChangesAsync(cancellationToken);
         CaptureRetentionSummary summary = await BuildSummaryAsync(capture, now, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
@@ -408,7 +422,7 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
     {
         if (expectedRevision is int revision && capture.Revision != revision)
             return (RetentionOperationStatus.Conflict, "REVISION_CONFLICT");
-        if (capture.RetentionDisposition != "Trash")
+        if (capture.RetentionDisposition != nameof(RetentionDisposition.Trash))
             return (RetentionOperationStatus.Conflict, "CAPTURE_NOT_IN_TRASH");
         if (reason is RetentionRemovalReason.RecoveryWindowExpired or RetentionRemovalReason.PressureRecoveryExpired)
         {
@@ -456,8 +470,8 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
         AssetRemovalOperationEntity[] operations = await database.AssetRemovalOperations.AsNoTracking()
             .Where(operation => ((operation.State == "Authorized" || operation.State == "Removing" || operation.State == "Failed")
                     && operation.DueAt <= clock.GetUtcNow())
-                || operation.State == "Removed" && database.Captures.Any(capture => capture.Id == operation.CaptureId
-                    && capture.RetentionDisposition == "Purging"))
+                || operation.State == RemovedOperationState && database.Captures.Any(capture => capture.Id == operation.CaptureId
+                    && capture.RetentionDisposition == nameof(RetentionDisposition.Purging)))
             .OrderBy(operation => operation.DueAt).ThenBy(operation => operation.OperationId)
             .Take(maximumCount).ToArrayAsync(cancellationToken);
         return operations.Select(ToContract).ToArray();
@@ -468,7 +482,7 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
     {
         if (maximumCount is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(maximumCount));
         var candidates = await database.Captures.AsNoTracking()
-            .Where(capture => capture.RetentionDisposition == "Trash" && capture.RecoverableUntil <= now
+            .Where(capture => capture.RetentionDisposition == nameof(RetentionDisposition.Trash) && capture.RecoverableUntil <= now
                 && (capture.RestoreProtectedUntil == null || capture.RestoreProtectedUntil <= now))
             .Where(capture => database.CaptureAssets.Any(member => member.CaptureId == capture.Id))
             .Where(capture => !database.CaptureAssets.Any(member => member.CaptureId == capture.Id
@@ -479,12 +493,14 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
                 && database.Deliveries.Any(delivery => delivery.AssetId == member.AssetId
                     && delivery.State == DeliveryState.Running)))
             .Where(capture => !database.CaptureAssets.Any(member => member.CaptureId == capture.Id
-                && database.GalleryProtectionAssets.Any(protectionMember => protectionMember.AssetId == member.AssetId
-                    && database.GalleryProtections.Any(protection => protection.Id == protectionMember.ProtectionId
+                && Queryable.Any(database.GalleryProtectionAssets,
+                    protectionMember => protectionMember.AssetId == member.AssetId
+                    && database.GalleryProtections.Any((GalleryProtectionEntity protection) => protection.Id == protectionMember.ProtectionId
                         && protection.ExpiresAt > now))))
             .Where(capture => !database.CaptureAssets.Any(member => member.CaptureId == capture.Id
-                && database.PreservationHoldAssets.Any(holdMember => holdMember.AssetId == member.AssetId
-                    && database.PreservationHolds.Any(hold => hold.Id == holdMember.HoldId && hold.ResolvedAt == null))))
+                && Queryable.Any(database.PreservationHoldAssets,
+                    holdMember => holdMember.AssetId == member.AssetId
+                    && database.PreservationHolds.Any((PreservationHoldEntity hold) => hold.Id == holdMember.HoldId && hold.ResolvedAt == null))))
             .OrderBy(capture => capture.RecoverableUntil).ThenBy(capture => capture.Id)
             .Take(maximumCount)
             .Select(capture => new RetentionRemovalCandidate(capture.Id, capture.Revision,
@@ -501,7 +517,7 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
     public async Task<long> GetPendingReclamationBytesAsync(DateTimeOffset now, CancellationToken cancellationToken)
     {
         return await (from capture in database.Captures.AsNoTracking()
-            where capture.RetentionDisposition == "Trash"
+            where capture.RetentionDisposition == nameof(RetentionDisposition.Trash)
                 && capture.RecoverableUntil != null
                 && database.CaptureAssets.Any(member => member.CaptureId == capture.Id)
                 && !database.CaptureAssets.Any(member => member.CaptureId == capture.Id
@@ -518,12 +534,14 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
                             || admission.State == ShutterSpool.Application.Ingress.CameraTransferState.Received
                             || admission.State == ShutterSpool.Application.Ingress.CameraTransferState.Handoff)))
                 && !database.CaptureAssets.Any(member => member.CaptureId == capture.Id
-                    && database.GalleryProtectionAssets.Any(protectionMember => protectionMember.AssetId == member.AssetId
-                        && database.GalleryProtections.Any(protection => protection.Id == protectionMember.ProtectionId
+                    && Queryable.Any(database.GalleryProtectionAssets,
+                        protectionMember => protectionMember.AssetId == member.AssetId
+                        && database.GalleryProtections.Any((GalleryProtectionEntity protection) => protection.Id == protectionMember.ProtectionId
                             && protection.ExpiresAt > now)))
                 && !database.CaptureAssets.Any(member => member.CaptureId == capture.Id
-                    && database.PreservationHoldAssets.Any(holdMember => holdMember.AssetId == member.AssetId
-                        && database.PreservationHolds.Any(hold => hold.Id == holdMember.HoldId && hold.ResolvedAt == null)))
+                    && Queryable.Any(database.PreservationHoldAssets,
+                        holdMember => holdMember.AssetId == member.AssetId
+                        && database.PreservationHolds.Any((PreservationHoldEntity hold) => hold.Id == holdMember.HoldId && hold.ResolvedAt == null)))
             select (long?)((from member in database.CaptureAssets
                 join asset in database.Assets on member.AssetId equals asset.Id
                 where member.CaptureId == capture.Id
@@ -534,13 +552,13 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
     {
         await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         AssetRemovalOperationEntity? operation = await LockOperationAsync(operationId, cancellationToken);
-        if (operation is null || operation.State == "Removed")
+        if (operation is null || operation.State == RemovedOperationState)
         {
             await transaction.CommitAsync(cancellationToken);
             return false;
         }
         CaptureEntity? capture = await database.Captures.SingleOrDefaultAsync(item => item.Id == operation.CaptureId, cancellationToken);
-        if (capture?.RetentionDisposition != "Purging")
+        if (capture?.RetentionDisposition != nameof(RetentionDisposition.Purging))
         {
             await transaction.CommitAsync(cancellationToken);
             return false;
@@ -558,12 +576,12 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
         await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         AssetRemovalOperationEntity? operation = await LockOperationAsync(operationId, cancellationToken);
         if (operation is null) throw new InvalidOperationException("Removal authorization was not found.");
-        if (operation.State == "Removed")
+        if (operation.State == RemovedOperationState)
         {
             await transaction.CommitAsync(cancellationToken);
             return;
         }
-        operation.State = "Removed";
+        operation.State = RemovedOperationState;
         operation.CompletedAt = now;
         operation.FailureCode = null;
         operation.RemovedBytes = checked(operation.RemovedBytes + removedBytes);
@@ -572,7 +590,7 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
         if (asset is not null) asset.State = "Removed";
         await database.SaveChangesAsync(cancellationToken);
         long historyRevision = await NextRemovalHistoryRevisionAsync(operation.OperationId, cancellationToken);
-        AddHistory(operation.OperationId, "removal", "completed", now, 0, removedBytes,
+        AddHistory(operation.OperationId, RemovalHistoryKind, "completed", now, new(Purged: removedBytes),
             revision: historyRevision);
         await database.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
@@ -583,7 +601,7 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
     {
         await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         AssetRemovalOperationEntity? operation = await LockOperationAsync(operationId, cancellationToken);
-        if (operation is null || operation.State == "Removed")
+        if (operation is null || operation.State == RemovedOperationState)
         {
             await transaction.CommitAsync(cancellationToken);
             return;
@@ -594,7 +612,7 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
         operation.DueAt = now.AddMinutes(1);
         await database.SaveChangesAsync(cancellationToken);
         long historyRevision = await NextRemovalHistoryRevisionAsync(operation.OperationId, cancellationToken);
-        AddHistory(operation.OperationId, "removal", "failed", now, 0, partiallyRemovedBytes,
+        AddHistory(operation.OperationId, RemovalHistoryKind, "failed", now, new(Purged: partiallyRemovedBytes),
             [operation.FailureCode], revision: historyRevision);
         await database.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
@@ -605,22 +623,22 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
     {
         await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         CaptureEntity? capture = await LockCaptureAsync(captureId, cancellationToken);
-        if (capture is null || capture.RetentionDisposition != "Purging")
+        if (capture is null || capture.RetentionDisposition != nameof(RetentionDisposition.Purging))
         {
             await transaction.CommitAsync(cancellationToken);
             return;
         }
         bool pending = await database.AssetRemovalOperations.AnyAsync(operation => operation.CaptureId == captureId
-            && operation.State != "Removed", cancellationToken);
+            && operation.State != RemovedOperationState, cancellationToken);
         bool hasOperations = await database.AssetRemovalOperations.AnyAsync(operation => operation.CaptureId == captureId,
             cancellationToken);
         if (hasOperations && !pending)
         {
-            capture.RetentionDisposition = "Purged";
+            capture.RetentionDisposition = nameof(RetentionDisposition.Purged);
             capture.RetentionPaused = true;
             capture.Revision = checked(capture.Revision + 1);
             await database.SaveChangesAsync(cancellationToken);
-            AddHistory(Guid.NewGuid(), "removal", "capture-purged", now, 0, 0);
+            AddHistory(Guid.NewGuid(), RemovalHistoryKind, "capture-purged", now);
             await database.SaveChangesAsync(cancellationToken);
         }
         await transaction.CommitAsync(cancellationToken);
@@ -662,9 +680,10 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
         return [.. ingestKeys.Concat(cameraKeys).Where(key => !string.IsNullOrWhiteSpace(key) && key != asset.SpoolKey).Distinct(StringComparer.Ordinal)];
     }
 
+    private readonly record struct HistoryBytes(long Planned = 0, long Purged = 0, long Used = 0, long Reserved = 0);
+
     private void AddHistory(Guid episodeId, string kind, string state, DateTimeOffset now,
-        long plannedBytes, long purgedBytes, string[]? blockers = null, long revision = 1,
-        long usedBytes = 0, long reservedBytes = 0)
+        HistoryBytes bytes = default, string[]? blockers = null, long revision = 1)
     {
         database.RetentionHistory.Add(new RetentionHistoryEntity
         {
@@ -675,10 +694,10 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
             CommittedAt = now,
             Kind = kind,
             State = state,
-            UsedBytes = usedBytes,
-            ReservedBytes = reservedBytes,
-            PlannedReclamationBytes = plannedBytes,
-            PurgedBytes = purgedBytes,
+            UsedBytes = bytes.Used,
+            ReservedBytes = bytes.Reserved,
+            PlannedReclamationBytes = bytes.Planned,
+            PurgedBytes = bytes.Purged,
             Blockers = blockers ?? [],
         });
     }
@@ -686,7 +705,7 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
     private async Task<long> NextRemovalHistoryRevisionAsync(Guid operationId, CancellationToken cancellationToken)
     {
         long? current = await database.RetentionHistory.AsNoTracking()
-            .Where(item => item.EpisodeId == operationId && item.Kind == "removal")
+            .Where(item => item.EpisodeId == operationId && item.Kind == RemovalHistoryKind)
             .Select(item => (long?)item.Revision).MaxAsync(cancellationToken);
         return checked((current ?? 0) + 1);
     }

@@ -6,15 +6,21 @@ namespace ShutterSpool.Server.Security;
 public sealed class WorkspaceAuthorizationResultHandler : IAuthorizationMiddlewareResultHandler
 {
     private readonly AuthorizationMiddlewareResultHandler fallback = new();
-    public async Task HandleAsync(RequestDelegate next, HttpContext context, AuthorizationPolicy policy, PolicyAuthorizationResult result)
+    public async Task HandleAsync(RequestDelegate next, HttpContext context, AuthorizationPolicy policy, PolicyAuthorizationResult authorizeResult)
     {
-        if (result.Forbidden && context.Items["access-denial"] is string code)
+        if (authorizeResult.Forbidden && context.Items["access-denial"] is string code)
         {
-            await Results.Problem(statusCode: code == "authorization-unavailable" ? 503 : code == "media-not-found" ? 404 : 403,
+            int status = code switch
+            {
+                "authorization-unavailable" => StatusCodes.Status503ServiceUnavailable,
+                "media-not-found" => StatusCodes.Status404NotFound,
+                _ => StatusCodes.Status403Forbidden,
+            };
+            await Results.Problem(statusCode: status,
                 title: code == "membership-revoked" ? "Workspace membership is unavailable" : "Workspace permission denied",
                 extensions: new Dictionary<string, object?> { ["errorCode"] = code }).ExecuteAsync(context);
             return;
         }
-        await fallback.HandleAsync(next, context, policy, result);
+        await fallback.HandleAsync(next, context, policy, authorizeResult);
     }
 }

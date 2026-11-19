@@ -39,24 +39,27 @@ client_id() {
 }
 
 reconcile_client() {
-  id=$(client_id "$1")
+  local client_name="$1" config_file="$2" id
+  id=$(client_id "$client_name")
   if [ -n "$id" ]; then
-    /opt/keycloak/bin/kcadm.sh update "clients/$id" -r shutterspool -f "/opt/shutterspool/$2"
+    /opt/keycloak/bin/kcadm.sh update "clients/$id" -r shutterspool -f "/opt/shutterspool/$config_file"
   else
-    /opt/keycloak/bin/kcadm.sh create clients -r shutterspool -f "/opt/shutterspool/$2"
-    id=$(client_id "$1")
+    /opt/keycloak/bin/kcadm.sh create clients -r shutterspool -f "/opt/shutterspool/$config_file"
+    id=$(client_id "$client_name")
   fi
   printf '%s' "$id"
 }
 
 mapper_id() {
-  /opt/keycloak/bin/kcadm.sh get "clients/$1/protocol-mappers/models" -r shutterspool | tr '\n' ' ' | sed -n "s/.*\"id\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\"[[:space:]]*,[[:space:]]*\"name\"[[:space:]]*:[[:space:]]*\"$2\".*/\1/p"
+  local client_uuid="$1" mapper_name="$2"
+  /opt/keycloak/bin/kcadm.sh get "clients/$client_uuid/protocol-mappers/models" -r shutterspool | tr '\n' ' ' | sed -n "s/.*\"id\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\"[[:space:]]*,[[:space:]]*\"name\"[[:space:]]*:[[:space:]]*\"$mapper_name\".*/\1/p"
 }
 
 reconcile_mapper() {
-  id=$(mapper_id "$1" "$2")
-  [ -z "$id" ] || /opt/keycloak/bin/kcadm.sh delete "clients/$1/protocol-mappers/models/$id" -r shutterspool
-  /opt/keycloak/bin/kcadm.sh create "clients/$1/protocol-mappers/models" -r shutterspool -f "/opt/shutterspool/$3"
+  local client_uuid="$1" mapper_name="$2" config_file="$3" id
+  id=$(mapper_id "$client_uuid" "$mapper_name")
+  [ -z "$id" ] || /opt/keycloak/bin/kcadm.sh delete "clients/$client_uuid/protocol-mappers/models/$id" -r shutterspool
+  /opt/keycloak/bin/kcadm.sh create "clients/$client_uuid/protocol-mappers/models" -r shutterspool -f "/opt/shutterspool/$config_file"
 }
 
 reconcile_client shutterspool-server shutterspool-server-client.json >/dev/null

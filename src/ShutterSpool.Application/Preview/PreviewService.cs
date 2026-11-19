@@ -69,10 +69,8 @@ public sealed class PreviewSettings
 
     public void Validate()
     {
-        foreach (int dimension in new[] { GridWidth, GridHeight, DetailWidth, DetailHeight })
-        {
-            if (dimension is < 64 or > 4096) throw new InvalidOperationException("Preview dimensions must be between 64 and 4096 pixels.");
-        }
+        if (new[] { GridWidth, GridHeight, DetailWidth, DetailHeight }.Any(dimension => dimension is < 64 or > 4096))
+            throw new InvalidOperationException("Preview dimensions must be between 64 and 4096 pixels.");
         if (MaxConcurrentGenerations is < 1 or > 128) throw new InvalidOperationException("Preview concurrency must be between 1 and 128.");
         if (GenerationQueueTimeoutSeconds is < 1 or > 600 || GenerationTimeoutSeconds is < 1 or > 600)
             throw new InvalidOperationException("Preview timeouts must be between 1 and 600 seconds.");
@@ -103,12 +101,8 @@ public sealed class PreviewService(IPreviewSourceResolver sources, IPreviewCache
             if (useGate is not null && use is null) return new(PreviewState.Unavailable);
             await using IOriginalAssetLockLease? sharedLease = assetLock is null ? null
                 : await assetLock.AcquireSharedAsync(resolution.Source.AssetId, resolution.Source.SpoolKey, cancellationToken);
-            if (sharedLease is not null)
-            {
-                if (!await assetLock!.IsAvailableAsync(sharedLease, cancellationToken)) return new(PreviewState.Unavailable);
-                PreviewResolution? changed = await RevalidateSourceAsync(captureId, resolution.Source, cancellationToken);
-                if (changed is not null) return ResolveGetSourceChange(changed);
-            }
+            PreviewResult? changed = await CheckLockedSourceAsync(captureId, resolution.Source, sharedLease, cancellationToken);
+            if (changed is not null) return changed;
             CachedPreview cached = await EnsureCachedAsync(captureId, resolution.Source, profile, size, sharedLease, cancellationToken);
             return new(PreviewState.Ready, cached.Content, resolution.Source.AssetId, cached.Published);
         }
@@ -170,8 +164,13 @@ public sealed class PreviewService(IPreviewSourceResolver sources, IPreviewCache
             && current.Source.SpoolKey == source.SpoolKey ? null : current;
     }
 
-    private static PreviewResult ResolveGetSourceChange(PreviewResolution current)
+    private async Task<PreviewResult?> CheckLockedSourceAsync(Guid captureId, PreviewSource source,
+        IOriginalAssetLockLease? sharedLease, CancellationToken cancellationToken)
     {
+        if (sharedLease is null) return null;
+        if (!await assetLock!.IsAvailableAsync(sharedLease, cancellationToken)) return new(PreviewState.Unavailable);
+        PreviewResolution? current = await RevalidateSourceAsync(captureId, source, cancellationToken);
+        if (current is null) return null;
         if (!current.CaptureExists) return new(PreviewState.Missing);
         return new(current.Source is null && current.SourceUnavailable ? PreviewState.Unavailable : PreviewState.Pending);
     }
@@ -206,9 +205,12 @@ public sealed class PreviewService(IPreviewSourceResolver sources, IPreviewCache
         }
         finally
         {
-            renewal.Cancel();
+            await renewal.CancelAsync();
             try { await renewals; }
-            catch (OperationCanceledException) when (renewal.IsCancellationRequested) { }
+            catch (OperationCanceledException) when (renewal.IsCancellationRequested)
+            {
+                // Stopping the activity timer ends renewal before the finished observation.
+            }
             activity?.Finished(captureId, source.AssetId, profile);
         }
     }

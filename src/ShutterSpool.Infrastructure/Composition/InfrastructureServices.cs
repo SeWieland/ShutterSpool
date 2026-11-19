@@ -32,6 +32,8 @@ namespace ShutterSpool.Infrastructure.Composition;
 
 public static class InfrastructureServices
 {
+    private const string TenantConnectionName = "shutterspool";
+
     public static IServiceCollection AddShutterSpoolInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
         AddWorkspacePersistence(services, configuration);
@@ -66,7 +68,7 @@ public static class InfrastructureServices
             options.UseNpgsql(WorkspaceControlDbContext.RuntimeConnection(Deployment(provider))));
         services.AddScoped<IWorkspaceRegistry, EfWorkspaceRegistry>();
         services.AddDbContextFactory<ShutterSpoolDbContext>((provider, options) =>
-            options.UseNpgsql(TenantConfiguration(provider).GetConnectionString("shutterspool")), ServiceLifetime.Scoped);
+            options.UseNpgsql(TenantConfiguration(provider).GetConnectionString(TenantConnectionName)), ServiceLifetime.Scoped);
         services.TryAddSingleton(TimeProvider.System);
         services.AddScoped<DatabaseInitializer>();
     }
@@ -118,7 +120,7 @@ public static class InfrastructureServices
             ReservedBytes = long.TryParse(TenantConfiguration(provider)["ShutterSpool:Spool:ReservedBytes"], out long bytes) ? bytes : null,
             ReservedPercent = double.TryParse(TenantConfiguration(provider)["ShutterSpool:Spool:ReservedPercent"], out double percent) ? percent : null,
         }));
-        services.AddScoped(provider => new PostgresOriginalAssetLock(TenantConfiguration(provider).GetConnectionString("shutterspool") ?? ""));
+        services.AddScoped(provider => new PostgresOriginalAssetLock(TenantConfiguration(provider).GetConnectionString(TenantConnectionName) ?? ""));
         services.AddScoped<IOriginalAssetLock>(provider => provider.GetRequiredService<PostgresOriginalAssetLock>());
         services.AddScoped<IExactOriginalRemoval>(provider => new FileSystemExactOriginalRemoval(TenantConfiguration(provider)));
         services.AddScoped<ICommittedOriginalReader>(provider => new PostgresCommittedOriginalReader(
@@ -170,12 +172,12 @@ public static class InfrastructureServices
         services.AddScoped<RetentionCapacityReadService>();
         services.AddScoped<IAssetProtectionStore, EfAssetProtectionStore>();
         services.AddScoped<IProtectionAdmissionLock>(provider =>
-            new PostgresProtectionAdmissionLock(TenantConfiguration(provider).GetConnectionString("shutterspool") ?? "",
+            new PostgresProtectionAdmissionLock(TenantConfiguration(provider).GetConnectionString(TenantConnectionName) ?? "",
                 provider.GetRequiredService<ISpool>()));
         services.AddScoped<AssetProtectionService>();
         services.AddScoped<IRetentionRemovalStore, EfRetentionRemovalStore>();
         services.AddScoped<IRetentionControllerLock>(provider =>
-            new PostgresRetentionControllerLock(TenantConfiguration(provider).GetConnectionString("shutterspool") ?? ""));
+            new PostgresRetentionControllerLock(TenantConfiguration(provider).GetConnectionString(TenantConnectionName) ?? ""));
         services.AddScoped<RetentionRemovalService>();
         services.AddScoped<PrivacyErasureSuppressionPersistence>();
         services.AddScoped<IPrivacyErasureStore, EfPrivacyErasureStore>();
@@ -196,7 +198,7 @@ public static class InfrastructureServices
         services.AddScoped<IDestinationDeliveryAdapter, LocalDestinationDeliveryAdapter>();
         services.AddScoped<ILocalDestinationConfiguration, LocalDestinationConfigurationService>();
         services.AddScoped<IWebDavDestinationConfiguration, EfWebDavDestinationConfiguration>();
-        services.AddHttpClient("webdav", client => client.Timeout = Timeout.InfiniteTimeSpan)
+        services.AddHttpClient(WebDavDestinationDeliveryAdapter.HttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan)
             .ConfigurePrimaryHttpMessageHandler(() => new WebDavEgressPolicy(egress).CreateHandler())
             .RemoveAllLoggers();
         services.AddScoped<WebDavDestinationDeliveryAdapter>();

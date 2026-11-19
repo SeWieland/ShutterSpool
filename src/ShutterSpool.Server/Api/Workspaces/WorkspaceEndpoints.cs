@@ -16,8 +16,7 @@ internal static class WorkspaceEndpoints
             .Produces<WorkspaceListResponse>().ProducesProblem(401).ProducesProblem(503);
     }
 
-    private static async Task<IResult> DiscoverAsync(HttpContext http, WorkspaceContext context,
-        IWorkspaceRegistry registry, IServiceScopeFactory scopes)
+    private static async Task<IResult> DiscoverAsync(HttpContext http, IWorkspaceRegistry registry, IServiceScopeFactory scopes)
     {
         string? issuer = http.User.FindFirstValue("iss");
         string? subject = http.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? http.User.FindFirstValue("sub");

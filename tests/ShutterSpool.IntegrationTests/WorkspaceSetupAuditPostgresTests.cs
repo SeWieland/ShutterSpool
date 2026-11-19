@@ -38,7 +38,7 @@ public sealed partial class WorkspaceTenancyPostgresTests
         Assert.True((await database.WorkspaceIdentities.SingleAsync(token)).BootstrapComplete);
         owner.IsActive = false;
         await database.SaveChangesAsync(token);
-        fixture.Configuration[$"ShutterSpool:Workspaces:Definitions:{fixture.WorkspaceName(0)}:SetupOperatorIdentity"] = null;
+        fixture.Configuration[$"ShutterSpool:Workspaces:Definitions:{WorkspaceFixture.WorkspaceName(0)}:SetupOperatorIdentity"] = null;
         await fixture.ProvisionWorkspaceAsync(0);
         database.ChangeTracker.Clear();
         Assert.False((await database.AuthorizationGrants.SingleAsync(token)).IsActive);
@@ -51,7 +51,7 @@ public sealed partial class WorkspaceTenancyPostgresTests
         await using var fixture = await WorkspaceFixture.CreateAsync();
         CancellationToken token = TestContext.Current.CancellationToken;
         await WorkspaceOperator.RunAsync(["--workspace-control-init"], fixture.Configuration, token);
-        string key = $"ShutterSpool:Workspaces:Definitions:{fixture.WorkspaceName(0)}:SetupOperatorIdentity";
+        string key = $"ShutterSpool:Workspaces:Definitions:{WorkspaceFixture.WorkspaceName(0)}:SetupOperatorIdentity";
         foreach (string? invalid in new[] { null, "", "  ", new string('x', 513) })
         {
             fixture.Configuration[key] = invalid;
@@ -83,7 +83,7 @@ public sealed partial class WorkspaceTenancyPostgresTests
         await using var database = fixture.MigrationDatabase(0);
         // Represent a completed workspace created before setup audit existed.
         await database.Set<WorkspaceAccessOperationEntity>().ExecuteDeleteAsync(token);
-        fixture.Configuration[$"ShutterSpool:Workspaces:Definitions:{fixture.WorkspaceName(0)}:SetupOperatorIdentity"] = null;
+        fixture.Configuration[$"ShutterSpool:Workspaces:Definitions:{WorkspaceFixture.WorkspaceName(0)}:SetupOperatorIdentity"] = null;
         await fixture.ProvisionWorkspaceAsync(0);
         await WorkspaceOperator.RunAsync(["--workspace-upgrade"], fixture.Configuration, token);
         Assert.Empty(await database.Set<WorkspaceAccessOperationEntity>().ToArrayAsync(token));

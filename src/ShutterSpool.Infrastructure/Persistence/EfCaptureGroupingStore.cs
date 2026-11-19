@@ -55,93 +55,97 @@ internal sealed class EfCaptureGroupingStore(ShutterSpoolDbContext database) : I
             .AsNoTracking()
             .ToArrayAsync(cancellationToken);
         Dictionary<Guid, AssetEntity[]> primaryEvidence = await LoadPrimaryEvidenceAsync(captures, cancellationToken);
-        string role = asset.MetadataRole is "RAW" or "JPEG" ? asset.MetadataRole : "OTHER";
         (SourceCurationMode Policy, int DelaySeconds, Guid CollectionId) sourcePolicy = await LoadSourcePolicyAsync(asset.SourceId, cancellationToken);
 
         GroupingReplayFacts[] priorTransfers = await LoadPriorTransfersAsync(asset, cancellationToken);
-        GroupingDecision decision = CaptureGroupingPolicy.Decide(Facts(asset, role),
+        GroupingAssetFacts incoming = Facts(asset);
+        GroupingDecision decision = CaptureGroupingPolicy.Decide(incoming,
             captures.Select(capture => new GroupingCaptureFacts(capture.Id,
-                primaryEvidence[capture.Id].Select(primary => Facts(primary, primary.MetadataRole is "RAW" or "JPEG" ? primary.MetadataRole : "OTHER")).ToArray())).ToArray(),
+                primaryEvidence[capture.Id].Select(primary => Facts(primary)).ToArray())).ToArray(),
             priorTransfers);
-        Guid? changedCaptureId = decision.CaptureId;
-        if (decision.RelatedAssetId is Guid relatedAssetId)
-        {
-            database.CaptureAssets.Add(new CaptureAssetEntity
-            {
-                AssetId = asset.Id,
-                CaptureId = decision.CaptureId!.Value,
-                Role = role,
-                RelatedAssetId = relatedAssetId,
-                GroupingReason = "recognized_replay",
-            });
-        }
-        else
-        {
-            CaptureEntity? match = decision.CaptureId is Guid matchId ? captures.Single(capture => capture.Id == matchId) : null;
-
-            if (match is null)
-            {
-                match = new CaptureEntity
-                {
-                    Id = Guid.NewGuid(),
-                    SourceId = asset.SourceId,
-                    CollectionId = sourcePolicy.CollectionId,
-                    NormalizedStem = stem,
-                    Policy = sourcePolicy.Policy,
-                    DelaySeconds = sourcePolicy.Policy == SourceCurationMode.Delay ? sourcePolicy.DelaySeconds : null,
-                    FirstAcceptedAt = asset.IngestedAt,
-                    LastPrimaryIngestedAt = asset.IngestedAt,
-                    Held = CaptureCurationPolicy.DefaultHeld(sourcePolicy.Policy),
-                    State = CaptureState.CURATING,
-                };
-                match.ReleaseDueAt = CaptureCurationPolicy.DueAt(match.Policy, match.DelaySeconds, asset.IngestedAt);
-                database.Captures.Add(match);
-            }
-            else
-            {
-                CaptureEntity waitingCapture = await database.Captures.SingleAsync(capture => capture.Id == match.Id, cancellationToken);
-                if (waitingCapture.ReleasedAt is null)
-                {
-                    waitingCapture.LastPrimaryIngestedAt = Max(waitingCapture.LastPrimaryIngestedAt, asset.IngestedAt);
-                    waitingCapture.ReleaseDueAt = CaptureCurationPolicy.DueAt(waitingCapture.Policy, waitingCapture.DelaySeconds,
-                        waitingCapture.LastPrimaryIngestedAt);
-                }
-            }
-
-            database.CaptureAssets.Add(new CaptureAssetEntity
-            {
-                AssetId = asset.Id,
-                CaptureId = match.Id,
-                Role = role,
-                IsPrimary = true,
-                GroupingReason = decision.Reason,
-            });
-            changedCaptureId = match.Id;
-            if (role == "JPEG")
-            {
-                foreach (PreviewProfile profile in Enum.GetValues<PreviewProfile>())
-                    database.PreviewPrewarms.Add(new PreviewPrewarmEntity
-                    {
-                        AssetId = asset.Id,
-                        CaptureId = match.Id,
-                        Profile = profile.ToString(),
-                    });
-            }
-        }
-
-        if (changedCaptureId is Guid selectedCaptureId)
-        {
-            CaptureEntity? affected = database.Captures.Local.SingleOrDefault(capture => capture.Id == selectedCaptureId);
-            if (affected is not null) affected.RetentionFactsDirty = true;
-            else await database.Captures.Where(capture => capture.Id == selectedCaptureId)
-                .ExecuteUpdateAsync(setters => setters.SetProperty(capture => capture.RetentionFactsDirty, true),
-                    cancellationToken);
-        }
+        Guid changedCaptureId = decision.RelatedAssetId is Guid priorId
+            ? AddReplay(incoming, decision.CaptureId!.Value, priorId, decision.Reason)
+            : await AddPrimaryAsync(asset, incoming.Role, stem, sourcePolicy, decision, cancellationToken);
+        await MarkRetentionFactsDirtyAsync(changedCaptureId, cancellationToken);
 
         await database.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         LastChangedCaptureId = changedCaptureId;
         return true;
+    }
+
+    private Guid AddReplay(GroupingAssetFacts incoming, Guid captureId, Guid priorId, string reason)
+    {
+        database.CaptureAssets.Add(new CaptureAssetEntity
+        {
+            AssetId = incoming.Id,
+            CaptureId = captureId,
+            Role = incoming.Role,
+            RelatedAssetId = priorId,
+            GroupingReason = reason,
+        });
+        return captureId;
+    }
+
+    private async Task<Guid> AddPrimaryAsync(AssetEntity asset, string role, string stem,
+        (SourceCurationMode Policy, int DelaySeconds, Guid CollectionId) sourcePolicy,
+        GroupingDecision decision, CancellationToken cancellationToken)
+    {
+        CaptureEntity capture;
+        if (decision.CaptureId is Guid matchId)
+        {
+            capture = await database.Captures.SingleAsync(item => item.Id == matchId, cancellationToken);
+            if (capture.ReleasedAt is null)
+            {
+                capture.LastPrimaryIngestedAt = Max(capture.LastPrimaryIngestedAt, asset.IngestedAt);
+                capture.ReleaseDueAt = CaptureCurationPolicy.DueAt(capture.Policy, capture.DelaySeconds, capture.LastPrimaryIngestedAt);
+            }
+        }
+        else
+        {
+            capture = new CaptureEntity
+            {
+                Id = Guid.NewGuid(),
+                SourceId = asset.SourceId,
+                CollectionId = sourcePolicy.CollectionId,
+                NormalizedStem = stem,
+                Policy = sourcePolicy.Policy,
+                DelaySeconds = sourcePolicy.Policy == SourceCurationMode.Delay ? sourcePolicy.DelaySeconds : null,
+                FirstAcceptedAt = asset.IngestedAt,
+                LastPrimaryIngestedAt = asset.IngestedAt,
+                Held = CaptureCurationPolicy.DefaultHeld(sourcePolicy.Policy),
+                State = CaptureState.CURATING,
+            };
+            capture.ReleaseDueAt = CaptureCurationPolicy.DueAt(capture.Policy, capture.DelaySeconds, asset.IngestedAt);
+            database.Captures.Add(capture);
+        }
+        database.CaptureAssets.Add(new CaptureAssetEntity
+        {
+            AssetId = asset.Id,
+            CaptureId = capture.Id,
+            Role = role,
+            IsPrimary = true,
+            GroupingReason = decision.Reason,
+        });
+        if (role == "JPEG")
+        {
+            foreach (PreviewProfile profile in Enum.GetValues<PreviewProfile>())
+                database.PreviewPrewarms.Add(new PreviewPrewarmEntity
+                {
+                    AssetId = asset.Id,
+                    CaptureId = capture.Id,
+                    Profile = profile.ToString(),
+                });
+        }
+        return capture.Id;
+    }
+
+    private async Task MarkRetentionFactsDirtyAsync(Guid captureId, CancellationToken cancellationToken)
+    {
+        CaptureEntity? affected = database.Captures.Local.SingleOrDefault(capture => capture.Id == captureId);
+        if (affected is not null) affected.RetentionFactsDirty = true;
+        else await database.Captures.Where(capture => capture.Id == captureId)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(capture => capture.RetentionFactsDirty, true), cancellationToken);
     }
 
     private static DateTimeOffset Max(DateTimeOffset left, DateTimeOffset right) => left > right ? left : right;
@@ -190,6 +194,9 @@ internal sealed class EfCaptureGroupingStore(ShutterSpoolDbContext database) : I
         return captures.ToDictionary(capture => capture.Id,
             capture => capture.Assets.Where(member => member.IsPrimary).Select(member => byId[member.AssetId]).ToArray());
     }
+
+    private static GroupingAssetFacts Facts(AssetEntity asset) =>
+        Facts(asset, asset.MetadataRole is "RAW" or "JPEG" ? asset.MetadataRole : "OTHER");
 
     private static GroupingAssetFacts Facts(AssetEntity asset, string role) => new(asset.Id, asset.OriginalName,
         asset.Sha256, asset.Size, role, asset.CameraModel, asset.CameraSerial, asset.CaptureTimeLocal,

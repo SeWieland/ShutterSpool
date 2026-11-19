@@ -18,13 +18,27 @@ public sealed partial class ConfigurationApiTests
         using HttpResponseMessage access = await fixture.Client.GetAsync("/management/access", token);
         Assert.Equal(HttpStatusCode.OK, access.StatusCode);
         JsonElement current = await access.Content.ReadFromJsonAsync<JsonElement>(token);
-        Assert.Equal("Owner", current.GetProperty("role").GetString());
         Guid id = current.GetProperty("membershipId").GetGuid();
+        long revision = current.GetProperty("revision").GetInt64();
+        Assert.Equal("Owner", current.GetProperty("role").GetString());
         using HttpResponseMessage removal = await fixture.Client.PostAsJsonAsync($"/management/members/{id}/remove",
-            new { operationId = Guid.NewGuid(), expectedRevision = current.GetProperty("revision").GetInt64() }, token);
+            new { operationId = Guid.NewGuid(), expectedRevision = revision }, token);
         Assert.Equal(HttpStatusCode.Conflict, removal.StatusCode);
+        JsonElement problem = await removal.Content.ReadFromJsonAsync<JsonElement>(token);
+        Assert.Equal(409, problem.GetProperty("status").GetInt32());
+        Assert.Equal("last-owner", problem.GetProperty("errorCode").GetString());
+        JsonElement membership = problem.GetProperty("membership");
+        Assert.Equal(id, membership.GetProperty("id").GetGuid());
+        Assert.Equal("Owner", membership.GetProperty("role").GetString());
+        Assert.Equal(revision, membership.GetProperty("revision").GetInt64());
+        Assert.True(membership.GetProperty("isActive").GetBoolean());
+
         await using var database = new ShutterSpoolDbContext(fixture.Database.Options);
-        Assert.True((await database.AuthorizationGrants.SingleAsync(token)).IsActive);
+        AuthorizationGrant owner = await database.AuthorizationGrants.SingleAsync(token);
+        Assert.Equal(id, owner.Id);
+        Assert.Equal(WorkspaceRole.Owner, owner.Role);
+        Assert.Equal(revision, owner.Revision);
+        Assert.True(owner.IsActive);
     }
 
     [Fact]

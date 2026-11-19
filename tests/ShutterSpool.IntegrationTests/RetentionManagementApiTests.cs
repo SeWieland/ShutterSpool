@@ -77,6 +77,57 @@ public sealed partial class ConfigurationApiTests
     }
 
     [Fact]
+    public async Task Trash_cursor_continues_by_capture_id_when_entry_times_match()
+    {
+        await using var fixture = await ConfigurationApiFixture.CreateAsync();
+        CancellationToken token = TestContext.Current.CancellationToken;
+        Guid[] captureIds = await SeedMetadataCapturesAsync(fixture, 2);
+        Array.Sort(captureIds);
+        DateTimeOffset recoverableUntil = new(2026, 10, 10, 0, 0, 0, TimeSpan.Zero);
+        await SeedPressureAssetsAsync(fixture, [
+            new(captureIds[1], recoverableUntil.AddDays(-4), Disposition: "Trash", RecoverableUntil: recoverableUntil),
+            new(captureIds[0], recoverableUntil.AddDays(-4), Disposition: "Trash", RecoverableUntil: recoverableUntil),
+        ], token);
+        await using var database = new ShutterSpoolDbContext(fixture.Database.Options);
+        var store = new EfCaptureRetentionStore(database, TimeProvider.System);
+
+        RetentionTrashPage first = await store.GetTrashPageAsync(1, null, token);
+        Assert.Equal(captureIds[0], Assert.Single(first.Items).CaptureId);
+        Assert.NotNull(first.NextCursor);
+        RetentionTrashPage second = await store.GetTrashPageAsync(1, first.NextCursor, token);
+        Assert.Equal(captureIds[1], Assert.Single(second.Items).CaptureId);
+        Assert.Null(second.NextCursor);
+
+        await Assert.ThrowsAsync<ArgumentException>("cursor", () => store.GetTrashPageAsync(1, "!", token));
+    }
+
+    [Fact]
+    public async Task Trash_recovery_warning_starts_at_its_boundary_and_changes_when_purging()
+    {
+        await using var fixture = await ConfigurationApiFixture.CreateAsync();
+        CancellationToken token = TestContext.Current.CancellationToken;
+        Guid captureId = (await SeedMetadataCapturesAsync(fixture, 1))[0];
+        DateTimeOffset boundary = new(2026, 10, 10, 0, 0, 0, TimeSpan.Zero);
+        await SeedPressureAssetsAsync(fixture, [new(captureId, boundary.AddDays(-3),
+            Disposition: "Trash", RecoverableUntil: boundary.AddDays(1))], token);
+        await using var database = new ShutterSpoolDbContext(fixture.Database.Options);
+        var store = new EfCaptureRetentionStore(database, TimeProvider.System);
+
+        CaptureRetentionSummary? early = await store.GetCaptureSummaryAsync(captureId, boundary.AddTicks(-1), token);
+        Assert.Equal(RetentionUrgency.Informational, early?.Urgency);
+        CaptureRetentionSummary? due = await store.GetCaptureSummaryAsync(captureId, boundary, token);
+        Assert.Equal(RetentionUrgency.Urgent, due?.Urgency);
+        Assert.Equal(boundary.AddDays(-2), due?.Timeline?.StartedAt);
+
+        await database.Captures.Where(item => item.Id == captureId)
+            .ExecuteUpdateAsync(update => update.SetProperty(item => item.RetentionDisposition, "Purging"), token);
+        CaptureRetentionSummary? purging = await store.GetCaptureSummaryAsync(captureId, boundary, token);
+        Assert.Equal(RetentionUrgency.Informational, purging?.Urgency);
+        Assert.Equal(RetentionTimelineKind.TrashRecovery, purging?.Timeline?.Kind);
+        Assert.Equal("Permanent removal is in progress", purging?.Timeline?.Meaning);
+    }
+
+    [Fact]
     public async Task Explicit_no_delivery_is_only_recorded_after_routing_without_delivery_obligations()
     {
         await using var fixture = await ConfigurationApiFixture.CreateAsync();

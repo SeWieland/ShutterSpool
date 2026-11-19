@@ -5,6 +5,7 @@ namespace ShutterSpool.Domain.Routing;
 
 public static class RoutingRuleEvaluator
 {
+    private const string EqualsOperator = "equals";
     private static readonly HashSet<string> StringFacts = new(StringComparer.Ordinal)
         { "source", "selection", "variant", "extension", "mime", "suppliedName", "cameraMake", "cameraModel", "cameraSerial", "collectionName", "collectionPath" };
     private static readonly HashSet<string> NumberFacts = new(StringComparer.Ordinal) { "rating", "size" };
@@ -13,14 +14,7 @@ public static class RoutingRuleEvaluator
     {
         foreach (RoutingRule rule in rules.OrderBy(rule => rule.Order))
         {
-            bool conditionsMatch = rule.Conditions.Length == 0 || (rule.ConditionMode switch
-            {
-                RoutingConditionMode.And => rule.Conditions.All(condition => Matches(condition, facts)),
-                RoutingConditionMode.Or => rule.Conditions.Any(condition => Matches(condition, facts)),
-                _ => false,
-            });
-            if (rule.Negate) conditionsMatch = !conditionsMatch;
-            if (!conditionsMatch) continue;
+            if (!RuleMatches(rule, facts)) continue;
             if (!RoutingTargetTemplate.TryRender(rule.FolderTemplate, facts, folder: true, out string folder)
                 || !RoutingTargetTemplate.TryRender(rule.FilenameTemplate, facts, folder: false, out string filename))
                 return new(RoutingDecisionKind.InvalidTarget, rule.Id, rule.Required, null, "A target placeholder is missing or renders an unsafe path.");
@@ -31,6 +25,17 @@ public static class RoutingRuleEvaluator
                 $"First matching{(rule.Negate ? " negated" : "")} rule '{rule.Name}'.");
         }
         return new(RoutingDecisionKind.NoMatch, null, false, null, "No enabled rule matched this Asset.");
+    }
+
+    private static bool RuleMatches(RoutingRule rule, RoutingFacts facts)
+    {
+        bool conditionsMatch = rule.Conditions.Length == 0 || (rule.ConditionMode switch
+        {
+            RoutingConditionMode.And => rule.Conditions.All(condition => Matches(condition, facts)),
+            RoutingConditionMode.Or => rule.Conditions.Any(condition => Matches(condition, facts)),
+            _ => false,
+        });
+        return rule.Negate ? !conditionsMatch : conditionsMatch;
     }
 
     public static string? Validate(RoutingRule[]? rules)
@@ -45,10 +50,8 @@ public static class RoutingRuleEvaluator
                 || string.IsNullOrWhiteSpace(rule.FilenameTemplate) || rule.FilenameTemplate.Length > 255
                 || rule.FolderTemplate is null || rule.FolderTemplate.Length > 1_024)
                 return "A rule contains an invalid ID, name, order, condition list or target template.";
-            foreach (RoutingCondition condition in rule.Conditions)
-            {
-                if (!ValidCondition(condition)) return $"Rule '{rule.Name}' contains an unsupported or invalid condition.";
-            }
+            if (rule.Conditions.Any(condition => !ValidCondition(condition)))
+                return $"Rule '{rule.Name}' contains an unsupported or invalid condition.";
             if (!RoutingTargetTemplate.UsesKnownFacts(rule.FolderTemplate, KnownFacts)
                 || !RoutingTargetTemplate.UsesKnownFacts(rule.FilenameTemplate, KnownFacts)
                 || rule.FilenameTemplate.Contains("{collectionPath}", StringComparison.Ordinal))
@@ -60,38 +63,31 @@ public static class RoutingRuleEvaluator
     private static bool ValidCondition(RoutingCondition condition)
     {
         if (condition.Value is null) return false;
-        if (condition.Fact == "label") return condition.Operator switch
+        return condition.Fact switch
         {
-            "equals" => CaptureCurationPolicy.IsCanonicalLabel(condition.Value.Text),
-            "present" or "absent" => condition.Value.Text is null && condition.Value.Number is null
-                && condition.Value.Time is null && condition.Value.Tags is null,
+            "label" => condition.Operator switch
+            {
+                EqualsOperator => CaptureCurationPolicy.IsCanonicalLabel(condition.Value.Text),
+                "present" or "absent" => condition.Value is { Text: null, Number: null, Time: null, Tags: null },
+                _ => false,
+            },
+            "tags" => condition.Operator == "contains" && condition.Value.Text is not null,
+            "captureTime" => IsComparison(condition.Operator) && condition.Value.Time is not null,
+            _ when NumberFacts.Contains(condition.Fact) => IsComparison(condition.Operator) && condition.Value.Number is not null,
+            _ when StringFacts.Contains(condition.Fact) => condition.Value.Text is not null
+                && (condition.Operator == EqualsOperator || condition.Fact == "suppliedName" && condition.Operator == "glob"),
             _ => false,
         };
-        if (condition.Fact == "tags") return condition.Operator == "contains" && condition.Value.Text is not null;
-        if (StringFacts.Contains(condition.Fact)) return condition.Operator switch
-        {
-            "equals" => condition.Value.Text is not null,
-            "glob" => condition.Fact == "suppliedName" && condition.Value.Text is not null,
-            _ => false,
-        };
-        if (NumberFacts.Contains(condition.Fact)) return condition.Operator switch
-        {
-            "equals" => condition.Value.Number is not null,
-            "gt" or "gte" or "lt" or "lte" => condition.Value.Number is not null,
-            _ => false,
-        };
-        if (condition.Fact == "captureTime")
-            return condition.Operator is "equals" or "gt" or "gte" or "lt" or "lte"
-                && condition.Value.Time is not null;
-        return false;
     }
+
+    private static bool IsComparison(string op) => op is EqualsOperator or "gt" or "gte" or "lt" or "lte";
 
     private static bool Matches(RoutingCondition condition, RoutingFacts facts)
     {
         if (!facts.Values.TryGetValue(condition.Fact, out RoutingValue? actual) || actual is null) return false;
         if (condition.Fact == "label") return condition.Operator switch
         {
-            "equals" => actual.Text is not null && string.Equals(actual.Text, condition.Value.Text, StringComparison.Ordinal),
+            EqualsOperator => actual.Text is not null && string.Equals(actual.Text, condition.Value.Text, StringComparison.Ordinal),
             "present" => actual.Text is not null,
             "absent" => actual.Text is null,
             _ => false,
@@ -105,7 +101,7 @@ public static class RoutingRuleEvaluator
         if (actual.Text is not string actualText || expectedString is null) return false;
         return condition.Operator switch
         {
-            "equals" => string.Equals(actualText, expectedString, StringComparison.OrdinalIgnoreCase),
+            EqualsOperator => string.Equals(actualText, expectedString, StringComparison.OrdinalIgnoreCase),
             "glob" => FileSystemName.MatchesSimpleExpression(expectedString, actualText, ignoreCase: true),
             _ => false,
         };
@@ -113,7 +109,7 @@ public static class RoutingRuleEvaluator
 
     private static bool Compare(string op, int comparison) => op switch
     {
-        "equals" => comparison == 0,
+        EqualsOperator => comparison == 0,
         "gt" => comparison > 0,
         "gte" => comparison >= 0,
         "lt" => comparison < 0,

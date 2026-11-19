@@ -93,8 +93,13 @@ public sealed class SecurityBoundaryTests(WorkspaceWebApplicationFactory factory
         using HttpResponseMessage rejected = await client.GetAsync(
             $"/management/status?access_token={Uri.EscapeDataString(token)}", TestContext.Current.CancellationToken);
 
+        using HttpRequestMessage both = new(HttpMethod.Post, negotiate.RequestUri);
+        both.Headers.Authorization = new("Bearer", CreateToken(signingKey, "shutterspool-admin", audience: "other-audience"));
+        using HttpResponseMessage headerSelected = await client.SendAsync(both, TestContext.Current.CancellationToken);
+
         Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, rejected.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, headerSelected.StatusCode);
         Assert.DoesNotContain(logs, entry => entry.Contains(token, StringComparison.Ordinal));
     }
 

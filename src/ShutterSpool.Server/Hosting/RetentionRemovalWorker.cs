@@ -3,7 +3,7 @@ using ShutterSpool.Server.Api.Live;
 
 namespace ShutterSpool.Server.Hosting;
 
-internal sealed class RetentionRemovalWorker(IServiceScopeFactory scopes, RetentionTelemetry telemetry, ILogger<RetentionRemovalWorker> logger) : BackgroundService
+internal sealed partial class RetentionRemovalWorker(IServiceScopeFactory scopes, RetentionTelemetry telemetry, ILogger<RetentionRemovalWorker> logger) : BackgroundService
 {
     private readonly WorkspaceWorkerCursor tenants = new(scopes);
 
@@ -24,11 +24,11 @@ internal sealed class RetentionRemovalWorker(IServiceScopeFactory scopes, Retent
             {
                 break;
             }
-            catch (Exception)
+            catch (Exception exception)
             {
                 telemetry.RecordOperation(RetentionOperation.Failure, 0, 1);
                 telemetry.RecordPass(DateTimeOffset.UtcNow - startedAt, failed: true);
-                logger.LogWarning("Retention removal pass failed; authorized cleanup will be retried.");
+                LogRetentionRemovalFailure(logger, exception.GetType().Name);
                 await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
             }
         }
@@ -89,4 +89,7 @@ internal sealed class RetentionRemovalWorker(IServiceScopeFactory scopes, Retent
         telemetry.RecordCapacity(await quota.GetSnapshotAsync(cancellationToken));
         capacitySamples[tenantId] = DateTimeOffset.UtcNow;
     }
+
+    [LoggerMessage(EventId = 9001, Level = LogLevel.Warning, Message = "Retention removal pass failed ({ExceptionType}). Authorized cleanup will be retried.")]
+    private static partial void LogRetentionRemovalFailure(ILogger logger, string exceptionType);
 }

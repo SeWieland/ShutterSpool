@@ -48,9 +48,9 @@ def run(command: list[str], *, cwd: Path = ROOT, env: dict[str, str] | None = No
 
 
 def validate_version(version: str) -> None:
-    match = SEMVER.fullmatch(version)
+    match = SEMVER.fullmatch(version) if len(version) <= 128 else None
     if not match or any(identifier.isdigit() and len(identifier) > 1 and identifier.startswith("0")
-                        for identifier in (match.group(4) or "").split(".")) or len(version) > 128:
+                        for identifier in (match.group(4) or "").split(".")):
         raise BuildError("Version must be OCI-compatible SemVer without build metadata, such as 0.1.0-alpha.1 or 1.0.0.")
 
 
@@ -67,14 +67,14 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def image_refs(compose_file: Path) -> list[str]:
+def image_refs(compose: str) -> list[str]:
     # Keep required-value interpolation intact; its explanatory message may contain spaces.
-    refs = []
-    for line in compose_file.read_text(encoding="utf-8").splitlines():
-        match = re.match(r"\s*image:\s*(.+?)\s*(?:#.*)?$", line)
-        if match:
-            refs.append(match.group(1).strip("'\""))
-    return sorted(set(refs))
+    refs = set()
+    for line in compose.splitlines():
+        field = line.lstrip()
+        if field.startswith("image:"):
+            refs.add(field.removeprefix("image:").partition("#")[0].strip().strip("'\""))
+    return sorted(refs)
 
 
 def validate_compose(compose_file: Path) -> list[str]:
@@ -85,7 +85,7 @@ def validate_compose(compose_file: Path) -> list[str]:
     unresolved = variables - COMPOSE_VARIABLES
     if unresolved:
         raise BuildError("Generated Compose contains unresolved non-operator parameters: " + ", ".join(sorted(unresolved)))
-    refs = image_refs(compose_file)
+    refs = image_refs(text)
     placeholder = "${SERVER_IMAGE:?Select the qualified Server image}"
     unpinned = [ref for ref in refs if ref != placeholder and "@sha256:" not in ref]
     if unpinned:
@@ -106,15 +106,20 @@ def validate_attribution(compose_file: Path, attribution: dict) -> None:
     if not re.fullmatch(r"drakkan/sftpgo:[\w.-]+@sha256:[0-9a-f]{64}", expected):
         raise BuildError("Generated SFTPGo attribution must identify a pinned upstream image.")
     expected_digest = expected.split("@", 1)[1]
-    services = re.findall(r"(?ms)^  (camera-edge(?:-legacy|-plain)?):\s*\n(.*?)(?=^  \S|\Z)",
-                          compose_file.read_text(encoding="utf-8"))
-    if not services:
-        raise BuildError("Generated Compose is missing camera-edge attribution targets.")
-    for name, body in services:
-        image = re.search(r"(?m)^\s+image:\s*([^\r\n]+)", body)
+    blocks = re.split(r"(?m)(?=^ {2}\S)", compose_file.read_text(encoding="utf-8"))
+    found = False
+    for block in blocks:
+        header, _, body = block.partition("\n")
+        service = re.fullmatch(r" {2}(camera-edge(?:-legacy|-plain)?):[ \t]*", header)
+        if not service:
+            continue
+        found = True
+        image = re.search(r"(?m)^[ \t]+image:([^\r\n]*)", body)
         reference = image.group(1).strip().strip("'\"") if image else ""
         if not re.fullmatch(r"drakkan/sftpgo(?::[\w.-]+)?@" + re.escape(expected_digest), reference):
-            raise BuildError(f"{name} image does not match generated SFTPGo attribution.")
+            raise BuildError(f"{service.group(1)} image does not match generated SFTPGo attribution.")
+    if not found:
+        raise BuildError("Generated Compose is missing camera-edge attribution targets.")
 
 
 def publish_compose(args: argparse.Namespace, output: Path, enabled_profiles: set[str]) -> Path:
@@ -125,7 +130,7 @@ def publish_compose(args: argparse.Namespace, output: Path, enabled_profiles: se
     if len(packages) != 1:
         raise BuildError(f"Expected one generated Compose file for {sorted(enabled_profiles)}, found {len(packages)}.")
     compose = packages[0]
-    service_names = set(re.findall(r"(?m)^  ([a-zA-Z0-9_-]+):\s*$", compose.read_text(encoding="utf-8")))
+    service_names = set(re.findall(r"(?m)^ {2}([A-Za-z0-9_-]+):[ \t]*$", compose.read_text(encoding="utf-8")))
     expected = {"ModernFtps": "camera-edge", "LegacyFtps": "camera-edge-legacy", "PlainFtpLan": "camera-edge-plain"}
     required = {"server", *(edge for profile, edge in expected.items() if profile in enabled_profiles)}
     missing = sorted(required - service_names)

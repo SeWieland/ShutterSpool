@@ -54,10 +54,14 @@ export function workspaceRequestHeaders(
 }
 
 const authCallbackPage = typeof window !== 'undefined' && window.location.pathname === '/auth/callback';
-export let pageWorkspaceId = typeof window === 'undefined' || window.location.pathname.startsWith('/auth/')
+let pageWorkspaceId = typeof window === 'undefined' || window.location.pathname.startsWith('/auth/')
     ? null
     : readWorkspaceId(window.location.search);
 let pageWorkspaceScopeInitialized = typeof window !== 'undefined' && !window.location.pathname.startsWith('/auth/');
+
+export function getPageWorkspaceId(): string | null {
+    return pageWorkspaceId;
+}
 
 export function bindInitialWorkspace(memberships: WorkspaceMembership[], incomplete: boolean): boolean {
     if (pageWorkspaceId !== null || incomplete) return false;

@@ -19,6 +19,9 @@ internal sealed class KeycloakEnrollmentOptions
 
 internal sealed class KeycloakAccountEnrollment(HttpClient http, KeycloakEnrollmentOptions options, string issuer) : IAccountEnrollment
 {
+    private const string SetupEmailFailed = "setup-email-failed";
+    private static readonly string[] InitialRequiredActions = ["VERIFY_EMAIL", "UPDATE_PASSWORD"];
+
     private bool Configured => Uri.TryCreate(options.ServerUrl, UriKind.Absolute, out var url)
         && url.Scheme is "https" or "http" && !string.IsNullOrWhiteSpace(options.Realm)
         && !string.IsNullOrWhiteSpace(options.ClientId) && !string.IsNullOrWhiteSpace(options.ClientSecret)
@@ -39,7 +42,7 @@ internal sealed class KeycloakAccountEnrollment(HttpClient http, KeycloakEnrollm
                 using var created = await SendAsync(HttpMethod.Post, UsersPath, bearer, JsonContent.Create(new
                 {
                     username = email, email, enabled = true, emailVerified = false,
-                    requiredActions = new[] { "VERIFY_EMAIL", "UPDATE_PASSWORD" },
+                    requiredActions = InitialRequiredActions,
                 }), token);
                 if (created.StatusCode == HttpStatusCode.BadRequest) return new("enrollment-rejected");
                 if (created.StatusCode != HttpStatusCode.Conflict) created.EnsureSuccessStatusCode();
@@ -57,7 +60,7 @@ internal sealed class KeycloakAccountEnrollment(HttpClient http, KeycloakEnrollm
 
     public async Task<string> SendSetupEmailAsync(AccountEnrollmentIdentity account, CancellationToken token)
     {
-        if (!Configured || account.Issuer != issuer) return "setup-email-failed";
+        if (!Configured || account.Issuer != issuer) return SetupEmailFailed;
         try
         {
             string bearer = await AccessTokenAsync(token);
@@ -65,18 +68,18 @@ internal sealed class KeycloakAccountEnrollment(HttpClient http, KeycloakEnrollm
             using var response = await SendAsync(HttpMethod.Get, path, bearer, null, token);
             response.EnsureSuccessStatusCode();
             var user = await response.Content.ReadFromJsonAsync<NativeUser>(token);
-            if (user is null || user.Id != account.Subject || !Matches(user, account.Email)) return "setup-email-failed";
+            if (user is null || user.Id != account.Subject || !Matches(user, account.Email)) return SetupEmailFailed;
             // Re-read pending actions so a retry after completed setup cannot impose a new password reset.
             var actions = new List<string>();
             if (!user.EmailVerified || user.RequiredActions?.Contains("VERIFY_EMAIL") == true) actions.Add("VERIFY_EMAIL");
             if (user.RequiredActions?.Contains("UPDATE_PASSWORD") == true) actions.Add("UPDATE_PASSWORD");
             if (actions.Count == 0) return "not-required";
             using var sent = await SendAsync(HttpMethod.Put, $"{path}/execute-actions-email?lifespan=86400", bearer, JsonContent.Create(actions), token);
-            return sent.StatusCode == HttpStatusCode.NoContent ? "setup-email-sent" : "setup-email-failed";
+            return sent.StatusCode == HttpStatusCode.NoContent ? "setup-email-sent" : SetupEmailFailed;
         }
         catch (Exception exception) when (Unavailable(exception, token))
         {
-            return "setup-email-failed";
+            return SetupEmailFailed;
         }
     }
 

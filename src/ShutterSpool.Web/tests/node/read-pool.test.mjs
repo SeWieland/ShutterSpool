@@ -1,0 +1,26 @@
+import { test } from 'vitest';
+import assert from 'node:assert/strict';
+import { createReadPool } from '../../app/lib/read-pool.ts';
+test('read pool cancels queued work, does not grant its permit, and releases a slot after rejection', async () => {
+    const pool = createReadPool(1);
+    const active = new AbortController();
+    const cancelled = new AbortController();
+    const survivor = new AbortController();
+    let rejectFirst;
+    let resolveSurvivor;
+    let startedSurvivor;
+    const survivorStarted = new Promise(resolve => { startedSurvivor = resolve; });
+    const started = [];
+    const first = pool.run(active.signal, () => { started.push('first'); return new Promise((_resolve, reject) => { rejectFirst = reject; }); });
+    const queued = pool.run(cancelled.signal, async () => { started.push('cancelled'); return 'wrong'; });
+    const last = pool.run(survivor.signal, () => { started.push('survivor'); startedSurvivor(); return new Promise(resolve => { resolveSurvivor = resolve; }); });
+    cancelled.abort();
+    await assert.rejects(queued);
+    assert.deepEqual(started, ['first'], 'cancelled queued work never consumes the available slot');
+    rejectFirst(new Error('request failed'));
+    await assert.rejects(first, /request failed/);
+    await survivorStarted;
+    assert.deepEqual(started, ['first', 'survivor'], 'a rejection releases its permit to the next live waiter');
+    resolveSurvivor('done');
+    assert.equal(await last, 'done');
+});

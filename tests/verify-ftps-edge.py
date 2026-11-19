@@ -19,6 +19,8 @@ import tempfile
 import threading
 import time
 import urllib.parse
+from contextlib import ExitStack, closing, contextmanager
+from pathlib import Path
 from image_pins import load_image_pins
 
 IMAGE = load_image_pins()['camera-edge']
@@ -30,6 +32,7 @@ requests = []
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_):
+        # Mute routine request logs so the probe results stay visible.
         pass
 
     def body(self):
@@ -98,51 +101,231 @@ def openssl(*args):
     subprocess.run(['openssl', *args], check=True, capture_output=True)
 
 
-def create_certificate(directory, version):
-    key = os.path.join(directory, f'server-{version}.key')
-    request = os.path.join(directory, f'server-{version}.csr')
-    cert = os.path.join(directory, f'server-{version}.pem')
-    extensions = os.path.join(directory, f'server-{version}.ext')
+def create_certificate(directory, version, root_certificate, root_key):
+    key = directory / f'server-{version}.key'
+    request = directory / f'server-{version}.csr'
+    cert = directory / f'server-{version}.pem'
+    extensions = directory / f'server-{version}.ext'
     with open(extensions, 'w', encoding='ascii') as output:
         output.write('subjectAltName=DNS:ingest.shutterspool.com\n')
         output.write('extendedKeyUsage=serverAuth\n')
         output.write('keyUsage=critical,digitalSignature,keyEncipherment\n')
         output.write('basicConstraints=critical,CA:FALSE\n')
+        output.write('authorityKeyIdentifier=keyid,issuer\n')
     openssl('req', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', request,
         '-subj', '/CN=ingest.shutterspool.com')
-    openssl('x509', '-req', '-in', request, '-CA', os.path.join(directory, 'root.pem'),
-        '-CAkey', os.path.join(directory, 'root.key'), '-CAcreateserial', '-out', cert,
+    openssl('x509', '-req', '-in', request, '-CA', root_certificate,
+        '-CAkey', root_key, '-CAcreateserial', '-out', cert,
         '-days', '10', '-sha256', '-extfile', extensions)
-    bundle = os.path.join(directory, 'server.pem')
-    with open(bundle, 'wb') as output:
-        for path in (cert, key):
-            with open(path, 'rb') as source:
-                output.write(source.read() + b'\n')
-    return bundle
+    bundle = directory / f'server-{version}-bundle.pem'
+    bundle.write_bytes(cert.read_bytes() + b'\n' + key.read_bytes() + b'\n')
+    return cert, bundle
 
 
 def control(port):
     client = socket.create_connection(('127.0.0.1', port), timeout=5)
-    client.settimeout(10)
-    greeting = client.makefile('rb').readline()
-    if not greeting:
+    try:
+        client.settimeout(10)
+        greeting = reply(client)
+        if not greeting:
+            raise ConnectionError('FTP listener is open but the server greeting is not ready.')
+        if not greeting.startswith(b'220'):
+            raise RuntimeError(f'Unexpected FTP greeting: {greeting!r}')
+    except (OSError, RuntimeError):
         client.close()
-        raise ConnectionError('FTP listener is open but the server greeting is not ready.')
-    if not greeting.startswith(b'220'):
-        client.close()
-        raise RuntimeError(f'Unexpected FTP greeting: {greeting!r}')
+        raise
     return client
 
 
 def connect_ftps(port, context):
     client = ftplib.FTP_TLS(context=context)
-    client.connect('127.0.0.1', port, timeout=10)
+    try:
+        client.connect('127.0.0.1', port, timeout=10)
+    except ftplib.all_errors:
+        client.close()
+        raise
     client.host = 'ingest.shutterspool.com'
     return client
 
 
 def reply(sock):
-    return sock.makefile('rb').readline()
+    with sock.makefile('rb') as responses:
+        return responses.readline()
+
+
+def start_edge(name, live_bundle, ftp_port, passive_start, legacy):
+    passive_end = passive_start + 1
+    mount_path = '/etc/sftpgo/certs'
+    mounted_bundle = f'{mount_path}/{live_bundle.name}'
+    env = {
+        'SFTPGO_SFTPD__BINDINGS__0__PORT': '0',
+        'SFTPGO_HTTPD__BINDINGS__0__PORT': '0',
+        'SFTPGO_FTPD__BINDINGS__0__PORT': '2121',
+        'SFTPGO_FTPD__BINDINGS__0__TLS_MODE': '1',
+        'SFTPGO_FTPD__BINDINGS__0__MIN_TLS_VERSION': '12',
+        'SFTPGO_FTPD__BINDINGS__0__CLIENT_AUTH_TYPE': '0',
+        'SFTPGO_FTPD__BINDINGS__0__CERTIFICATE_FILE': mounted_bundle,
+        'SFTPGO_FTPD__BINDINGS__0__CERTIFICATE_KEY_FILE': mounted_bundle,
+        'SFTPGO_FTPD__BINDINGS__0__FORCE_PASSIVE_IP': '127.0.0.1',
+        'SFTPGO_FTPD__PASSIVE_PORT_RANGE__START': str(passive_start),
+        'SFTPGO_FTPD__PASSIVE_PORT_RANGE__END': str(passive_end),
+        'SFTPGO_FTPD__DISABLE_ACTIVE_MODE': 'true',
+        'SFTPGO_DATA_PROVIDER__DRIVER': 'memory',
+        'SFTPGO_DATA_PROVIDER__EXTERNAL_AUTH_HOOK': BASE + '/auth',
+        'SFTPGO_DATA_PROVIDER__EXTERNAL_AUTH_SCOPE': '1',
+        'SFTPGO_HTTP__HEADERS__0__KEY': 'X-API-KEY',
+        'SFTPGO_HTTP__HEADERS__0__VALUE': KEY,
+    }
+    if legacy:
+        env['SFTPGO_FTPD__BINDINGS__0__TLS_CIPHER_SUITES'] = 'TLS_RSA_WITH_AES_128_CBC_SHA,TLS_RSA_WITH_AES_256_CBC_SHA'
+    command = ['docker', 'run', '-d', '--name', name, '-p', f'127.0.0.1:{ftp_port}:2121',
+        '-p', f'127.0.0.1:{passive_start}-{passive_end}:{passive_start}-{passive_end}',
+        '-v', f'{live_bundle.parent}:{mount_path}:ro']
+    for key, value in env.items():
+        command += ['-e', key + '=' + value]
+    command += [IMAGE, 'sftpgo', 'serve', '--log-file-path', '/dev/null', '--log-level', 'error']
+    try:
+        subprocess.run(command, check=True, capture_output=True)
+    except subprocess.CalledProcessError:
+        raise RuntimeError('Pinned SFTPGo container could not start; command output was suppressed.') from None
+
+
+def verify_plaintext_rejection(ftp_port):
+    for _ in range(60):
+        try:
+            plain = control(ftp_port)
+            break
+        except OSError:
+            time.sleep(.2)
+    else:
+        raise RuntimeError('Pinned SFTPGo FTP listener did not start.')
+
+    with plain:
+        plain.sendall(b'USER cam_probe\r\n')
+        user_reply = reply(plain)
+        assert not user_reply.startswith(b'331'), f'Plaintext USER began login: {user_reply!r}'
+    print('PASS: plaintext USER is rejected before password authentication')
+
+
+def verify_cipher_profile(ftp_port, root_certificate, legacy):
+    for cipher in ('AES128-SHA', 'AES256-SHA'):
+        rsa_context = ssl.create_default_context(cafile=root_certificate)
+        rsa_context.minimum_version = rsa_context.maximum_version = ssl.TLSVersion.TLSv1_2
+        rsa_context.set_ciphers(cipher)
+        with closing(connect_ftps(ftp_port, rsa_context)) as rsa_client:
+            try:
+                rsa_client.auth()
+            except ssl.SSLError:
+                assert not legacy, f'Compatibility listener rejected {cipher}'
+            else:
+                assert legacy, f'Modern listener accepted legacy cipher {cipher}'
+                assert rsa_client.sock.cipher()[0] == cipher
+                rsa_client.login('cam_probe', PASSWORD)
+                rsa_client.prot_p()
+                content = b'legacy TLS still protects control and data'
+                filename = 'legacy-' + cipher + '.bin'
+                assert rsa_client.storbinary('STOR ' + filename, io.BytesIO(content)).startswith('226')
+                assert files['/' + filename] == content
+    print('PASS: legacy RSA ciphers are ' + ('explicitly accepted with protected data' if legacy else 'rejected by modern defaults'))
+
+
+@contextmanager
+def verify_protected_upload(ftp_port, context):
+    with ExitStack() as clients:
+        ftp = clients.enter_context(closing(connect_ftps(ftp_port, context)))
+        assert ftp.auth().startswith('234')
+        ftp.login('cam_probe', PASSWORD)
+        try:
+            ftp.prot_c()
+            ftp.storbinary('STOR clear-data.bin', io.BytesIO(b'must not be sent in clear'))
+        except ftplib.error_temp as error:
+            if not str(error).startswith('421'):
+                raise
+            clients.close()
+            ftp = clients.enter_context(closing(connect_ftps(ftp_port, context)))
+            ftp.auth()
+            ftp.login('cam_probe', PASSWORD)
+        except ftplib.error_perm:
+            pass
+        else:
+            raise AssertionError('PROT C upload was accepted on the secure listener')
+        assert not any(path.endswith('/clear-data.bin') for path in files), 'Clear data reached the filesystem callback'
+        ftp.prot_p()
+        assert ftp.storbinary('STOR tls-data.bin', io.BytesIO(b'protected data')).startswith('226')
+        uploaded = [data for path, data in files.items() if path.endswith('/tls-data.bin')]
+        assert uploaded and uploaded[0] == b'protected data', f'No synthetic upload callback recorded; operations: {requests!r}'
+        print('PASS: explicit TLS login works, PROT C cannot upload, and PROT P does')
+        yield ftp
+
+
+def certificate_fingerprint(certificate):
+    return hashlib.sha256(ssl.PEM_cert_to_DER_cert(certificate.read_text(encoding='ascii'))).digest()
+
+
+def verify_served_certificate(ftp_port, context, root_certificate, first_certificate):
+    with closing(connect_ftps(ftp_port, context)) as verified:
+        verified.auth()
+    print('PASS: a validating FTPS client accepts the certificate served by the pinned edge')
+
+    with control(ftp_port) as no_sni:
+        no_sni.sendall(b'AUTH TLS\r\n')
+        assert reply(no_sni).startswith(b'234')
+        no_sni_context = ssl.create_default_context(cafile=root_certificate)
+        no_sni_context.check_hostname = False
+        with no_sni_context.wrap_socket(no_sni, server_hostname=None) as no_sni_tls:
+            assert hashlib.sha256(no_sni_tls.getpeercert(binary_form=True)).digest() == certificate_fingerprint(first_certificate)
+    print('PASS: server presents its certificate when the client sends no SNI')
+
+
+def verify_minimum_tls_version(ftp_port):
+    with control(ftp_port) as legacy:
+        legacy.sendall(b'AUTH TLS\r\n')
+        assert reply(legacy).startswith(b'234')
+        old_tls = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        old_tls.check_hostname = False
+        old_tls.verify_mode = ssl.CERT_NONE
+        old_tls.minimum_version = ssl.TLSVersion.TLSv1_1
+        old_tls.maximum_version = ssl.TLSVersion.TLSv1_1
+        old_tls.set_ciphers('DEFAULT:@SECLEVEL=0')
+        try:
+            unexpected_tls = old_tls.wrap_socket(legacy, server_hostname=None)
+        except OSError:
+            # The probe expects the lower-version handshake to fail.
+            pass
+        else:
+            with unexpected_tls:
+                raise AssertionError('TLS 1.1 handshake succeeded')
+    print('PASS: TLS versions below 1.2 are rejected')
+
+
+def verify_certificate_replacement(ftp_port, context, name, live_bundle, replacement_bundle, replacement_certificate):
+    with closing(connect_ftps(ftp_port, context)) as ftp:
+        ftp.auth()
+        ftp.login('cam_probe', PASSWORD)
+        ftp.prot_p()
+        assert ftp.storbinary('STOR before-replacement.bin', io.BytesIO(b'drained before replacement')).startswith('226')
+        ftp.quit()
+    os.replace(replacement_bundle, live_bundle)
+    subprocess.run(['docker', 'restart', '--time', '30', name], check=True, capture_output=True)
+
+    expected_fingerprint = certificate_fingerprint(replacement_certificate)
+    for _ in range(50):
+        fresh = None
+        try:
+            fresh = connect_ftps(ftp_port, context)
+            fresh.auth()
+            renewed_fingerprint = hashlib.sha256(fresh.sock.getpeercert(binary_form=True)).digest()
+        except ftplib.all_errors:
+            renewed_fingerprint = None
+        finally:
+            if fresh is not None:
+                fresh.close()
+        if renewed_fingerprint == expected_fingerprint:
+            break
+        time.sleep(.2)
+    else:
+        raise AssertionError('Fresh session is not serving the replacement certificate')
+    print('PASS: after transfers drain and the edge restarts, it serves the supplied replacement certificate')
 
 
 def main():
@@ -151,184 +334,40 @@ def main():
     options = parser.parse_args()
     if not shutil.which('openssl') or not shutil.which('docker'):
         raise RuntimeError('OpenSSL and Docker Desktop must be available on PATH.')
-    with tempfile.TemporaryDirectory(prefix='shutterspool-ftps-') as directory:
-        certificate_directory = os.path.join(directory, 'certificates')
-        os.mkdir(certificate_directory)
-        openssl('req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', os.path.join(directory, 'root.key'),
-            '-out', os.path.join(directory, 'root.pem'), '-days', '30', '-sha256', '-subj', '/CN=Probe Root',
-            '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign,cRLSign')
-        create_certificate(directory, 1)
-        first_bundle = os.path.join(directory, 'server-first.pem')
-        os.replace(os.path.join(directory, 'server.pem'), first_bundle)
-        create_certificate(directory, 2)
-        second_bundle = os.path.join(directory, 'server-next.pem')
-        os.replace(os.path.join(directory, 'server.pem'), second_bundle)
-        shutil.copyfile(os.path.join(directory, 'root.pem'), os.path.join(certificate_directory, 'root.pem'))
-        shutil.copyfile(first_bundle, os.path.join(certificate_directory, 'server.pem'))
+    with tempfile.TemporaryDirectory(prefix='shutterspool-ftps-') as temporary_directory:
+        directory = Path(temporary_directory)
+        certificate_directory = directory / 'certificates'
+        certificate_directory.mkdir()
+        live_bundle = certificate_directory / 'server.pem'
+        root_certificate = directory / 'root.pem'
+        root_key = directory / 'root.key'
+        openssl('req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', root_key, '-out', root_certificate,
+            '-days', '30', '-sha256', '-subj', '/CN=Probe Root', '-addext', 'basicConstraints=critical,CA:TRUE',
+            '-addext', 'keyUsage=critical,keyCertSign,cRLSign')
+        first_certificate, first_bundle = create_certificate(directory, 1, root_certificate, root_key)
+        replacement_certificate, replacement_bundle = create_certificate(directory, 2, root_certificate, root_key)
+        shutil.copyfile(root_certificate, certificate_directory / root_certificate.name)
+        shutil.copyfile(first_bundle, live_bundle)
 
+        name = 'shutterspool-ftps-probe-' + secrets.token_hex(4)
         handler = http.server.ThreadingHTTPServer(('0.0.0.0', 0), Handler)
         global BASE
         BASE = f'http://host.docker.internal:{handler.server_port}'
         threading.Thread(target=handler.serve_forever, daemon=True).start()
-        ftp_port, passive_start = free_port(), free_port()
-        passive_end = passive_start + 1
-        name = 'shutterspool-ftps-probe-' + secrets.token_hex(4)
-        env = {
-            'SFTPGO_SFTPD__BINDINGS__0__PORT': '0',
-            'SFTPGO_HTTPD__BINDINGS__0__PORT': '0',
-            'SFTPGO_FTPD__BINDINGS__0__PORT': '2121',
-            'SFTPGO_FTPD__BINDINGS__0__TLS_MODE': '1',
-            'SFTPGO_FTPD__BINDINGS__0__MIN_TLS_VERSION': '12',
-            'SFTPGO_FTPD__BINDINGS__0__CLIENT_AUTH_TYPE': '0',
-            'SFTPGO_FTPD__BINDINGS__0__CERTIFICATE_FILE': '/etc/sftpgo/certs/server.pem',
-            'SFTPGO_FTPD__BINDINGS__0__CERTIFICATE_KEY_FILE': '/etc/sftpgo/certs/server.pem',
-            'SFTPGO_FTPD__BINDINGS__0__FORCE_PASSIVE_IP': '127.0.0.1',
-            'SFTPGO_FTPD__PASSIVE_PORT_RANGE__START': str(passive_start),
-            'SFTPGO_FTPD__PASSIVE_PORT_RANGE__END': str(passive_end),
-            'SFTPGO_FTPD__DISABLE_ACTIVE_MODE': 'true',
-            'SFTPGO_DATA_PROVIDER__DRIVER': 'memory',
-            'SFTPGO_DATA_PROVIDER__EXTERNAL_AUTH_HOOK': BASE + '/auth',
-            'SFTPGO_DATA_PROVIDER__EXTERNAL_AUTH_SCOPE': '1',
-            'SFTPGO_HTTP__HEADERS__0__KEY': 'X-API-KEY',
-            'SFTPGO_HTTP__HEADERS__0__VALUE': KEY,
-        }
-        if options.legacy:
-            env['SFTPGO_FTPD__BINDINGS__0__TLS_CIPHER_SUITES'] = 'TLS_RSA_WITH_AES_128_CBC_SHA,TLS_RSA_WITH_AES_256_CBC_SHA'
-        command = ['docker', 'run', '-d', '--name', name, '-p', f'127.0.0.1:{ftp_port}:2121',
-            '-p', f'127.0.0.1:{passive_start}-{passive_end}:{passive_start}-{passive_end}',
-            '-v', certificate_directory + ':/etc/sftpgo/certs:ro']
-        for key, value in env.items():
-            command += ['-e', key + '=' + value]
-        command += [IMAGE, 'sftpgo', 'serve', '--log-file-path', '/dev/null', '--log-level', 'error']
         try:
-            try:
-                subprocess.run(command, check=True, capture_output=True)
-            except subprocess.CalledProcessError:
-                raise RuntimeError('Pinned SFTPGo container could not start; command output was suppressed.') from None
-            for _ in range(60):
-                try:
-                    plain = control(ftp_port)
-                    break
-                except OSError:
-                    time.sleep(.2)
-            else:
-                raise RuntimeError('Pinned SFTPGo FTP listener did not start.')
+            ftp_port, passive_start = free_port(), free_port()
+            start_edge(name, live_bundle, ftp_port, passive_start, options.legacy)
+            verify_plaintext_rejection(ftp_port)
+            verify_cipher_profile(ftp_port, root_certificate, options.legacy)
 
-            plain.sendall(b'USER cam_probe\r\n')
-            user_reply = reply(plain)
-            assert not user_reply.startswith(b'331'), f'Plaintext USER began login: {user_reply!r}'
-            plain.close()
-            print('PASS: plaintext USER is rejected before password authentication')
-
-            context = ssl.create_default_context(cafile=os.path.join(directory, 'root.pem'))
+            context = ssl.create_default_context(cafile=root_certificate)
             context.minimum_version = ssl.TLSVersion.TLSv1_2
-            for cipher in ('AES128-SHA', 'AES256-SHA'):
-                rsa_context = ssl.create_default_context(cafile=os.path.join(directory, 'root.pem'))
-                rsa_context.minimum_version = rsa_context.maximum_version = ssl.TLSVersion.TLSv1_2
-                rsa_context.set_ciphers(cipher)
-                rsa_client = connect_ftps(ftp_port, rsa_context)
-                try:
-                    try:
-                        rsa_client.auth()
-                    except ssl.SSLError:
-                        assert not options.legacy, f'Compatibility listener rejected {cipher}'
-                    else:
-                        assert options.legacy, f'Modern listener accepted legacy cipher {cipher}'
-                        assert rsa_client.sock.cipher()[0] == cipher
-                        rsa_client.login('cam_probe', PASSWORD)
-                        rsa_client.prot_p()
-                        content = b'legacy TLS still protects control and data'
-                        filename = 'legacy-' + cipher + '.bin'
-                        assert rsa_client.storbinary('STOR ' + filename, io.BytesIO(content)).startswith('226')
-                        assert files['/' + filename] == content
-                finally:
-                    rsa_client.close()
-            print('PASS: legacy RSA ciphers are ' + ('explicitly accepted with protected data' if options.legacy else 'rejected by modern defaults'))
-            ftp = connect_ftps(ftp_port, context)
-            assert ftp.auth().startswith('234')
-            ftp.login('cam_probe', PASSWORD)
-            try:
-                ftp.prot_c()
-                ftp.storbinary('STOR clear-data.bin', io.BytesIO(b'must not be sent in clear'))
-            except ftplib.error_temp as error:
-                if not str(error).startswith('421'):
-                    raise
-                ftp.close()
-                ftp = connect_ftps(ftp_port, context)
-                ftp.auth(); ftp.login('cam_probe', PASSWORD)
-            except ftplib.error_perm:
-                pass
-            else:
-                raise AssertionError('PROT C upload was accepted on the secure listener')
-            assert not any(path.endswith('/clear-data.bin') for path in files), 'Clear data reached the filesystem callback'
-            ftp.prot_p()
-            assert ftp.storbinary('STOR tls-data.bin', io.BytesIO(b'protected data')).startswith('226')
-            uploaded = [data for path, data in files.items() if path.endswith('/tls-data.bin')]
-            assert uploaded and uploaded[0] == b'protected data', f'No synthetic upload callback recorded; operations: {requests!r}'
-            print('PASS: explicit TLS login works, PROT C cannot upload, and PROT P does')
-
-            verified = connect_ftps(ftp_port, context)
-            verified.auth()
-            verified.close()
-            print('PASS: a validating FTPS client accepts the certificate served by the pinned edge')
-
-            no_sni = control(ftp_port)
-            no_sni.sendall(b'AUTH TLS\r\n')
-            assert reply(no_sni).startswith(b'234')
-            no_sni_context = ssl.create_default_context(cafile=os.path.join(directory, 'root.pem'))
-            no_sni_context.check_hostname = False
-            no_sni_tls = no_sni_context.wrap_socket(no_sni, server_hostname=None)
-            with open(os.path.join(directory, 'server-1.pem'), encoding='ascii') as source:
-                original_fingerprint = hashlib.sha256(ssl.PEM_cert_to_DER_cert(source.read())).digest()
-            assert hashlib.sha256(no_sni_tls.getpeercert(binary_form=True)).digest() == original_fingerprint
-            no_sni_tls.close()
-            print('PASS: server presents its certificate when the client sends no SNI')
-
-            legacy = control(ftp_port)
-            legacy.sendall(b'AUTH TLS\r\n')
-            assert reply(legacy).startswith(b'234')
-            old_tls = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-            old_tls.check_hostname = False
-            old_tls.verify_mode = ssl.CERT_NONE
-            old_tls.minimum_version = ssl.TLSVersion.TLSv1_1
-            old_tls.maximum_version = ssl.TLSVersion.TLSv1_1
-            old_tls.set_ciphers('DEFAULT:@SECLEVEL=0')
-            try:
-                old_tls.wrap_socket(legacy, server_hostname=None)
-            except (ssl.SSLError, OSError):
-                legacy.close()
-            else:
-                raise AssertionError('TLS 1.1 handshake succeeded')
-            print('PASS: TLS versions below 1.2 are rejected')
-
-            ftp.quit()
-            ftp = connect_ftps(ftp_port, context)
-            ftp.auth(); ftp.login('cam_probe', PASSWORD); ftp.prot_p()
-            assert ftp.storbinary('STOR before-replacement.bin', io.BytesIO(b'drained before replacement')).startswith('226')
-            ftp.quit()
-            os.replace(second_bundle, os.path.join(certificate_directory, 'server.pem'))
-            subprocess.run(['docker', 'restart', '--time', '30', name], check=True, capture_output=True)
-
-            with open(os.path.join(directory, 'server-2.pem'), encoding='ascii') as source:
-                expected_fingerprint = hashlib.sha256(ssl.PEM_cert_to_DER_cert(source.read())).digest()
-            for _ in range(50):
-                fresh = None
-                try:
-                    fresh = connect_ftps(ftp_port, context)
-                    fresh.auth()
-                    renewed_fingerprint = hashlib.sha256(fresh.sock.getpeercert(binary_form=True)).digest()
-                except (OSError, ftplib.Error):
-                    if fresh is not None:
-                        fresh.close()
-                    time.sleep(.2)
-                    continue
-                fresh.close()
-                if renewed_fingerprint == expected_fingerprint:
-                    break
-                time.sleep(.2)
-            else:
-                raise AssertionError('Fresh session is not serving the replacement certificate')
-            print('PASS: after transfers drain and the edge restarts, it serves the supplied replacement certificate')
+            with verify_protected_upload(ftp_port, context) as ftp:
+                verify_served_certificate(ftp_port, context, root_certificate, first_certificate)
+                verify_minimum_tls_version(ftp_port)
+                ftp.quit()
+            verify_certificate_replacement(
+                ftp_port, context, name, live_bundle, replacement_bundle, replacement_certificate)
         finally:
             subprocess.run(['docker', 'rm', '-f', name], capture_output=True)
             handler.shutdown()

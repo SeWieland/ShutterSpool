@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { storageMessage, surfaceProgress, operationStatus } from '../lib/storage-presentation';
-import { formatFileSize } from '../lib/workspace-interactions';
 import { api, cancellable, handleFailure } from '../lib/api';
 import { accessGeneration, onAccessLost } from '../lib/session';
 import { retentionTiming, type RetentionEvidence } from '../lib/retention';
@@ -73,7 +72,10 @@ async function previewSelection() {
         openConfirmation('erase');
     } catch (failure) {
         if (!controller.signal.aborted && !disposed && request === sequence && access === accessGeneration()) { handleFailure(failure); selection.value = undefined; preview.value = undefined; feedback.value = 'We could not check what would be erased. Refresh this photograph and review the request again.'; }
-    } finally { if (readController === controller) readController = undefined; if (request === sequence) busy.value = false; }
+    } finally {
+        if (readController === controller) readController = undefined;
+        if (request === sequence) busy.value = false;
+    }
 }
 async function begin() {
     if (busy.value || operationId.value || !props.online || !canConfirm.value || !selection.value || !props.captureId || !consent.value || confirmationMode.value !== 'erase') return;
@@ -103,7 +105,10 @@ async function readStatus(id = operationId.value) {
         if (props.captureId && ['Pending', 'Completed'].includes(result.status ?? '')) emit('requested', props.captureId);
     } catch (failure) {
         if (!controller.signal.aborted && !disposed && request === sequence && access === accessGeneration()) { handleFailure(failure); stale.value = true; feedback.value = 'Progress could not be checked. The last result is still shown. Check again; the request was not repeated.'; }
-    } finally { if (readController === controller) readController = undefined; if (request === sequence) busy.value = false; }
+    } finally {
+        if (readController === controller) readController = undefined;
+        if (request === sequence) busy.value = false;
+    }
 }
 async function loadOperations(next = false) {
     if (busy.value || !props.online) return;
@@ -116,14 +121,20 @@ async function loadOperations(next = false) {
         operations.value = next ? { ...result, operations: [...new Map([...(operations.value?.operations ?? []), ...(result.operations ?? [])].map(item => [String(item.operationId), item])).values()] } : result; stale.value = false;
     } catch (failure) {
         if (!controller.signal.aborted && !disposed && request === sequence && access === accessGeneration()) { handleFailure(failure); stale.value = true; feedback.value = 'Privacy requests could not be loaded. Refresh to try again; missing progress does not mean removal finished.'; }
-    } finally { if (readController === controller) readController = undefined; if (request === sequence) busy.value = false; }
+    } finally {
+        if (readController === controller) readController = undefined;
+        if (request === sequence) busy.value = false;
+    }
 }
 async function continueOperation() {
     if (busy.value || stale.value || !props.online || !operationId.value || !consent.value || confirmationMode.value !== 'continue') return;
     const request = ++sequence, access = accessGeneration(); busy.value = true;
     try {
         const result = await api.management.retention.erasures.byOperationId(operationId.value).continueEscaped.post({ confirmed: true });
-        if (!disposed && request === sequence && access === accessGeneration()) { if (!result) throw new Error('Continuation unconfirmed'); operation.value = result; clearConfirmation(); }
+        if (disposed || request !== sequence || access !== accessGeneration()) return;
+        if (!result) throw new Error('Continuation unconfirmed');
+        operation.value = result;
+        clearConfirmation();
     } catch (failure) {
         if (!disposed && request === sequence && access === accessGeneration()) { handleFailure(failure); stale.value = true; feedback.value = 'We could not check whether removal continued. Check its status before trying again.'; }
     } finally { if (request === sequence) busy.value = false; }
@@ -175,7 +186,7 @@ onUnmounted(() => { disposed = true; sequence++; cancelRead(); clearConfirmation
                 <p>Trash would retain recoverable originals and consume quota. This irreversible erasure can revoke gallery promises, but never bypasses preservation holds.</p><p class="muted">Backups and delivered or downloaded copies remain separately managed. Secure overwrite and removal of every external copy are not promised.</p>
                 <details class="section-disclosure"><summary><UIcon name="i-lucide-chevron-right" class="disclosure-chevron" aria-hidden="true" />Details</summary><p v-if="confirmationMode === 'continue'">Request {{ operationId }}</p><ul v-else><li v-for="item in selection?.selections" :key="String(item.captureId)">{{ item.captureId }} · revision {{ item.expectedRevision }} · {{ item.assetIds?.join(', ') }}</li></ul><p v-if="preview?.errorCode">{{ preview.errorCode }}</p></details>
                 <label class="settings-checkbox privacy-consent"><span><input v-model="consent" type="checkbox" :disabled="busy" />I understand this irreversible removal and its scope.</span></label>
-                <div class="privacy-confirmation-actions"><button type="button" :disabled="busy" @click="cancelConfirmation()">Cancel</button><button class="danger" :disabled="busy || !online || !consent || confirmationMode === 'erase' && !canConfirm">{{ busy ? 'Submitting request…' : confirmationMode === 'continue' ? 'Continue erasure' : 'Erase permanently' }}</button></div>
+                <div class="privacy-confirmation-actions"><button type="button" :disabled="busy" @click="cancelConfirmation()">Cancel</button><button type="submit" class="danger" :disabled="busy || !online || !consent || confirmationMode === 'erase' && !canConfirm">{{ busy ? 'Submitting request…' : confirmationMode === 'continue' ? 'Continue erasure' : 'Erase permanently' }}</button></div>
             </form>
         </dialog>
     </details>

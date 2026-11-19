@@ -246,6 +246,7 @@ Initial Owner provisioning remains explicit, locally audited and independent of 
 This package supports recovery of a complete consistent backup when no privacy erasure has occurred since its recovery point.
 Recovery from a backup predating erasure, or with uncertain erasure history, is unsupported.
 Existing suppression import/startup safeguards remain; never disable them to force a restore.
+The [explicit suppression startup gate](../../src/ShutterSpool.Infrastructure/README.md#suppression-evidence-and-supported-restore) requires a complete current evidence package supplied from outside the backup, with the matching snapshot identity and deployment encryption key.
 Ordinary startup cannot detect arbitrary database rollback or prove supplied suppression evidence is newest.
 
 Preserve the matching application database, entire spool/recovery storage, encryption key, configuration and required identity state together.

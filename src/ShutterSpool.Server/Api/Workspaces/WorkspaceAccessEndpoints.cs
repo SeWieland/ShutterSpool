@@ -1,3 +1,4 @@
+using System.Net.Mime;
 using ShutterSpool.Domain.Security;
 using ShutterSpool.Application.Security;
 using ShutterSpool.Server.Api.Live;
@@ -64,26 +65,26 @@ public static class WorkspaceAccessEndpoints
         management.MapPut("/viewer-policy", (WorkspaceViewerPolicyRequest request, HttpContext http,
             IAccessGrantStore store, LiveChangeNotifier changes) => ChangeAsync(http, store, changes, request.OperationId,
                 request.ExpectedRevision, Guid.Empty, AccessChangeKind.ViewerPolicy, includeUnreleased: request.IncludeUnreleased))
-            .RequireAuthorization(WorkspacePolicies.Administer).Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(403, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(404, "application/problem+json").ProducesValidationProblem();
+            .RequireAuthorization(WorkspacePolicies.Administer).Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, MediaTypeNames.Application.ProblemJson).Produces<WorkspaceAccessProblemDetails>(403, MediaTypeNames.Application.ProblemJson).Produces<WorkspaceAccessProblemDetails>(404, MediaTypeNames.Application.ProblemJson).ProducesValidationProblem();
         management.MapPost("/members/{id:guid}/role", (Guid id, WorkspaceMemberRoleRequest request, HttpContext http,
             IAccessGrantStore store, LiveChangeNotifier changes) =>
         {
             if (!Enum.TryParse(request.Role, out WorkspaceRole role) || !Enum.IsDefined(role) || role.ToString() != request.Role)
                 return Task.FromResult<IResult>(Results.ValidationProblem(new Dictionary<string, string[]> { ["role"] = ["Provide a fixed workspace role."] }));
             return ChangeAsync(http, store, changes, request.OperationId, request.ExpectedRevision, id, AccessChangeKind.Role, role);
-        }).RequireAuthorization(WorkspacePolicies.Administer).Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(403, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(404, "application/problem+json").ProducesValidationProblem();
+        }).RequireAuthorization(WorkspacePolicies.Administer).Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, MediaTypeNames.Application.ProblemJson).Produces<WorkspaceAccessProblemDetails>(403, MediaTypeNames.Application.ProblemJson).Produces<WorkspaceAccessProblemDetails>(404, MediaTypeNames.Application.ProblemJson).ProducesValidationProblem();
         management.MapPost("/members/{id:guid}/promote-owner", (Guid id, WorkspaceOwnerPromotionRequest request,
             HttpContext http, IAccessGrantStore store, LiveChangeNotifier changes) => ChangeAsync(http, store, changes,
                 request.OperationId, request.ExpectedRevision, id, AccessChangeKind.PromoteOwner, confirmed: request.Confirmed))
-            .RequireAuthorization(WorkspacePolicies.ManageOwners).Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(403, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(404, "application/problem+json").ProducesValidationProblem();
+            .RequireAuthorization(WorkspacePolicies.ManageOwners).Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, MediaTypeNames.Application.ProblemJson).Produces<WorkspaceAccessProblemDetails>(403, MediaTypeNames.Application.ProblemJson).Produces<WorkspaceAccessProblemDetails>(404, MediaTypeNames.Application.ProblemJson).ProducesValidationProblem();
         management.MapPost("/members/{id:guid}/remove", (Guid id, WorkspaceMemberChangeRequest request,
             HttpContext http, IAccessGrantStore store, LiveChangeNotifier changes) => ChangeAsync(http, store, changes,
                 request.OperationId, request.ExpectedRevision, id, AccessChangeKind.Remove))
-            .RequireAuthorization(WorkspacePolicies.Administer).Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(403, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(404, "application/problem+json").ProducesValidationProblem();
+            .RequireAuthorization(WorkspacePolicies.Administer).Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, MediaTypeNames.Application.ProblemJson).Produces<WorkspaceAccessProblemDetails>(403, MediaTypeNames.Application.ProblemJson).Produces<WorkspaceAccessProblemDetails>(404, MediaTypeNames.Application.ProblemJson).ProducesValidationProblem();
         management.MapPost("/membership/leave", (WorkspaceMemberChangeRequest request,
             HttpContext http, IAccessGrantStore store, LiveChangeNotifier changes) => ChangeAsync(http, store, changes,
                 request.OperationId, request.ExpectedRevision, Guid.Empty, AccessChangeKind.Leave))
-            .RequireAuthorization(WorkspacePolicies.Member).Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(403, "application/problem+json").Produces<WorkspaceAccessProblemDetails>(404, "application/problem+json").ProducesValidationProblem();
+            .RequireAuthorization(WorkspacePolicies.Member).Produces<WorkspaceAccessChangeResponse>().Produces<WorkspaceAccessProblemDetails>(409, MediaTypeNames.Application.ProblemJson).Produces<WorkspaceAccessProblemDetails>(403, MediaTypeNames.Application.ProblemJson).Produces<WorkspaceAccessProblemDetails>(404, MediaTypeNames.Application.ProblemJson).ProducesValidationProblem();
         return management;
     }
 
@@ -96,18 +97,25 @@ public static class WorkspaceAccessEndpoints
         AccessChangeResult result = await store.ChangeAsync(new(operation, http.User.FindFirstValue("iss")!,
             (http.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? http.User.FindFirstValue("sub"))!, target,
             revision, kind, role, confirmed, includeUnreleased), http.RequestAborted);
-        if (result.Status == "applied") changes.RetentionChanged();
-        else return Results.Json(new WorkspaceAccessProblemDetails
+        WorkspaceMemberResponse? member = result.Membership is null ? null : WorkspaceMemberResponse.From(result.Membership);
+        WorkspaceViewerPolicyResponse? policy = result.ViewerPolicy is null ? null : new(result.ViewerPolicy.IncludeUnreleased, result.ViewerPolicy.Revision);
+        if (result.Status == "applied")
         {
-            Status = result.Status switch { "denied" => 403, "notFound" => 404, _ => 409 },
-            Title = "Workspace access could not be changed",
-            ErrorCode = result.Status switch { "denied" => "permission-denied", "notFound" => "membership-not-found", "lastOwner" => "last-owner", _ => "membership-conflict" },
-            Membership = result.Membership is null ? null : WorkspaceMemberResponse.From(result.Membership),
-            ViewerPolicy = result.ViewerPolicy is null ? null : new(result.ViewerPolicy.IncludeUnreleased, result.ViewerPolicy.Revision),
-        }, statusCode: result.Status switch { "denied" => 403, "notFound" => 404, _ => 409 }, contentType: "application/problem+json");
-        return Results.Ok(new WorkspaceAccessChangeResponse(result.OperationId, result.Status,
-            result.Membership is null ? null : WorkspaceMemberResponse.From(result.Membership),
-            result.ViewerPolicy is null ? null : new(result.ViewerPolicy.IncludeUnreleased, result.ViewerPolicy.Revision),
-            null));
+            changes.RetentionChanged();
+            return Results.Ok(new WorkspaceAccessChangeResponse(result.OperationId, result.Status, member, policy, null));
+        }
+
+        (int status, string code) = result.Status switch
+        {
+            "denied" => (403, "permission-denied"),
+            "notFound" => (404, "membership-not-found"),
+            "lastOwner" => (409, "last-owner"),
+            _ => (409, "membership-conflict"),
+        };
+        return Results.Json(new WorkspaceAccessProblemDetails
+        {
+            Status = status, Title = "Workspace access could not be changed", ErrorCode = code,
+            Membership = member, ViewerPolicy = policy,
+        }, statusCode: status, contentType: MediaTypeNames.Application.ProblemJson);
     }
 }

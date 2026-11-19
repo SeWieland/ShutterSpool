@@ -26,14 +26,12 @@ public sealed class LiveChangesHub(IServiceScopeFactory scopes, IOptions<Securit
 
     public override async Task OnConnectedAsync()
     {
+        if (Context.GetHttpContext()?.Items[typeof(WorkspaceDefinition)] is not WorkspaceDefinition selectedWorkspace)
         {
-            if (Context.GetHttpContext()?.Items[typeof(WorkspaceDefinition)] is not WorkspaceDefinition selectedWorkspace)
-            {
-                Context.Abort();
-                return;
-            }
-            workspace.Bind(selectedWorkspace);
+            Context.Abort();
+            return;
         }
+        workspace.Bind(selectedWorkspace);
         if (!IsSecureOrigin(Context.GetHttpContext(), security.Value.AllowedOrigins))
         {
             Context.Abort();
@@ -95,7 +93,10 @@ public sealed class LiveChangesHub(IServiceScopeFactory scopes, IOptions<Securit
                 }
             }
         }
-        catch (OperationCanceledException) when (disconnected.IsCancellationRequested) { }
+        catch (OperationCanceledException) when (disconnected.IsCancellationRequested)
+        {
+            // The connection has already closed, so its grant monitor can finish.
+        }
         catch (Exception) { abort(); }
     }
 
@@ -123,6 +124,7 @@ public sealed class LiveChangesHub(IServiceScopeFactory scopes, IOptions<Securit
 public sealed class LiveChangeBuffer(IHubContext<LiveChangesHub> hub, ILogger<LiveChangeNotifier> logger) : BackgroundService
 {
     private const int Capacity = 256;
+    private const string ResyncEvent = "resyncRequired";
     private static readonly TimeSpan ActiveObservationLifetime = TimeSpan.FromSeconds(60);
     private readonly Lock _activityLock = new();
     private readonly Dictionary<(Guid Workspace, Guid Transfer), CameraTransferActivity> _receiving = [];
@@ -142,7 +144,7 @@ public sealed class LiveChangeBuffer(IHubContext<LiveChangesHub> hub, ILogger<Li
     public bool IsActivityCoverageComplete(Guid workspace) { lock (_activityLock) return !incompleteWorkspaces.Contains(workspace); }
 
     public void CaptureChanged(Guid workspace, Guid captureId, string kind) => Publish(workspace, $"capture:{captureId}", "captureChanged", new CaptureChangedHint(captureId, kind));
-    public void RetentionChanged(Guid workspace) => Publish(workspace, "retention", "resyncRequired", new ResyncRequiredHint(_epoch));
+    public void RetentionChanged(Guid workspace) => Publish(workspace, "retention", ResyncEvent, new ResyncRequiredHint(_epoch));
 
     public void PreviewReady(Guid workspace, Guid captureId, Guid assetId, string profile) =>
         Publish(workspace, $"preview:{captureId}:{assetId}:{profile}", "previewReady", new PreviewReadyHint(captureId, assetId, profile));
@@ -207,7 +209,9 @@ public sealed class LiveChangeBuffer(IHubContext<LiveChangesHub> hub, ILogger<Li
     {
         lock (_activityLock)
         {
-            activity = activity with { Version = activitySequences[workspace] = activitySequences.GetValueOrDefault(workspace) + 1 };
+            long version = activitySequences.GetValueOrDefault(workspace) + 1;
+            activitySequences[workspace] = version;
+            activity = activity with { Version = version };
             if (activity.Phase == CameraTransferPhase.Receiving)
             {
                 if (_receiving.ContainsKey((workspace, activity.TransferId)) || _receiving.Count(pair => pair.Key.Workspace == workspace) < Capacity)
@@ -259,42 +263,57 @@ public sealed class LiveChangeBuffer(IHubContext<LiveChangesHub> hub, ILogger<Li
             Drain(latest, ref remainingReads);
             await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken);
             Drain(latest, ref remainingReads);
+            IEnumerable<Guid> workspaces = latest.Values.Select(item => item.Workspace).Distinct();
             try
             {
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-                timeout.CancelAfter(TimeSpan.FromSeconds(1));
-                await Parallel.ForEachAsync(latest.Values, new ParallelOptions
-                {
-                    MaxDegreeOfParallelism = 16,
-                    CancellationToken = timeout.Token,
-                }, async (item, token) => await hub.Clients.Group(LiveChangeNotifier.Group(item.Workspace))
-                    .SendAsync(item.EventName, item.Payload, token));
-                bool resyncRequired = Interlocked.Exchange(ref _resyncRequired, 0) != 0;
-                foreach (Guid workspace in latest.Values.Select(item => item.Workspace).Distinct())
-                {
-                    await hub.Clients.Group(LiveChangeNotifier.MemberGroup(workspace))
-                        .SendAsync("resyncRequired", new ResyncRequiredHint(_epoch), timeout.Token);
-                    if (resyncRequired)
-                        await hub.Clients.Group(LiveChangeNotifier.Group(workspace)).SendAsync("resyncRequired", new ResyncRequiredHint(_epoch), timeout.Token);
-                }
+                await SendBatchAsync(latest.Values, workspaces, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
             catch (Exception)
             {
                 Interlocked.Exchange(ref _resyncRequired, 1);
                 logger.LogDebug("Live change hint could not be sent; clients reconcile authoritative state.");
-                try
-                {
-                    using var resyncTimeout = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-                    resyncTimeout.CancelAfter(TimeSpan.FromSeconds(1));
-                    foreach (Guid workspace in latest.Values.Select(item => item.Workspace).Distinct())
-                        await hub.Clients.Group(LiveChangeNotifier.Group(workspace)).SendAsync("resyncRequired", new ResyncRequiredHint(_epoch), resyncTimeout.Token);
-                    Interlocked.Exchange(ref _resyncRequired, 0);
-                }
-                catch (Exception) { }
+                await TryResyncAdminsAsync(workspaces, stoppingToken);
             }
         }
     }
+
+    private async Task SendBatchAsync(IEnumerable<LiveChange> changes, IEnumerable<Guid> workspaces, CancellationToken stoppingToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(1));
+        await Parallel.ForEachAsync(changes, new ParallelOptions
+        {
+            MaxDegreeOfParallelism = 16,
+            CancellationToken = timeout.Token,
+        }, async (item, token) => await hub.Clients.Group(LiveChangeNotifier.Group(item.Workspace))
+            .SendAsync(item.EventName, item.Payload, token));
+        bool resyncRequired = Interlocked.Exchange(ref _resyncRequired, 0) != 0;
+        foreach (Guid workspace in workspaces)
+        {
+            await SendResyncAsync(LiveChangeNotifier.MemberGroup(workspace), timeout.Token);
+            if (resyncRequired) await SendResyncAsync(LiveChangeNotifier.Group(workspace), timeout.Token);
+        }
+    }
+
+    private async Task TryResyncAdminsAsync(IEnumerable<Guid> workspaces, CancellationToken stoppingToken)
+    {
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(1));
+            foreach (Guid workspace in workspaces)
+                await SendResyncAsync(LiveChangeNotifier.Group(workspace), timeout.Token);
+            Interlocked.Exchange(ref _resyncRequired, 0);
+        }
+        catch (Exception)
+        {
+            // A failed recovery leaves the shared resync flag set for a later batch.
+        }
+    }
+
+    private Task SendResyncAsync(string group, CancellationToken token) =>
+        hub.Clients.Group(group).SendAsync(ResyncEvent, new ResyncRequiredHint(_epoch), token);
 
     private void Drain(Dictionary<string, LiveChange> latest, ref int remainingReads)
     {
@@ -329,8 +348,9 @@ public sealed class LiveChangeNotifier : ICameraTransferActivityPublisher, IPrev
     public void SourceAuthenticationChanged(Guid source, string outcome, DateTimeOffset observed, long version) =>
         buffer.SourceAuthenticationChanged(Id, source, outcome, observed, version);
     public void UnassignedAuthenticationActivity(DateTimeOffset observed) => buffer.UnassignedAuthenticationActivity(Id, observed);
-    public void Preparing(Guid capture, Guid asset, PreviewProfile profile, DateTimeOffset observed) => buffer.Preparing(Id, capture, asset, profile, observed);
-    public void Finished(Guid capture, Guid asset, PreviewProfile profile) => buffer.Finished(Id, capture, asset, profile);
+    public void Preparing(Guid captureId, Guid assetId, PreviewProfile profile, DateTimeOffset observedAt) =>
+        buffer.Preparing(Id, captureId, assetId, profile, observedAt);
+    public void Finished(Guid captureId, Guid assetId, PreviewProfile profile) => buffer.Finished(Id, captureId, assetId, profile);
     public void Publish(CameraTransferActivity activity) => buffer.Publish(Id, activity);
     public CameraTransferActivity? GetRecentReceiving(Guid transfer, DateTimeOffset now) => buffer.GetRecentReceiving(Id, transfer, now);
     public PreviewPreparationObservation? GetRecentPreviewPreparation(Guid capture, Guid asset, PreviewProfile profile, DateTimeOffset now) =>

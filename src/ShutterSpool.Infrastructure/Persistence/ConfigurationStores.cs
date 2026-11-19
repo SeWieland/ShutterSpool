@@ -16,7 +16,7 @@ namespace ShutterSpool.Infrastructure.Persistence;
 internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database, IWorkspaceRegistry? registry = null,
     WorkspaceContext? workspace = null) : ISourceConfigurationStore
 {
-    public Task<SourceManagementConfiguration[]> ListAsync(int limit, string? afterName, Guid? afterId, CancellationToken token)
+    public Task<SourceManagementConfiguration[]> ListAsync(int limit, string? afterName, Guid? afterId, CancellationToken cancellationToken)
     {
         var query = from source in database.Sources.AsNoTracking()
             join credential in database.SourceCredentials.AsNoTracking() on source.Id equals credential.SourceId
@@ -28,30 +28,31 @@ internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database,
                 source.CurationDelaySeconds, credential.Username, credential.CredentialGeneration,
                 credential.IsIngressEnabled, source.ConfigurationRevision, source.IsArchived, source.SourceType, source.ConnectionProfile,
                 source.CollectionId, collection.Name);
-        return query.Take(limit + 1).ToArrayAsync(token);
+        return query.Take(limit + 1).ToArrayAsync(cancellationToken);
     }
 
-    public Task<SourceManagementConfiguration?> GetAsync(Guid id, CancellationToken token) => SourceQuery(id)
-        .SingleOrDefaultAsync(token);
+    public Task<SourceManagementConfiguration?> GetAsync(Guid id, CancellationToken cancellationToken) => SourceQuery(id)
+        .SingleOrDefaultAsync(cancellationToken);
 
     public async Task<SourceConfigurationWrite> UpdateConfigurationAsync(Guid id, long expectedRevision,
         string name, SourceCurationMode mode, int delaySeconds, SourceType sourceType, SourceConnectionProfile connectionProfile,
-        Guid collectionId, CancellationToken token)
+        Guid collectionId, CancellationToken cancellationToken)
     {
-        await using var transaction = await database.Database.BeginTransactionAsync(token);
-        await LockCollectionAssignmentsAsync(token);
-        if (!await database.Collections.AnyAsync(item => item.Id == collectionId, token))
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        await LockCollectionAssignmentsAsync(cancellationToken);
+        if (!await database.Collections.AnyAsync(item => item.Id == collectionId, cancellationToken))
         {
-            await transaction.CommitAsync(token);
-            return new(false, await GetAsync(id, token));
+            await transaction.CommitAsync(cancellationToken);
+            return new(false, await GetAsync(id, cancellationToken));
         }
-        SourceCredentialEntity? credential = await LockCredentialAsync(id, token);
-        SourceEntity? source = credential is null ? null : await LockSourceAsync(id, token);
-        if (source is null || credential is null) return new(false, null);
+        SourceCredentialEntity? credential = await LockCredentialAsync(id, cancellationToken);
+        if (credential is null) return new(false, null);
+        SourceEntity? source = await LockSourceAsync(id, cancellationToken);
+        if (source is null) return new(false, null);
         if (source.IsArchived || source.ConfigurationRevision != expectedRevision)
         {
-            await transaction.CommitAsync(token);
-            return new(false, await GetAsync(id, token));
+            await transaction.CommitAsync(cancellationToken);
+            return new(false, await GetAsync(id, cancellationToken));
         }
         source.Name = name;
         source.CollectionId = collectionId;
@@ -64,81 +65,103 @@ internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database,
             credential.CredentialGeneration = checked(credential.CredentialGeneration + 1);
         }
         source.ConfigurationRevision++;
-        try { await database.SaveChangesAsync(token); }
+        try { await database.SaveChangesAsync(cancellationToken); }
         catch (DbUpdateException exception) when (exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
         { throw new ConfigurationConflictException(); }
-        await transaction.CommitAsync(token);
-        return new(true, await GetAsync(id, token));
+        await transaction.CommitAsync(cancellationToken);
+        return new(true, await GetAsync(id, cancellationToken));
     }
 
     public async Task<SourceConfigurationWrite> ReplaceCredentialAsync(Guid id, long expectedRevision, string username, byte[] verifier,
-        CancellationToken token)
+        CancellationToken cancellationToken)
     {
-        await using var transaction = await database.Database.BeginTransactionAsync(token);
-        SourceCredentialEntity? credential = await LockCredentialAsync(id, token);
-        SourceEntity? source = credential is null ? null : await LockSourceAsync(id, token);
-        if (source is null || credential is null) return new(false, null);
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        SourceCredentialEntity? credential = await LockCredentialAsync(id, cancellationToken);
+        if (credential is null) return new(false, null);
+        SourceEntity? source = await LockSourceAsync(id, cancellationToken);
+        if (source is null) return new(false, null);
         if (source.IsArchived || source.ConfigurationRevision != expectedRevision)
         {
-            await transaction.CommitAsync(token);
-            return new(false, await GetAsync(id, token));
+            await transaction.CommitAsync(cancellationToken);
+            return new(false, await GetAsync(id, cancellationToken));
         }
         if (credential.Username == username
             && System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(verifier, credential.SecretVerifier))
             throw new UnchangedSourceCredentialException();
-        if (registry is not null) await registry.RegisterIngressAsync(WorkspaceIngressHandle.Username(username), id, token);
+        if (registry is not null) await registry.RegisterIngressAsync(WorkspaceIngressHandle.Username(username), id, cancellationToken);
         credential.Username = username;
         credential.SecretVerifier = verifier;
         credential.CredentialGeneration = checked(credential.CredentialGeneration + 1);
         source.ConfigurationRevision++;
-        try { await database.SaveChangesAsync(token); }
+        try { await database.SaveChangesAsync(cancellationToken); }
         catch (DbUpdateException exception) when (exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
         { throw new SourceUsernameConflictException(); }
-        await transaction.CommitAsync(token);
-        return new(true, await GetAsync(id, token));
+        await transaction.CommitAsync(cancellationToken);
+        return new(true, await GetAsync(id, cancellationToken));
     }
 
     public async Task<SourceConfigurationWrite> SetIngressEnabledAsync(Guid id, long expectedRevision, bool enabled,
-        CancellationToken token)
+        CancellationToken cancellationToken)
     {
-        await using var transaction = await database.Database.BeginTransactionAsync(token);
-        SourceCredentialEntity? credential = await LockCredentialAsync(id, token);
-        SourceEntity? source = credential is null ? null : await LockSourceAsync(id, token);
-        if (source is null || credential is null) return new(false, null);
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        SourceCredentialEntity? credential = await LockCredentialAsync(id, cancellationToken);
+        if (credential is null) return new(false, null);
+        SourceEntity? source = await LockSourceAsync(id, cancellationToken);
+        if (source is null) return new(false, null);
         if (source.IsArchived || source.ConfigurationRevision != expectedRevision)
         {
-            await transaction.CommitAsync(token);
-            return new(false, await GetAsync(id, token));
+            await transaction.CommitAsync(cancellationToken);
+            return new(false, await GetAsync(id, cancellationToken));
         }
         if (credential.IsIngressEnabled != enabled)
         {
-            if (enabled && registry is not null) await registry.RegisterIngressAsync(WorkspaceIngressHandle.Username(credential.Username), id, token);
+            if (enabled && registry is not null) await registry.RegisterIngressAsync(WorkspaceIngressHandle.Username(credential.Username), id, cancellationToken);
             credential.IsIngressEnabled = enabled;
             credential.CredentialGeneration = checked(credential.CredentialGeneration + 1);
             source.ConfigurationRevision++;
-            await database.SaveChangesAsync(token);
+            await database.SaveChangesAsync(cancellationToken);
         }
-        await transaction.CommitAsync(token);
-        return new(true, await GetAsync(id, token));
+        await transaction.CommitAsync(cancellationToken);
+        return new(true, await GetAsync(id, cancellationToken));
     }
 
-    public async Task<SourceRemovalWrite> RemoveAsync(Guid id, long expectedRevision, CancellationToken token)
+    public async Task<SourceIngressState?> SetIngressEnabledAsync(Guid id, bool enabled, CancellationToken cancellationToken)
     {
-        await using var transaction = await database.Database.BeginTransactionAsync(token);
-        SourceCredentialEntity? credential = await LockCredentialAsync(id, token);
-        SourceEntity? source = credential is null ? null : await LockSourceAsync(id, token);
-        if (source is null || credential is null) return new(false, false, null);
+        await using var transaction = database.Database.IsRelational() ? await database.Database.BeginTransactionAsync(cancellationToken) : null;
+        SourceCredentialEntity? credential = await LockCredentialAsync(id, cancellationToken);
+        if (credential is null) return null;
+        SourceEntity source = await LockSourceAsync(id, cancellationToken) ?? throw new InvalidOperationException("Source disappeared during ingress update.");
+        if (source.IsArchived) return null;
+        if (credential.IsIngressEnabled != enabled)
+        {
+            if (enabled && registry is not null) await registry.RegisterIngressAsync(WorkspaceIngressHandle.Username(credential.Username), id, cancellationToken);
+            credential.IsIngressEnabled = enabled;
+            credential.CredentialGeneration = checked(credential.CredentialGeneration + 1);
+            source.ConfigurationRevision++;
+            await database.SaveChangesAsync(cancellationToken);
+        }
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        return new(id, credential.CredentialGeneration, credential.IsIngressEnabled);
+    }
+
+    public async Task<SourceRemovalWrite> RemoveAsync(Guid id, long expectedRevision, CancellationToken cancellationToken)
+    {
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        SourceCredentialEntity? credential = await LockCredentialAsync(id, cancellationToken);
+        if (credential is null) return new(false, false, null);
+        SourceEntity? source = await LockSourceAsync(id, cancellationToken);
+        if (source is null) return new(false, false, null);
         if (source.ConfigurationRevision != expectedRevision)
         {
-            await transaction.CommitAsync(token);
-            return new(false, false, await GetAsync(id, token));
+            await transaction.CommitAsync(cancellationToken);
+            return new(false, false, await GetAsync(id, cancellationToken));
         }
 
-        bool used = source.IsArchived || await database.CameraLogins.AnyAsync(item => item.SourceId == id, token)
-            || await database.CameraUploadAdmissions.AnyAsync(item => item.SourceId == id, token)
-            || await database.Operations.AnyAsync(item => item.SourceId == id, token)
-            || await database.Assets.AnyAsync(item => item.SourceId == id, token)
-            || await database.Captures.AnyAsync(item => item.SourceId == id, token);
+        bool used = source.IsArchived || await database.CameraLogins.AnyAsync(item => item.SourceId == id, cancellationToken)
+            || await database.CameraUploadAdmissions.AnyAsync(item => item.SourceId == id, cancellationToken)
+            || await database.Operations.AnyAsync(item => item.SourceId == id, cancellationToken)
+            || await database.Assets.AnyAsync(item => item.SourceId == id, cancellationToken)
+            || await database.Captures.AnyAsync(item => item.SourceId == id, cancellationToken);
         if (used)
         {
             if (!source.IsArchived)
@@ -147,48 +170,50 @@ internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database,
                 credential.IsIngressEnabled = false;
                 credential.CredentialGeneration = checked(credential.CredentialGeneration + 1);
                 source.ConfigurationRevision++;
-                await database.SaveChangesAsync(token);
+                await database.SaveChangesAsync(cancellationToken);
             }
-            await transaction.CommitAsync(token);
-            return new(true, false, await GetAsync(id, token));
+            await transaction.CommitAsync(cancellationToken);
+            return new(true, false, await GetAsync(id, cancellationToken));
         }
 
         database.SourceCredentials.Remove(credential);
         database.Sources.Remove(source);
-        await database.SaveChangesAsync(token);
-        await transaction.CommitAsync(token);
+        await database.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
         return new(true, true, null);
     }
 
     public async Task CreateAsync(SourceProvisioning source, CancellationToken cancellationToken)
     {
-        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
-        await LockCollectionAssignmentsAsync(cancellationToken);
-        if (!await database.Collections.AnyAsync(item => item.Id == source.CollectionId, cancellationToken))
-            throw new ArgumentException("Choose an existing Collection.", nameof(source));
-        var sourceEntity = new SourceEntity { Id = source.Id, Name = source.Name, CurationMode = source.CurationMode,
-            CurationDelaySeconds = source.DelaySeconds, SourceType = source.SourceType, ConnectionProfile = source.ConnectionProfile,
-            CollectionId = source.CollectionId };
-        var credentialEntity = new SourceCredentialEntity
+        SourceCredentialEntity credentialEntity;
+        await using (var transaction = await database.Database.BeginTransactionAsync(cancellationToken))
         {
-            SourceId = source.Id, Username = source.Username, VirtualRoot = source.VirtualRoot, SecretVerifier = source.SecretVerifier,
-            IsIngressEnabled = workspace is null,
-        };
-        database.Sources.Add(sourceEntity);
-        database.SourceCredentials.Add(credentialEntity);
-        try { await database.SaveChangesAsync(cancellationToken); }
-        catch (DbUpdateException exception) when (exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation } postgres)
-        {
-            database.Entry(sourceEntity).State = EntityState.Detached;
-            database.Entry(credentialEntity).State = EntityState.Detached;
-            if (postgres.ConstraintName == "IX_source_credentials_Username")
-                throw new SourceUsernameConflictException();
-            throw new ConfigurationConflictException();
+            await LockCollectionAssignmentsAsync(cancellationToken);
+            if (!await database.Collections.AnyAsync(item => item.Id == source.CollectionId, cancellationToken))
+                throw new ArgumentException("Choose an existing Collection.", nameof(source));
+            var sourceEntity = new SourceEntity { Id = source.Id, Name = source.Name, CurationMode = source.CurationMode,
+                CurationDelaySeconds = source.DelaySeconds, SourceType = source.SourceType, ConnectionProfile = source.ConnectionProfile,
+                CollectionId = source.CollectionId };
+            credentialEntity = new SourceCredentialEntity
+            {
+                SourceId = source.Id, Username = source.Username, VirtualRoot = source.VirtualRoot, SecretVerifier = source.SecretVerifier,
+                IsIngressEnabled = workspace is null,
+            };
+            database.Sources.Add(sourceEntity);
+            database.SourceCredentials.Add(credentialEntity);
+            try { await database.SaveChangesAsync(cancellationToken); }
+            catch (DbUpdateException exception) when (exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation } postgres)
+            {
+                database.Entry(sourceEntity).State = EntityState.Detached;
+                database.Entry(credentialEntity).State = EntityState.Detached;
+                if (postgres.ConstraintName == "IX_source_credentials_Username")
+                    throw new SourceUsernameConflictException();
+                throw new ConfigurationConflictException();
+            }
+            await transaction.CommitAsync(cancellationToken);
         }
-        await transaction.CommitAsync(cancellationToken);
         if (workspace is not null)
         {
-            await transaction.DisposeAsync();
             // A failed control write leaves a visible disabled Source whose credentials can be repaired.
             await registry!.RegisterIngressAsync(WorkspaceIngressHandle.Username(source.Username), source.Id, cancellationToken);
             credentialEntity.IsIngressEnabled = true;
@@ -220,25 +245,6 @@ internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database,
         await database.SaveChangesAsync(cancellationToken);
         if (transaction is not null) await transaction.CommitAsync(cancellationToken);
         return true;
-    }
-
-    public async Task<SourceIngressState?> SetIngressEnabledAsync(Guid id, bool enabled, CancellationToken cancellationToken)
-    {
-        await using var transaction = database.Database.IsRelational() ? await database.Database.BeginTransactionAsync(cancellationToken) : null;
-        SourceCredentialEntity? credential = await LockCredentialAsync(id, cancellationToken);
-        if (credential is null) return null;
-        SourceEntity source = await LockSourceAsync(id, cancellationToken) ?? throw new InvalidOperationException("Source disappeared during ingress update.");
-        if (source.IsArchived) return null;
-        if (credential.IsIngressEnabled != enabled)
-        {
-            if (enabled && registry is not null) await registry.RegisterIngressAsync(WorkspaceIngressHandle.Username(credential.Username), id, cancellationToken);
-            credential.IsIngressEnabled = enabled;
-            credential.CredentialGeneration = checked(credential.CredentialGeneration + 1);
-            source.ConfigurationRevision++;
-            await database.SaveChangesAsync(cancellationToken);
-        }
-        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
-        return new(id, credential.CredentialGeneration, credential.IsIngressEnabled);
     }
 
     private Task<SourceCredentialEntity?> LockCredentialAsync(Guid id, CancellationToken cancellationToken) => database.Database.IsRelational()
@@ -291,7 +297,7 @@ internal sealed class EfDestinationConfigurationStore(ShutterSpoolDbContext data
         }
     }
 
-    public Task<DestinationConfiguration[]> ListAsync(int limit, Guid? afterId, CancellationToken token)
+    public Task<DestinationConfiguration[]> ListAsync(int limit, Guid? afterId, CancellationToken cancellationToken)
     {
         var query = from destination in database.Destinations.AsNoTracking()
             join local in database.LocalDestinations.AsNoTracking() on destination.Id equals local.DestinationId into locals
@@ -304,50 +310,50 @@ internal sealed class EfDestinationConfigurationStore(ShutterSpoolDbContext data
                 destination.ConfigurationRevision, local == null ? null : local.RootPath,
                 webdav == null ? null : webdav.CollectionUrl, webdav == null ? null : webdav.Username,
                 database.DestinationCredentials.Any(credential => credential.DestinationId == destination.Id), destination.IsArchived);
-        return query.Take(limit + 1).ToArrayAsync(token);
+        return query.Take(limit + 1).ToArrayAsync(cancellationToken);
     }
 
     public Task<DestinationConfiguration?> GetAsync(Guid id, CancellationToken cancellationToken) => DestinationQuery(id)
         .SingleOrDefaultAsync(cancellationToken);
 
     public async Task<DestinationConfigurationWrite> UpdateNameAsync(Guid id, long expectedRevision, string name,
-        CancellationToken token)
+        CancellationToken cancellationToken)
     {
-        await using var transaction = await database.Database.BeginTransactionAsync(token);
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         DestinationEntity? destination = await database.Destinations.FromSqlInterpolated($"SELECT * FROM destinations WHERE \"Id\" = {id} FOR UPDATE")
-            .SingleOrDefaultAsync(token);
+            .SingleOrDefaultAsync(cancellationToken);
         if (destination is null) return new(false, null);
         if (destination.IsArchived || destination.ConfigurationRevision != expectedRevision)
         {
-            await transaction.CommitAsync(token);
-            return new(false, await GetAsync(id, token));
+            await transaction.CommitAsync(cancellationToken);
+            return new(false, await GetAsync(id, cancellationToken));
         }
         destination.Name = name;
         destination.ConfigurationRevision++;
-        try { await database.SaveChangesAsync(token); }
+        try { await database.SaveChangesAsync(cancellationToken); }
         catch (DbUpdateException exception) when (exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
         { throw new ConfigurationConflictException(); }
-        await transaction.CommitAsync(token);
-        return new(true, await GetAsync(id, token));
+        await transaction.CommitAsync(cancellationToken);
+        return new(true, await GetAsync(id, cancellationToken));
     }
 
-    public async Task<DestinationRemovalWrite> RemoveAsync(Guid id, long expectedRevision, CancellationToken token)
+    public async Task<DestinationRemovalWrite> RemoveAsync(Guid id, long expectedRevision, CancellationToken cancellationToken)
     {
-        await using var transaction = await database.Database.BeginTransactionAsync(token);
-        await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(hashtextextended('shutterspool-routing', 0))", token);
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(hashtextextended('shutterspool-routing', 0))", cancellationToken);
         DestinationEntity? destination = await database.Destinations.FromSqlInterpolated($"SELECT * FROM destinations WHERE \"Id\" = {id} FOR UPDATE")
-            .SingleOrDefaultAsync(token);
+            .SingleOrDefaultAsync(cancellationToken);
         if (destination is null) return new(false, false, null);
         if (destination.ConfigurationRevision != expectedRevision)
         {
-            await transaction.CommitAsync(token);
-            return new(false, false, await GetAsync(id, token));
+            await transaction.CommitAsync(cancellationToken);
+            return new(false, false, await GetAsync(id, cancellationToken));
         }
 
         bool used = destination.IsArchived
-            || await database.RoutingDecisions.AnyAsync(item => item.DestinationId == id, token)
-            || await database.Deliveries.AnyAsync(item => item.DestinationId == id, token)
-            || await database.RoutingActions.AnyAsync(item => item.DestinationId == id, token);
+            || await database.RoutingDecisions.AnyAsync(item => item.DestinationId == id, cancellationToken)
+            || await database.Deliveries.AnyAsync(item => item.DestinationId == id, cancellationToken)
+            || await database.RoutingActions.AnyAsync(item => item.DestinationId == id, cancellationToken);
         if (!used)
         {
             string snapshotNeedle = JsonSerializer.Serialize(new[] { new { DestinationId = id } });
@@ -356,7 +362,7 @@ internal sealed class EfDestinationConfigurationStore(ShutterSpoolDbContext data
                     SELECT 1 FROM captures
                     WHERE "RoutingSnapshotJson" @> {snapshotNeedle}::jsonb
                 ) AS "Value"
-                """).SingleAsync(token);
+                """).SingleAsync(cancellationToken);
         }
         if (used)
         {
@@ -367,16 +373,16 @@ internal sealed class EfDestinationConfigurationStore(ShutterSpoolDbContext data
                 destination.ConfigurationRevision++;
                 await database.Deliveries.Where(item => item.DestinationId == id
                     && (item.State == DeliveryState.Pending || item.State == DeliveryState.RetryWait))
-                    .ExecuteUpdateAsync(updates => updates.SetProperty(item => item.State, DeliveryState.Disabled), token);
-                await database.SaveChangesAsync(token);
+                    .ExecuteUpdateAsync(updates => updates.SetProperty(item => item.State, DeliveryState.Disabled), cancellationToken);
+                await database.SaveChangesAsync(cancellationToken);
             }
-            await transaction.CommitAsync(token);
-            return new(true, false, await GetAsync(id, token));
+            await transaction.CommitAsync(cancellationToken);
+            return new(true, false, await GetAsync(id, cancellationToken));
         }
 
         database.Destinations.Remove(destination);
-        await database.SaveChangesAsync(token);
-        await transaction.CommitAsync(token);
+        await database.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
         return new(true, true, null);
     }
 
@@ -411,22 +417,35 @@ internal sealed class EfWebDavDestinationConfiguration(ShutterSpoolDbContext dat
         if (destination is null) return "DESTINATION_NOT_FOUND";
         if (destination.IsArchived) return "DESTINATION_ARCHIVED";
         if (destination.ConfigurationRevision != expectedRevision) return "CONFIGURATION_CONFLICT";
+        string? error = await UpdateProviderConfigurationAsync(destinationId, normalized.AbsoluteUri, username.Trim(), password, cancellationToken);
+        if (error is not null) return error;
+        destination.ConfigurationRevision++;
+        await database.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return null;
+    }
+
+    private async Task<string?> UpdateProviderConfigurationAsync(Guid destinationId, string collectionUrl, string username,
+        string? password, CancellationToken cancellationToken)
+    {
         WebDavDestinationEntity? config = await database.WebDavDestinations.SingleOrDefaultAsync(item => item.DestinationId == destinationId, cancellationToken);
-        bool identityChanged = config is null || config.CollectionUrl != normalized.AbsoluteUri || config.Username != username.Trim();
+        bool identityChanged = config is null || config.CollectionUrl != collectionUrl || config.Username != username;
         if (identityChanged && await database.Deliveries.AnyAsync(item => item.DestinationId == destinationId, cancellationToken)) return "IDENTITY_LOCKED";
         DestinationCredentialEntity? credential = await database.DestinationCredentials.SingleOrDefaultAsync(item => item.DestinationId == destinationId, cancellationToken);
         if (password is null && credential is null) return "INVALID_CREDENTIALS";
-        if (config is null) database.WebDavDestinations.Add(new() { DestinationId = destinationId, CollectionUrl = normalized.AbsoluteUri, Username = username.Trim() });
-        else { config.CollectionUrl = normalized.AbsoluteUri; config.Username = username.Trim(); }
+        if (config is null)
+            database.WebDavDestinations.Add(new() { DestinationId = destinationId, CollectionUrl = collectionUrl, Username = username });
+        else
+        {
+            config.CollectionUrl = collectionUrl;
+            config.Username = username;
+        }
         if (password is not null)
         {
             string encrypted = protector.Protect(password);
             if (credential is null) database.DestinationCredentials.Add(new() { DestinationId = destinationId, EncryptedSecret = encrypted });
             else credential.EncryptedSecret = encrypted;
         }
-        destination.ConfigurationRevision++;
-        await database.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
         return null;
     }
 

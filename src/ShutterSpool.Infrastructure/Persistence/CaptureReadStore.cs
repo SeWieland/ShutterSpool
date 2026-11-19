@@ -4,6 +4,7 @@ using ShutterSpool.Application.Curation;
 using ShutterSpool.Domain.Captures;
 using ShutterSpool.Domain.Delivery;
 using ShutterSpool.Application.Security;
+using ShutterSpool.Domain.Sources;
 
 namespace ShutterSpool.Infrastructure.Persistence;
 
@@ -15,67 +16,9 @@ internal sealed class CaptureReadStore(ShutterSpoolDbContext database, TimeProvi
     public async Task<CaptureInboxPage> GetInboxAsync(int limit, DateTimeOffset? before, Guid? beforeId,
         CaptureReadFilter filter, CancellationToken cancellationToken)
     {
-        IQueryable<Guid> visibleCaptureIds = WorkspaceCaptureVisibility.VisibleCaptureIds(database.Captures.AsNoTracking(), access);
-        IQueryable<CaptureEntity> query = database.Captures.AsNoTracking()
-            .Where(capture => visibleCaptureIds.Contains(capture.Id) && capture.RetentionDisposition == "Active"
-                && !database.PrivacyErasureAssets.Any(erased => database.CaptureAssets.Any(member =>
-                    member.CaptureId == capture.Id && member.AssetId == erased.AssetId)));
-        if (filter.FavoritesOnly) query = query.Where(capture => capture.IsFavorite);
-        if (filter.SourceId is Guid sourceId) query = query.Where(capture => capture.SourceId == sourceId);
-        if (filter.SourceIds is { Length: > 0 } sourceIds) query = query.Where(capture => sourceIds.Contains(capture.SourceId));
-        if (filter.CollectionIds is { Length: > 0 } collectionIds)
-            query = query.Where(capture => collectionIds.Contains(capture.CollectionId));
-        if (filter.RatingMaximum is int maximum)
-        {
-            query = query.Where(capture => capture.Rating <= maximum);
-            if (filter.Rating is int minimum) query = query.Where(capture => capture.Rating >= minimum);
-        }
-        else if (filter.Rating is int rating) query = query.Where(capture => capture.Rating == rating);
-        if (filter.Selection == CaptureSelection.Rejected) query = query.Where(capture => capture.Rating == -1);
-        if (filter.Selection == CaptureSelection.Neutral) query = query.Where(capture => capture.Rating == 0);
-        if (filter.Selection == CaptureSelection.Picked) query = query.Where(capture => capture.Rating >= 1);
-        if (filter.Tag is string tag) query = query.Where(capture => capture.Tags.Contains(tag));
-        if (filter.Labels is { Length: > 0 } labels)
-            query = query.Where(capture => labels.Contains("None") && capture.Label == null
-                || capture.Label != null && labels.Contains(capture.Label));
-        if (filter.Released.HasValue) query = query.Where(capture => (capture.ReleasedAt != null) == filter.Released.Value);
-        if (filter.Held.HasValue) query = query.Where(capture => capture.Held == filter.Held.Value);
-        if (filter.Attention.HasValue)
-        {
-            IQueryable<Guid> attentionCaptures = CapturesRequiringAttention((clock ?? TimeProvider.System).GetUtcNow());
-            query = filter.Attention.Value ? query.Where(capture => attentionCaptures.Contains(capture.Id))
-                : query.Where(capture => !attentionCaptures.Contains(capture.Id));
-        }
-        if (filter.Workflows is { Length: > 0 } workflows)
-        {
-            IQueryable<Guid> attentionCaptures = CapturesRequiringAttention((clock ?? TimeProvider.System).GetUtcNow());
-            bool includeWaiting = workflows.Contains(CaptureWorkflowFilter.Waiting);
-            bool includeHeld = workflows.Contains(CaptureWorkflowFilter.Held);
-            bool includeReleased = workflows.Contains(CaptureWorkflowFilter.Released);
-            bool includeAttention = workflows.Contains(CaptureWorkflowFilter.Attention);
-            query = query.Where(capture => (includeWaiting && capture.ReleasedAt == null)
-                || (includeHeld && capture.ReleasedAt == null && capture.Held)
-                || (includeReleased && capture.ReleasedAt != null)
-                || (includeAttention && attentionCaptures.Contains(capture.Id)));
-        }
-        if (filter.StartAtCaptureId is Guid startAtId)
-        {
-            DateTimeOffset? startAt = await query.Where(capture => capture.Id == startAtId)
-                .Select(capture => (DateTimeOffset?)capture.FirstAcceptedAt).FirstOrDefaultAsync(cancellationToken);
-            if (startAt is DateTimeOffset acceptedAt)
-                query = filter.OldestFirst
-                    ? query.Where(capture => capture.FirstAcceptedAt > acceptedAt
-                        || capture.FirstAcceptedAt == acceptedAt && capture.Id.CompareTo(startAtId) >= 0)
-                    : query.Where(capture => capture.FirstAcceptedAt < acceptedAt
-                        || capture.FirstAcceptedAt == acceptedAt && capture.Id.CompareTo(startAtId) <= 0);
-        }
-        if (before is not null && beforeId is not null)
-            query = filter.OldestFirst
-                ? query.Where(capture => capture.FirstAcceptedAt > before
-                    || (capture.FirstAcceptedAt == before && capture.Id.CompareTo(beforeId.Value) > 0))
-                : query.Where(capture => capture.FirstAcceptedAt < before
-                    || (capture.FirstAcceptedAt == before && capture.Id.CompareTo(beforeId.Value) < 0));
-
+        IQueryable<CaptureEntity> inbox = VisibleCaptures().Where(capture => capture.RetentionDisposition == "Active");
+        IQueryable<CaptureEntity> query = ApplyInboxFilters(inbox, filter);
+        query = await ApplyPageBoundaryAsync(query, filter, before, beforeId, cancellationToken);
         IOrderedQueryable<CaptureEntity> ordered = filter.OldestFirst
             ? query.OrderBy(capture => capture.FirstAcceptedAt).ThenBy(capture => capture.Id)
             : query.OrderByDescending(capture => capture.FirstAcceptedAt).ThenByDescending(capture => capture.Id);
@@ -84,25 +27,18 @@ internal sealed class CaptureReadStore(ShutterSpoolDbContext database, TimeProvi
         CaptureEntity[] captures = [.. page.Take(limit)];
         CaptureRead[] items = await LoadReadsAsync(captures, compactAssets: true, cancellationToken);
         CaptureEntity? last = hasMore ? captures[^1] : null;
+
         bool anySourceUsesCuration = access?.IsViewer != true && await database.Sources.AsNoTracking()
             .AnyAsync(source => !source.IsArchived
-                && source.CurationMode != ShutterSpool.Domain.Sources.SourceCurationMode.Immediate, cancellationToken);
-        bool anyCaptureNeedsCuration = await database.Captures.AsNoTracking().AnyAsync(capture =>
-            visibleCaptureIds.Contains(capture.Id) &&
-            capture.RetentionDisposition == "Active" && capture.ReleasedAt == null
-            && !database.CaptureAssets.Any(member => member.CaptureId == capture.Id
-                && database.PrivacyErasureAssets.Any(erased => erased.AssetId == member.AssetId))
-            && (capture.Held || capture.Policy != ShutterSpool.Domain.Sources.SourceCurationMode.Immediate), cancellationToken);
+                && source.CurationMode != SourceCurationMode.Immediate, cancellationToken);
+        bool anyCaptureNeedsCuration = await inbox.AnyAsync(capture => capture.ReleasedAt == null
+            && (capture.Held || capture.Policy != SourceCurationMode.Immediate), cancellationToken);
         return new(items, last?.FirstAcceptedAt, last?.Id, anySourceUsesCuration, anyCaptureNeedsCuration);
     }
 
     public async Task<CaptureRead?> GetAsync(Guid captureId, CancellationToken cancellationToken)
     {
-        IQueryable<Guid> visibleCaptureIds = WorkspaceCaptureVisibility.VisibleCaptureIds(database.Captures.AsNoTracking(), access);
-        CaptureEntity? capture = await database.Captures.AsNoTracking()
-            .SingleOrDefaultAsync(item => visibleCaptureIds.Contains(item.Id) && item.Id == captureId
-                && !database.PrivacyErasureAssets.Any(erased => database.CaptureAssets.Any(member =>
-                    member.CaptureId == item.Id && member.AssetId == erased.AssetId)), cancellationToken);
+        CaptureEntity? capture = await VisibleCaptures().SingleOrDefaultAsync(item => item.Id == captureId, cancellationToken);
         return capture is null ? null : (await LoadReadsAsync([capture], compactAssets: false, cancellationToken))[0];
     }
 
@@ -125,6 +61,97 @@ internal sealed class CaptureReadStore(ShutterSpoolDbContext database, TimeProvi
             LIMIT 12
             """).ToArrayAsync(cancellationToken);
         return tags;
+    }
+
+    private IQueryable<CaptureEntity> VisibleCaptures()
+    {
+        IQueryable<Guid> visibleCaptureIds = WorkspaceCaptureVisibility.VisibleCaptureIds(database.Captures.AsNoTracking(), access);
+        return database.Captures.AsNoTracking().Where(capture => visibleCaptureIds.Contains(capture.Id)
+            && !database.PrivacyErasureAssets.Any(erased => database.CaptureAssets.Any(member =>
+                member.CaptureId == capture.Id && member.AssetId == erased.AssetId)));
+    }
+
+    private IQueryable<CaptureEntity> ApplyInboxFilters(IQueryable<CaptureEntity> query, CaptureReadFilter filter)
+    {
+        if (filter.FavoritesOnly) query = query.Where(capture => capture.IsFavorite);
+        if (filter.SourceId is Guid sourceId) query = query.Where(capture => capture.SourceId == sourceId);
+        if (filter.SourceIds is { Length: > 0 } sourceIds) query = query.Where(capture => sourceIds.Contains(capture.SourceId));
+        if (filter.CollectionIds is { Length: > 0 } collectionIds)
+            query = query.Where(capture => collectionIds.Contains(capture.CollectionId));
+        query = ApplyCurationFilters(query, filter);
+        return ApplyWorkflowFilters(query, filter);
+    }
+
+    private static IQueryable<CaptureEntity> ApplyCurationFilters(IQueryable<CaptureEntity> query, CaptureReadFilter filter)
+    {
+        if (filter.RatingMaximum is int maximum)
+        {
+            query = query.Where(capture => capture.Rating <= maximum);
+            if (filter.Rating is int minimum) query = query.Where(capture => capture.Rating >= minimum);
+        }
+        else if (filter.Rating is int rating) query = query.Where(capture => capture.Rating == rating);
+        if (filter.Selection == CaptureSelection.Rejected) query = query.Where(capture => capture.Rating == -1);
+        if (filter.Selection == CaptureSelection.Neutral) query = query.Where(capture => capture.Rating == 0);
+        if (filter.Selection == CaptureSelection.Picked) query = query.Where(capture => capture.Rating >= 1);
+        if (filter.Tag is string tag) query = query.Where(capture => capture.Tags.Contains(tag));
+        if (filter.Labels is { Length: > 0 } labels)
+            query = query.Where(capture => labels.Contains("None") && capture.Label == null
+                || capture.Label != null && labels.Contains(capture.Label));
+        return query;
+    }
+
+    private IQueryable<CaptureEntity> ApplyWorkflowFilters(IQueryable<CaptureEntity> query, CaptureReadFilter filter)
+    {
+        if (filter.Released.HasValue) query = query.Where(capture => (capture.ReleasedAt != null) == filter.Released.Value);
+        if (filter.Held.HasValue) query = query.Where(capture => capture.Held == filter.Held.Value);
+        if (filter.Attention.HasValue)
+        {
+            IQueryable<Guid> attentionCaptures = CapturesRequiringAttention((clock ?? TimeProvider.System).GetUtcNow());
+            query = filter.Attention.Value ? query.Where(capture => attentionCaptures.Contains(capture.Id))
+                : query.Where(capture => !attentionCaptures.Contains(capture.Id));
+        }
+        if (filter.Workflows is { Length: > 0 } workflows)
+        {
+            IQueryable<Guid> attentionCaptures = CapturesRequiringAttention((clock ?? TimeProvider.System).GetUtcNow());
+            bool includeWaiting = workflows.Contains(CaptureWorkflowFilter.Waiting);
+            bool includeHeld = workflows.Contains(CaptureWorkflowFilter.Held);
+            bool includeReleased = workflows.Contains(CaptureWorkflowFilter.Released);
+            bool includeAttention = workflows.Contains(CaptureWorkflowFilter.Attention);
+            query = query.Where(capture => (includeWaiting && capture.ReleasedAt == null)
+                || (includeHeld && capture.ReleasedAt == null && capture.Held)
+                || (includeReleased && capture.ReleasedAt != null)
+                || (includeAttention && attentionCaptures.Contains(capture.Id)));
+        }
+        return query;
+    }
+
+    private static async Task<IQueryable<CaptureEntity>> ApplyPageBoundaryAsync(IQueryable<CaptureEntity> query,
+        CaptureReadFilter filter, DateTimeOffset? before, Guid? beforeId, CancellationToken cancellationToken)
+    {
+        if (filter.StartAtCaptureId is Guid startAtId)
+            query = await ApplyInclusiveStartAsync(query, startAtId, filter.OldestFirst, cancellationToken);
+        if (before is not null && beforeId is not null)
+            query = filter.OldestFirst
+                ? query.Where(capture => capture.FirstAcceptedAt > before
+                    || (capture.FirstAcceptedAt == before && capture.Id.CompareTo(beforeId.Value) > 0))
+                : query.Where(capture => capture.FirstAcceptedAt < before
+                    || (capture.FirstAcceptedAt == before && capture.Id.CompareTo(beforeId.Value) < 0));
+
+        return query;
+    }
+
+    private static async Task<IQueryable<CaptureEntity>> ApplyInclusiveStartAsync(IQueryable<CaptureEntity> query,
+        Guid startAtId, bool oldestFirst, CancellationToken cancellationToken)
+    {
+        DateTimeOffset? startAt = await query.Where(capture => capture.Id == startAtId)
+            .Select(capture => (DateTimeOffset?)capture.FirstAcceptedAt).FirstOrDefaultAsync(cancellationToken);
+        if (startAt is not DateTimeOffset acceptedAt) return query;
+
+        return oldestFirst
+            ? query.Where(capture => capture.FirstAcceptedAt > acceptedAt
+                || capture.FirstAcceptedAt == acceptedAt && capture.Id.CompareTo(startAtId) >= 0)
+            : query.Where(capture => capture.FirstAcceptedAt < acceptedAt
+                || capture.FirstAcceptedAt == acceptedAt && capture.Id.CompareTo(startAtId) <= 0);
     }
 
     private IQueryable<Guid> CapturesRequiringAttention(DateTimeOffset now) => database.Captures.AsNoTracking()
@@ -165,69 +192,16 @@ internal sealed class CaptureReadStore(ShutterSpoolDbContext database, TimeProvi
                 source.CollectionId, CollectionName = collection.Name,
                 Enabled = database.SourceCredentials.Any(credential => credential.SourceId == source.Id && credential.IsIngressEnabled) })
             .ToDictionaryAsync(source => source.Id, cancellationToken);
-        var membershipProjection = from member in database.CaptureAssets.AsNoTracking()
-            join asset in database.Assets.AsNoTracking() on member.AssetId equals asset.Id
-            where captureIds.Contains(member.CaptureId)
-            select new { member.CaptureId, member.AssetId, member.Role, member.IsPrimary, member.RelatedAssetId,
-                asset.OriginalName, asset.IngestedAt, asset.Size, asset.MetadataState, asset.MetadataOutcome, asset.MetadataReason,
-                asset.DetectedMediaType, asset.MetadataRole, asset.CaptureTimeLocal, asset.CaptureTimeOffset,
-                asset.CaptureTimeFractionalDigits, asset.CaptureTimeTag, asset.CaptureTimeUncertain, asset.CameraMake,
-                asset.CameraMakeTag, asset.CameraModel, asset.CameraModelTag, asset.CameraSerial, asset.CameraSerialTag,
-                asset.ExtensionMismatch };
-        var boundedMemberships = compactAssets
-            ? membershipProjection.Where(item => (
-                from candidate in database.CaptureAssets.AsNoTracking()
-                join candidateAsset in database.Assets.AsNoTracking() on candidate.AssetId equals candidateAsset.Id
-                where candidate.CaptureId == item.CaptureId
-                orderby candidate.IsPrimary descending, candidateAsset.IngestedAt, candidate.AssetId
-                select candidate.AssetId).Take(InboxAssetPreviewLimit).Contains(item.AssetId))
-            : membershipProjection;
-        var membershipRows = await boundedMemberships.OrderByDescending(item => item.IsPrimary)
-            .ThenBy(item => item.IngestedAt).ThenBy(item => item.AssetId)
-            .Select(item => new Membership(item.CaptureId, item.AssetId, item.Role, item.IsPrimary,
-                item.RelatedAssetId, item.OriginalName, item.IngestedAt, item.Size, item.MetadataState, item.MetadataOutcome,
-                item.MetadataReason, item.DetectedMediaType, item.MetadataRole, item.CaptureTimeLocal,
-                item.CaptureTimeOffset, item.CaptureTimeFractionalDigits, item.CaptureTimeTag, item.CaptureTimeUncertain,
-                item.CameraMake, item.CameraMakeTag, item.CameraModel, item.CameraModelTag, item.CameraSerial,
-                item.CameraSerialTag, item.ExtensionMismatch)).ToArrayAsync(cancellationToken);
+        var assetsByCapture = await LoadAssetsAsync(captureIds, compactAssets, cancellationToken);
         var assetCounts = await database.CaptureAssets.AsNoTracking().Where(member => captureIds.Contains(member.CaptureId))
             .GroupBy(member => member.CaptureId).Select(group => new { Id = group.Key, Count = group.Count() })
             .ToDictionaryAsync(item => item.Id, item => item.Count, cancellationToken);
-        var summaries = await database.Captures.AsNoTracking().Where(capture => captureIds.Contains(capture.Id))
-            .Select(capture => new
-            {
-                capture.Id,
-                Waiting = database.CaptureAssets.Count(member => member.CaptureId == capture.Id && member.IsPrimary
-                    && !database.RoutedAssets.Any(routed => routed.AssetId == member.AssetId)),
-                NoRoute = database.CaptureAssets.Count(member => member.CaptureId == capture.Id && member.IsPrimary
-                    && database.RoutedAssets.Any(routed => routed.AssetId == member.AssetId)
-                    && !database.RoutingDecisions.Any(decision => decision.AssetId == member.AssetId && decision.IsCurrent
-                        && decision.Kind != RoutingDecisionKindValue.NoMatch)),
-                InvalidRouting = database.CaptureAssets.Count(member => member.CaptureId == capture.Id
-                    && database.RoutingDecisions.Any(decision => decision.AssetId == member.AssetId && decision.IsCurrent
-                        && (decision.Kind == RoutingDecisionKindValue.InvalidTarget
-                            || decision.Kind == RoutingDecisionKindValue.DestinationDisabled))),
-                Queued = database.Deliveries.Count(delivery => delivery.State == DeliveryState.Pending
-                    && database.CaptureAssets.Any(member => member.CaptureId == capture.Id && member.AssetId == delivery.AssetId)),
-                Running = database.Deliveries.Count(delivery => delivery.State == DeliveryState.Running
-                    && database.CaptureAssets.Any(member => member.CaptureId == capture.Id && member.AssetId == delivery.AssetId)),
-                RetryScheduled = database.Deliveries.Count(delivery => delivery.State == DeliveryState.RetryWait
-                    && database.CaptureAssets.Any(member => member.CaptureId == capture.Id && member.AssetId == delivery.AssetId)),
-                Confirmed = database.Deliveries.Count(delivery => delivery.State == DeliveryState.Delivered
-                    && database.CaptureAssets.Any(member => member.CaptureId == capture.Id && member.AssetId == delivery.AssetId)),
-                DeliveryAttention = database.Deliveries.Count(delivery =>
-                    (delivery.State == DeliveryState.Failed || delivery.State == DeliveryState.Ambiguous
-                        || delivery.State == DeliveryState.Disabled)
-                    && database.CaptureAssets.Any(member => member.CaptureId == capture.Id && member.AssetId == delivery.AssetId)),
-            }).ToDictionaryAsync(item => item.Id, cancellationToken);
+        var summaries = await LoadDeliverySummariesAsync(captureIds, cancellationToken);
 
         return [.. captures.Select(capture =>
         {
-            Membership[] assets = [.. membershipRows.Where(item => item.CaptureId == capture.Id)];
-            string displayName = assets.FirstOrDefault(item => item.IsPrimary)?.OriginalName
-                ?? assets.FirstOrDefault()?.OriginalName ?? "Capture";
-            var summary = summaries[capture.Id];
-            int attention = summary.InvalidRouting + summary.DeliveryAttention;
+            CaptureAssetRead[] assets = assetsByCapture[capture.Id].ToArray();
+            string displayName = assets.FirstOrDefault()?.OriginalName ?? "Capture";
             var source = sourceRows[capture.SourceId];
             CaptureCollectionRead? currentCollection = collectionRows.GetValueOrDefault(capture.CollectionId);
             CaptureCollectionRead? releasedCollection = capture.ReleasedCollectionId is Guid releasedId
@@ -237,28 +211,80 @@ internal sealed class CaptureReadStore(ShutterSpoolDbContext database, TimeProvi
             int available = assetCounts.GetValueOrDefault(capture.Id);
             return new CaptureRead(capture.Id, displayName, capture.FirstAcceptedAt, capture.SourceId,
                 new(source.Id, source.Name, source.Enabled, source.CurationMode.ToString(),
-                    source.CurationMode == ShutterSpool.Domain.Sources.SourceCurationMode.Delay ? source.CurationDelaySeconds : null,
+                    source.CurationMode == SourceCurationMode.Delay ? source.CurationDelaySeconds : null,
                     source.CollectionId, source.CollectionName),
-                ToCuration(capture), [.. assets.Select(item => new CaptureAssetRead(item.AssetId, item.OriginalName,
-                    item.Role, item.IsPrimary, item.RelatedAssetId, item.IngestedAt,
-                    new(item.MetadataOutcome ?? "Pending", item.MetadataReason, item.DetectedMediaType, item.MetadataRole,
-                        item.CaptureTimeLocal, item.CaptureTimeOffset, item.CaptureTimeFractionalDigits, item.CaptureTimeTag,
-                        item.CaptureTimeUncertain, item.CameraMake, item.CameraMakeTag, item.CameraModel, item.CameraModelTag,
-                        item.CameraSerial, item.CameraSerialTag, item.ExtensionMismatch, item.MetadataState), item.Size))], available, assets.Length < available,
-                new(summary.Waiting, summary.NoRoute, summary.Queued, summary.Running, summary.RetryScheduled,
-                    summary.Confirmed, attention), capture.IsFavorite, currentCollection, releasedCollection);
+                ToCuration(capture), assets, available, assets.Length < available, summaries[capture.Id], capture.IsFavorite,
+                currentCollection, releasedCollection);
         })];
+    }
+
+    private async Task<ILookup<Guid, CaptureAssetRead>> LoadAssetsAsync(Guid[] captureIds, bool compactAssets,
+        CancellationToken cancellationToken)
+    {
+        var membershipProjection = from member in database.CaptureAssets.AsNoTracking()
+            join asset in database.Assets.AsNoTracking() on member.AssetId equals asset.Id
+            where captureIds.Contains(member.CaptureId)
+            select new { Member = member, Asset = asset };
+        var boundedMemberships = compactAssets
+            ? membershipProjection.Where(item => (
+                from candidate in database.CaptureAssets.AsNoTracking()
+                join candidateAsset in database.Assets.AsNoTracking() on candidate.AssetId equals candidateAsset.Id
+                where candidate.CaptureId == item.Member.CaptureId
+                orderby candidate.IsPrimary descending, candidateAsset.IngestedAt, candidate.AssetId
+                select candidate.AssetId).Take(InboxAssetPreviewLimit).Contains(item.Member.AssetId))
+            : membershipProjection;
+        var membershipRows = await boundedMemberships.OrderByDescending(item => item.Member.IsPrimary)
+            .ThenBy(item => item.Asset.IngestedAt).ThenBy(item => item.Member.AssetId)
+            .Select(item => new
+            {
+                item.Member.CaptureId,
+                Asset = new CaptureAssetRead(item.Member.AssetId, item.Asset.OriginalName, item.Member.Role, item.Member.IsPrimary,
+                    item.Member.RelatedAssetId, item.Asset.IngestedAt,
+                    new CaptureAssetMetadataRead(item.Asset.MetadataOutcome ?? "Pending", item.Asset.MetadataReason,
+                        item.Asset.DetectedMediaType, item.Asset.MetadataRole, item.Asset.CaptureTimeLocal, item.Asset.CaptureTimeOffset,
+                        item.Asset.CaptureTimeFractionalDigits, item.Asset.CaptureTimeTag, item.Asset.CaptureTimeUncertain,
+                        item.Asset.CameraMake, item.Asset.CameraMakeTag, item.Asset.CameraModel, item.Asset.CameraModelTag,
+                        item.Asset.CameraSerial, item.Asset.CameraSerialTag, item.Asset.ExtensionMismatch, item.Asset.MetadataState),
+                    item.Asset.Size),
+            }).ToArrayAsync(cancellationToken);
+        return membershipRows.ToLookup(item => item.CaptureId, item => item.Asset);
+    }
+
+    private Task<Dictionary<Guid, CaptureDeliverySummary>> LoadDeliverySummariesAsync(Guid[] captureIds,
+        CancellationToken cancellationToken)
+    {
+        var deliveries = from delivery in database.Deliveries
+            join member in database.CaptureAssets on delivery.AssetId equals member.AssetId
+            select new { member.CaptureId, delivery.State };
+        var summaries = from capture in database.Captures.AsNoTracking()
+            where captureIds.Contains(capture.Id)
+            select new
+            {
+                capture.Id,
+                Waiting = capture.Assets.Count(member => member.IsPrimary
+                    && !database.RoutedAssets.Any(routed => routed.AssetId == member.AssetId)),
+                NoRoute = capture.Assets.Count(member => member.IsPrimary
+                    && database.RoutedAssets.Any(routed => routed.AssetId == member.AssetId)
+                    && !database.RoutingDecisions.Any(decision => decision.AssetId == member.AssetId && decision.IsCurrent
+                        && decision.Kind != RoutingDecisionKindValue.NoMatch)),
+                InvalidRouting = capture.Assets.Count(member =>
+                    database.RoutingDecisions.Any(decision => decision.AssetId == member.AssetId && decision.IsCurrent
+                        && (decision.Kind == RoutingDecisionKindValue.InvalidTarget
+                            || decision.Kind == RoutingDecisionKindValue.DestinationDisabled))),
+                Queued = deliveries.Count(delivery => delivery.CaptureId == capture.Id && delivery.State == DeliveryState.Pending),
+                Running = deliveries.Count(delivery => delivery.CaptureId == capture.Id && delivery.State == DeliveryState.Running),
+                RetryScheduled = deliveries.Count(delivery => delivery.CaptureId == capture.Id && delivery.State == DeliveryState.RetryWait),
+                Confirmed = deliveries.Count(delivery => delivery.CaptureId == capture.Id && delivery.State == DeliveryState.Delivered),
+                DeliveryAttention = deliveries.Count(delivery => delivery.CaptureId == capture.Id
+                    && (delivery.State == DeliveryState.Failed || delivery.State == DeliveryState.Ambiguous || delivery.State == DeliveryState.Disabled)),
+            };
+        return summaries.ToDictionaryAsync(item => item.Id, item => new CaptureDeliverySummary(item.Waiting, item.NoRoute,
+            item.Queued, item.Running, item.RetryScheduled, item.Confirmed, item.InvalidRouting + item.DeliveryAttention),
+            cancellationToken);
     }
 
     private static CaptureCurationState ToCuration(CaptureEntity capture) => new(capture.Id, capture.Revision,
         capture.Rating, capture.Label, [.. capture.Tags], capture.Selection, capture.Policy, capture.DelaySeconds,
         capture.ReleaseDueAt, capture.Held, capture.State.ToString(), capture.ReleasedAt,
         capture.ReleasedRevision, capture.ReleasedRating, capture.ReleasedLabel, [.. capture.ReleasedTags], capture.ReleasedSelection);
-
-    private sealed record Membership(Guid CaptureId, Guid AssetId, string Role, bool IsPrimary, Guid? RelatedAssetId,
-        string OriginalName, DateTimeOffset IngestedAt, long Size, string MetadataState, string? MetadataOutcome,
-        string? MetadataReason, string? DetectedMediaType, string? MetadataRole, DateTime? CaptureTimeLocal,
-        TimeSpan? CaptureTimeOffset, int? CaptureTimeFractionalDigits, string? CaptureTimeTag, bool CaptureTimeUncertain,
-        string? CameraMake, string? CameraMakeTag, string? CameraModel, string? CameraModelTag,
-        string? CameraSerial, string? CameraSerialTag, bool ExtensionMismatch);
 }

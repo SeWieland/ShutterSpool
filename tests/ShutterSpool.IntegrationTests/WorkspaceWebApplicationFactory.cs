@@ -44,7 +44,7 @@ public sealed class WorkspaceWebApplicationFactory : WebApplicationFactory<Progr
         return client;
     }
 
-    public AsyncServiceScope CreateWorkspaceScope(WebApplicationFactory<Program> server) => fixture.Scope(server.Services, Workspace);
+    public AsyncServiceScope CreateWorkspaceScope(WebApplicationFactory<Program> server) => WorkspaceTenancyPostgresTests.WorkspaceFixture.Scope(server.Services, Workspace);
 
     public override async ValueTask DisposeAsync()
     {

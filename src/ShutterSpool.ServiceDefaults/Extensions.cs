@@ -11,6 +11,13 @@ namespace ShutterSpool.ServiceDefaults;
 
 public static class Extensions
 {
+    private static readonly string[] OtlpEndpointKeys =
+    [
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+    ];
+
     public static IHostApplicationBuilder AddServiceDefaults(this IHostApplicationBuilder builder)
     {
         OpenTelemetryBuilder telemetry = builder.Services.AddOpenTelemetry()
@@ -30,12 +37,7 @@ public static class Extensions
     }
 
     private static bool HasExplicitOtlpEndpoint(IHostApplicationBuilder builder) =>
-        new[]
-        {
-            "OTEL_EXPORTER_OTLP_ENDPOINT",
-            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-            "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
-        }.Any(key => !string.IsNullOrWhiteSpace(builder.Configuration[key]));
+        OtlpEndpointKeys.Any(key => !string.IsNullOrWhiteSpace(builder.Configuration[key]));
 
     public static WebApplication MapDefaultEndpoints(this WebApplication app)
     {

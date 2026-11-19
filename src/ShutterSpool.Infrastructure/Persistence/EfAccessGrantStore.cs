@@ -7,118 +7,122 @@ namespace ShutterSpool.Infrastructure.Persistence;
 
 internal sealed partial class EfAccessGrantStore(ShutterSpoolDbContext database) : IAccessGrantStore
 {
-    public async Task<WorkspaceMembership?> GetAsync(string issuer, string subject, CancellationToken token)
+    private const string Applied = "applied";
+    private const string Conflict = "conflict";
+    private const string Denied = "denied";
+
+    public async Task<WorkspaceMembership?> GetAsync(string issuer, string subject, CancellationToken cancellationToken)
     {
         AuthorizationGrant? grant = await database.AuthorizationGrants.AsNoTracking()
-            .SingleOrDefaultAsync(item => item.Issuer == issuer && item.Subject == subject, token);
+            .SingleOrDefaultAsync(item => item.Issuer == issuer && item.Subject == subject, cancellationToken);
         return grant is null ? null : Membership(grant);
     }
 
-    public async Task<WorkspaceMembership[]> ListAsync(CancellationToken token) =>
-        [.. (await database.AuthorizationGrants.AsNoTracking().OrderBy(item => item.Subject).ThenBy(item => item.Id).ToArrayAsync(token))
+    public async Task<WorkspaceMembership[]> ListAsync(CancellationToken cancellationToken) =>
+        [.. (await database.AuthorizationGrants.AsNoTracking().OrderBy(item => item.Subject).ThenBy(item => item.Id).ToArrayAsync(cancellationToken))
             .Select(Membership)];
 
-    public async Task UpdateDisplayNameAsync(string issuer, string subject, string? displayName, CancellationToken token)
+    public async Task UpdateDisplayNameAsync(string issuer, string subject, string? displayName, CancellationToken cancellationToken)
     {
         if (displayName?.Length > 256) throw new ArgumentException("Display names must be at most 256 characters.", nameof(displayName));
         // Update only the label so concurrent permission changes cannot be overwritten.
         await database.AuthorizationGrants.Where(item => item.Issuer == issuer && item.Subject == subject && item.IsActive)
-            .ExecuteUpdateAsync(update => update.SetProperty(item => item.DisplayName, displayName), token);
+            .ExecuteUpdateAsync(update => update.SetProperty(item => item.DisplayName, displayName), cancellationToken);
     }
 
-    public async Task<WorkspaceViewerPolicy> GetViewerPolicyAsync(CancellationToken token)
+    public async Task<WorkspaceViewerPolicy> GetViewerPolicyAsync(CancellationToken cancellationToken)
     {
-        WorkspaceViewerPolicyEntity? row = await database.Set<WorkspaceViewerPolicyEntity>().AsNoTracking().SingleOrDefaultAsync(token);
+        WorkspaceViewerPolicyEntity? row = await database.Set<WorkspaceViewerPolicyEntity>().AsNoTracking().SingleOrDefaultAsync(cancellationToken);
         if (row is null && database.Database.IsRelational()) throw new InvalidOperationException("The workspace access policy is unavailable.");
         return row is null ? new(false, 0) : new(row.IncludeUnreleased, row.Revision);
     }
 
-    public async Task<AccessChangeResult> ChangeAsync(AccessChange change, CancellationToken token)
+    public async Task<AccessChangeResult> ChangeAsync(AccessChange change, CancellationToken cancellationToken)
     {
         if (change.OperationId == Guid.Empty || change.ExpectedRevision < 0)
             throw new ArgumentException("Provide an operation ID and current revision.");
-        await using var transaction = await database.Database.BeginTransactionAsync(token);
-        await LockAsync(token);
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        await LockAsync(cancellationToken);
         string request = JsonSerializer.Serialize(change);
         WorkspaceAccessOperationEntity? recorded = await database.Set<WorkspaceAccessOperationEntity>().AsNoTracking()
-            .SingleOrDefaultAsync(item => item.Id == change.OperationId, token);
+            .SingleOrDefaultAsync(item => item.Id == change.OperationId, cancellationToken);
         if (recorded is not null)
             return recorded.Request == request ? JsonSerializer.Deserialize<AccessChangeResult>(recorded.Result)!
-                : new(change.OperationId, "conflict");
+                : new(change.OperationId, Conflict);
 
         // Always read current authority inside the tenant serialization boundary.
         database.ChangeTracker.Clear();
         AuthorizationGrant? actor = await database.AuthorizationGrants.SingleOrDefaultAsync(item =>
-            item.Issuer == change.ActorIssuer && item.Subject == change.ActorSubject && item.IsActive, token);
+            item.Issuer == change.ActorIssuer && item.Subject == change.ActorSubject && item.IsActive, cancellationToken);
         AuthorizationGrant? target = change.Kind == AccessChangeKind.Leave ? actor
-            : await database.AuthorizationGrants.SingleOrDefaultAsync(item => item.Id == change.TargetId, token);
-        WorkspaceViewerPolicyEntity policy = await database.Set<WorkspaceViewerPolicyEntity>().SingleAsync(token);
+            : await database.AuthorizationGrants.SingleOrDefaultAsync(item => item.Id == change.TargetId, cancellationToken);
+        WorkspaceViewerPolicyEntity policy = await database.Set<WorkspaceViewerPolicyEntity>().SingleAsync(cancellationToken);
         string beforeState = JsonSerializer.Serialize(new { Actor = actor is null ? null : Membership(actor),
             Target = target is null ? null : Membership(target), Policy = new WorkspaceViewerPolicy(policy.IncludeUnreleased, policy.Revision) });
-        AccessChangeResult result = await ApplyChangeAsync(change, actor, target, policy, token);
-        Guid[] invalidatedOffers = result.Status == "applied" && change.Kind != AccessChangeKind.ViewerPolicy
-            ? await InvalidateRemovedMemberInvitationsAsync(target!, token) : [];
+        AccessChangeResult result = await ApplyChangeAsync(change, actor, target, policy, cancellationToken);
+        Guid[] invalidatedOffers = result.Status == Applied && change.Kind != AccessChangeKind.ViewerPolicy
+            ? await InvalidateRemovedMemberInvitationsAsync(target!, cancellationToken) : [];
         RecordChange(change, request, result, target, policy, beforeState, invalidatedOffers);
-        await database.SaveChangesAsync(token);
-        await transaction.CommitAsync(token);
+        await database.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
         return result;
     }
 
     private async Task<AccessChangeResult> ApplyChangeAsync(AccessChange change, AuthorizationGrant? actor,
         AuthorizationGrant? target, WorkspaceViewerPolicyEntity policy, CancellationToken token)
     {
-        if (actor is null || !Enum.IsDefined(actor.Role)) return new(change.OperationId, "denied");
+        if (actor is null || !Enum.IsDefined(actor.Role)) return new(change.OperationId, Denied);
         if (change.Kind == AccessChangeKind.ViewerPolicy) return ChangeViewerPolicy(change, actor, policy);
         if (target is null || !target.IsActive) return new(change.OperationId, "notFound");
         if (change.Kind != AccessChangeKind.Leave && !WorkspaceAccessPolicy.CanManageMember(actor.Role, target.Role))
-            return new(change.OperationId, "denied");
+            return new(change.OperationId, Denied);
         return change.Kind switch
         {
             AccessChangeKind.Role => await ChangeRoleAsync(change, actor, target, token),
             AccessChangeKind.PromoteOwner => PromoteOwner(change, actor, target),
             AccessChangeKind.Remove or AccessChangeKind.Leave => await RemoveOrLeaveAsync(change, target, token),
-            _ => new(change.OperationId, "denied"),
+            _ => new(change.OperationId, Denied),
         };
     }
 
     private static AccessChangeResult ChangeViewerPolicy(AccessChange change, AuthorizationGrant actor, WorkspaceViewerPolicyEntity policy)
     {
-        if (!WorkspaceAccessPolicy.CanAdminister(actor.Role)) return new(change.OperationId, "denied");
+        if (!WorkspaceAccessPolicy.CanAdminister(actor.Role)) return new(change.OperationId, Denied);
         if (policy.Revision != change.ExpectedRevision)
-            return new(change.OperationId, "conflict", ViewerPolicy: new(policy.IncludeUnreleased, policy.Revision));
+            return new(change.OperationId, Conflict, ViewerPolicy: new(policy.IncludeUnreleased, policy.Revision));
         policy.IncludeUnreleased = change.IncludeUnreleased;
         policy.Revision++;
-        return new(change.OperationId, "applied", ViewerPolicy: new(policy.IncludeUnreleased, policy.Revision));
+        return new(change.OperationId, Applied, ViewerPolicy: new(policy.IncludeUnreleased, policy.Revision));
     }
 
     private async Task<AccessChangeResult> ChangeRoleAsync(AccessChange change, AuthorizationGrant actor, AuthorizationGrant target, CancellationToken token)
     {
-        if (!WorkspaceAccessPolicy.CanChangeRole(actor.Role, target.Role, change.Role)) return new(change.OperationId, "denied");
-        if (target.Revision != change.ExpectedRevision) return new(change.OperationId, "conflict", Membership(target));
+        if (!WorkspaceAccessPolicy.CanChangeRole(actor.Role, target.Role, change.Role)) return new(change.OperationId, Denied);
+        if (target.Revision != change.ExpectedRevision) return new(change.OperationId, Conflict, Membership(target));
         if (target.Role == WorkspaceRole.Owner && !await HasOtherOwnerAsync(target.Id, token))
             return new(change.OperationId, "lastOwner", Membership(target));
         target.Role = change.Role!.Value;
         target.Revision++;
-        return new(change.OperationId, "applied", Membership(target));
+        return new(change.OperationId, Applied, Membership(target));
     }
 
     private static AccessChangeResult PromoteOwner(AccessChange change, AuthorizationGrant actor, AuthorizationGrant target)
     {
-        if (!WorkspaceAccessPolicy.CanPromoteOwner(actor.Role, change.Confirmed)) return new(change.OperationId, "denied");
-        if (target.Revision != change.ExpectedRevision) return new(change.OperationId, "conflict", Membership(target));
+        if (!WorkspaceAccessPolicy.CanPromoteOwner(actor.Role, change.Confirmed)) return new(change.OperationId, Denied);
+        if (target.Revision != change.ExpectedRevision) return new(change.OperationId, Conflict, Membership(target));
         target.Role = WorkspaceRole.Owner;
         target.Revision++;
-        return new(change.OperationId, "applied", Membership(target));
+        return new(change.OperationId, Applied, Membership(target));
     }
 
     private async Task<AccessChangeResult> RemoveOrLeaveAsync(AccessChange change, AuthorizationGrant target, CancellationToken token)
     {
-        if (target.Revision != change.ExpectedRevision) return new(change.OperationId, "conflict", Membership(target));
+        if (target.Revision != change.ExpectedRevision) return new(change.OperationId, Conflict, Membership(target));
         if (target.Role == WorkspaceRole.Owner && !await HasOtherOwnerAsync(target.Id, token))
             return new(change.OperationId, "lastOwner", Membership(target));
         target.IsActive = false;
         target.Revision++;
-        return new(change.OperationId, "applied", Membership(target));
+        return new(change.OperationId, Applied, Membership(target));
     }
 
     private Task<bool> HasOtherOwnerAsync(Guid target, CancellationToken token) => database.AuthorizationGrants
@@ -160,7 +164,7 @@ internal sealed partial class EfAccessGrantStore(ShutterSpoolDbContext database)
         string beforeState = JsonSerializer.Serialize(new { Target = (WorkspaceMembership?)null,
             Policy = new WorkspaceViewerPolicy(policy.IncludeUnreleased, policy.Revision) });
         database.AuthorizationGrants.Add(owner);
-        var result = new AccessChangeResult(operation, "applied", Membership(owner));
+        var result = new AccessChangeResult(operation, Applied, Membership(owner));
         database.Set<WorkspaceAccessOperationEntity>().Add(new()
         {
             Id = operation, Kind = "operator-setup", ActorIssuer = "host-operator", ActorSubject = operatorIdentity,

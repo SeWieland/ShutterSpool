@@ -262,8 +262,8 @@ public sealed class CollectionPostgresTests
             select capture.CollectionId).ToArrayAsync(token);
         Assert.Equal(updatedDefault, await verify.Sources.Where(item => item.Id == sourceId)
             .Select(item => item.CollectionId).SingleAsync(token));
-        Assert.Single(memberships);
-        Assert.Contains(memberships[0], new[] { originalDefault, updatedDefault });
+        Guid membership = Assert.Single(memberships);
+        Assert.Contains(membership, new[] { originalDefault, updatedDefault });
     }
 
     [Fact]
@@ -759,9 +759,9 @@ public sealed class CollectionPostgresTests
         var reads = new ShutterSpool.Application.Captures.CaptureReadService(new CaptureReadStore(browse));
         CaptureInboxPage page = await reads.GetInboxAsync(1, null, null,
             new ShutterSpool.Application.Captures.CaptureReadFilter(CollectionIds: [targetId]), token);
-        Assert.Single(page.Items);
-        Assert.Equal(first, page.Items[0].Id);
-        Assert.Equal(targetId, page.Items[0].CurrentCollection!.Id);
+        CaptureRead item = Assert.Single(page.Items);
+        Assert.Equal(first, item.Id);
+        Assert.Equal(targetId, item.CurrentCollection!.Id);
         Assert.Equal(3, await browse.Captures.Where(item => item.Id == first).Select(item => item.Rating).SingleAsync(token));
         Assert.Equal(0, await browse.Captures.Where(item => item.Id == stale || item.Id == trash)
             .Select(item => item.CollectionId == targetId ? 1 : 0).SumAsync(token));

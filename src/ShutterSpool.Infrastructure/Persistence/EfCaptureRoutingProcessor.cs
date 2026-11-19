@@ -142,25 +142,7 @@ internal sealed class EfCaptureRoutingProcessor(ShutterSpoolDbContext database) 
             await RetentionQualification.RecordNewIntentAsync(database, capture, now, cancellationToken);
         foreach (var evaluated in decisions)
         {
-            RoutingRule? rule = evaluated.Rule;
-            var decision = new RoutingDecisionEntity
-            {
-                Id = Guid.NewGuid(), CaptureId = capture.Id, AssetId = evaluated.AssetId,
-                DestinationId = evaluated.Destination.DestinationId, Generation = 0, IsCurrent = true,
-                Kind = evaluated.Decision.Kind switch
-                {
-                    RoutingDecisionKind.Matched => RoutingDecisionKindValue.Matched,
-                    RoutingDecisionKind.InvalidTarget => RoutingDecisionKindValue.InvalidTarget,
-                    RoutingDecisionKind.DestinationDisabled => RoutingDecisionKindValue.DestinationDisabled,
-                    _ => RoutingDecisionKindValue.NoMatch,
-                },
-                RuleId = evaluated.Decision.RuleId, RuleName = rule?.Name, Required = evaluated.Decision.Required,
-                TargetPath = evaluated.Decision.TargetPath, Explanation = evaluated.Decision.Explanation,
-                TargetPathKey = evaluated.Decision.Kind == RoutingDecisionKind.Matched ? evaluated.Decision.TargetPath!.ToUpperInvariant() : null,
-                RuleSnapshotJson = rule is null ? null : RoutingRuleJson.WriteRule(rule), CreatedAt = now,
-                CollectionId = capture.ReleasedCollectionId, CollectionName = capture.ReleasedCollectionName,
-                CollectionPath = capture.ReleasedCollectionPath,
-            };
+            RoutingDecisionEntity decision = CreateReleaseDecision(capture, evaluated, now);
             database.RoutingDecisions.Add(decision);
             if (decision.Kind == RoutingDecisionKindValue.Matched)
                 database.Deliveries.Add(new DeliveryEntity
@@ -172,6 +154,29 @@ internal sealed class EfCaptureRoutingProcessor(ShutterSpoolDbContext database) 
         }
         foreach (CaptureAssetEntity member in members)
             database.RoutedAssets.Add(new RoutedAssetEntity { AssetId = member.AssetId, EvaluatedAt = now });
+    }
+
+    private static RoutingDecisionEntity CreateReleaseDecision(CaptureEntity capture, EvaluatedRoute evaluated, DateTimeOffset now)
+    {
+        RoutingRule? rule = evaluated.Rule;
+        return new RoutingDecisionEntity
+        {
+            Id = Guid.NewGuid(), CaptureId = capture.Id, AssetId = evaluated.AssetId,
+            DestinationId = evaluated.Destination.DestinationId, Generation = 0, IsCurrent = true,
+            Kind = evaluated.Decision.Kind switch
+            {
+                RoutingDecisionKind.Matched => RoutingDecisionKindValue.Matched,
+                RoutingDecisionKind.InvalidTarget => RoutingDecisionKindValue.InvalidTarget,
+                RoutingDecisionKind.DestinationDisabled => RoutingDecisionKindValue.DestinationDisabled,
+                _ => RoutingDecisionKindValue.NoMatch,
+            },
+            RuleId = evaluated.Decision.RuleId, RuleName = rule?.Name, Required = evaluated.Decision.Required,
+            TargetPath = evaluated.Decision.TargetPath, Explanation = evaluated.Decision.Explanation,
+            TargetPathKey = evaluated.Decision.Kind == RoutingDecisionKind.Matched ? evaluated.Decision.TargetPath!.ToUpperInvariant() : null,
+            RuleSnapshotJson = rule is null ? null : RoutingRuleJson.WriteRule(rule), CreatedAt = now,
+            CollectionId = capture.ReleasedCollectionId, CollectionName = capture.ReleasedCollectionName,
+            CollectionPath = capture.ReleasedCollectionPath,
+        };
     }
 
     private static async Task UpdateCaptureStateAsync(ShutterSpoolDbContext database, CaptureEntity capture,

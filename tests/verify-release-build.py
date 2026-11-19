@@ -16,6 +16,7 @@ build_release = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(build_release)
 COMMIT = "a" * 40
 DIGEST = "sha256:" + "b" * 64
+ARCHIVE_NAME = "shutterspool-compose.zip"
 EDGE_IMAGE = "drakkan/sftpgo:v9.8.7@sha256:" + "c" * 64
 ATTRIBUTION = {"image": EDGE_IMAGE, "version": "v9.8.7", "revision": "d" * 40,
                "source": "https://github.com/drakkan/sftpgo/tree/" + "d" * 40}
@@ -25,10 +26,11 @@ NOTICES = "Synthetic notices for SFTPGo v9.8.7\n" + ATTRIBUTION["source"] + "\n"
 class ReleasePackageTests(unittest.TestCase):
     def test_versions_classify_experimental_and_stable_releases(self):
         for version, experimental in (("0.1.0", True), ("0.1.0-alpha.1", True),
-                                      ("1.0.0-rc.1", True), ("1.0.0", False), ("2.3.4", False)):
+                                      ("1.0.0-rc.1", True), ("1.0.0", False), ("2.3.4", False),
+                                      ("1.0.0-" + "a" * 122, True)):
             with self.subTest(version=version):
                 self.assertEqual(experimental, build_release.is_prerelease(version))
-        for version in ("01.0.0", "1.0", "1.0.0-rc.01", "1.0.0+build.1", "v1.0.0", "1.0.0-" + "a" * 128):
+        for version in ("01.0.0", "1.0", "1.0.0-rc.01", "1.0.0+build.1", "v1.0.0", "1.0.0-" + "a" * 123):
             with self.subTest(version=version), self.assertRaises(build_release.BuildError):
                 build_release.validate_version(version)
 
@@ -57,18 +59,19 @@ class ReleasePackageTests(unittest.TestCase):
     def test_package_contains_profiles_support_files_inventory_and_pinned_image(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(build_release, "run", side_effect=self.generate_compose):
             root = build_release.prepare(self.args(Path(temp) / "release"))
-            archive = root / "shutterspool-compose.zip"
+            archive = root / ARCHIVE_NAME
             with zipfile.ZipFile(archive) as bundle:
                 files = set(bundle.namelist())
                 manifest = json.loads(bundle.read("release-manifest.json"))
                 self.assertEqual(files, set(manifest["files"]))
-                self.assertTrue({".env", ".env.example", "compose.yaml", "profiles/all-camera-edges.yaml",
-                                 "README.md", "package/edge-entrypoint.sh", "package/identity-entrypoint.sh",
-                                 "package/postgres-init.sh", "package/workspace-databases.sql", "components/workspaces.yaml",
-                                 "package/realms/shutterspool-enrollment-client.json", "components/keycloak.yaml",
-                                 "config/appsettings.json", "config/appsettings.Production.json",
-                                 "config/appsettings.Maintenance.json",
-                                 "certificates/README.md", "operations/README.md"} <= files)
+                required = {".env", ".env.example", "compose.yaml", "profiles/all-camera-edges.yaml",
+                            "README.md", "package/edge-entrypoint.sh", "package/identity-entrypoint.sh",
+                            "package/postgres-init.sh", "package/workspace-databases.sql", "components/workspaces.yaml",
+                            "package/realms/shutterspool-enrollment-client.json", "components/keycloak.yaml",
+                            "config/appsettings.json", "config/appsettings.Production.json",
+                            "config/appsettings.Maintenance.json",
+                            "certificates/README.md", "operations/README.md"}
+                self.assertEqual(set(), required - files)
                 for directory in ("config/", "package/realms/", "package/theme/", "package/traefik/", "components/", "proxies/"):
                     self.assertTrue(any(name.startswith(directory) for name in files), directory)
                 self.assertEqual((build_release.ROOT / "LICENSE").read_bytes(), bundle.read("LICENSE"))
@@ -131,38 +134,52 @@ class ReleasePackageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp, patch.object(build_release, "run", return_value=COMMIT):
             root = Path(temp) / "release"
             for change in ({"revision": "b" * 40}, {"revision": "main"}, {"image_digest": "latest"}):
+                args = self.args(root, **change)
                 with self.subTest(change=change), self.assertRaises(build_release.BuildError):
-                    build_release.prepare(self.args(root, **change))
+                    build_release.prepare(args)
                 self.assertFalse(root.exists())
             root.mkdir()
             marker = root / "preserve.txt"
             marker.write_text("keep")
+            args = self.args(root)
             with self.assertRaises(FileExistsError):
-                build_release.prepare(self.args(root))
+                build_release.prepare(args)
             self.assertEqual("keep", marker.read_text())
 
     def test_generation_failure_leaves_inspectable_output_without_archive(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(build_release, "run", side_effect=self.generate_compose), \
                 patch.object(build_release, "publish_compose", side_effect=build_release.BuildError("failed")):
             root = Path(temp) / "release"
+            args = self.args(root)
             with self.assertRaises(build_release.BuildError):
-                build_release.prepare(self.args(root))
+                build_release.prepare(args)
             self.assertTrue(root.is_dir())
-            self.assertFalse((root / "shutterspool-compose.zip").exists())
+            self.assertFalse((root / ARCHIVE_NAME).exists())
 
     def test_compose_rejects_unpinned_images_source_mounts_and_unknown_parameters(self):
         with tempfile.TemporaryDirectory() as temp:
             compose = Path(temp) / "compose.yaml"
             for invalid in ("services:\n  db:\n    image: postgres:17\n",
+                            'services:\n  app:\n    image:',
+                            'services:\n  app:\n    image: # Image is missing\n',
                             'services:\n  app:\n    volumes: ["./src:/src"]\n',
                             'services:\n  app:\n    expose: ["${SERVER_PORT}"]\n'):
-                with self.subTest(compose=invalid), self.assertRaises(build_release.BuildError):
+                with self.subTest(compose=invalid):
                     compose.write_text(invalid, encoding="utf-8")
-                    build_release.validate_compose(compose)
+                    with self.assertRaises(build_release.BuildError):
+                        build_release.validate_compose(compose)
+
+    def test_compose_image_refs_keep_required_value_text_and_skip_comments(self):
+        placeholder = "${SERVER_IMAGE:?Select the qualified Server image}"
+        with tempfile.TemporaryDirectory() as temp:
+            compose = Path(temp) / "compose.yaml"
+            compose.write_text(f"services:\n  server:\n    image: '{placeholder}' # Server image\n"
+                               f"  camera-edge:\n    image: {EDGE_IMAGE} # Pinned camera edge", encoding="utf-8")
+            self.assertEqual([placeholder, EDGE_IMAGE], build_release.validate_compose(compose))
 
     def test_package_refuses_attribution_that_does_not_match_each_compose_profile(self):
         for service in ("camera-edge", "camera-edge-legacy", "camera-edge-plain"):
-            def mismatched(command, **kwargs):
+            def mismatched(command, *, service=service, **kwargs):
                 result = self.generate_compose(command, **kwargs)
                 if command[:2] == ["aspire", "publish"]:
                     output = Path(command[command.index("--output-path") + 1]) / "docker-compose.yaml"
@@ -176,9 +193,24 @@ class ReleasePackageTests(unittest.TestCase):
             with self.subTest(service=service), tempfile.TemporaryDirectory() as temp, \
                     patch.object(build_release, "run", side_effect=mismatched):
                 root = Path(temp) / "release"
+                args = self.args(root)
                 with self.assertRaises(build_release.BuildError):
-                    build_release.prepare(self.args(root))
-                self.assertFalse((root / "shutterspool-compose.zip").exists())
+                    build_release.prepare(args)
+                self.assertFalse((root / ARCHIVE_NAME).exists())
+
+    def test_camera_attribution_checks_each_service_through_end_of_file(self):
+        modern = f"  camera-edge:\n      restart: always\n      image: '{EDGE_IMAGE}'"
+        plain = f"  camera-edge-plain:\n    image: {EDGE_IMAGE}"
+        with tempfile.TemporaryDirectory() as temp:
+            compose = Path(temp) / "compose.yaml"
+            compose.write_text(f"services:\n{modern}\n{plain}", encoding="utf-8")
+            build_release.validate_attribution(compose, ATTRIBUTION)
+            for services, missing in ((f"  camera-edge:\n{plain}", "camera-edge"),
+                                      (f"{modern}\n  camera-edge-plain:", "camera-edge-plain")):
+                with self.subTest(missing=missing):
+                    compose.write_text(f"services:\n{services}", encoding="utf-8")
+                    with self.assertRaisesRegex(build_release.BuildError, f"^{missing} image does not match"):
+                        build_release.validate_attribution(compose, ATTRIBUTION)
 
     def test_attribution_generation_failure_cannot_produce_a_package(self):
         def failed(command, **kwargs):
@@ -188,9 +220,10 @@ class ReleasePackageTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp, patch.object(build_release, "run", side_effect=failed):
             root = Path(temp) / "release"
+            args = self.args(root)
             with self.assertRaises(build_release.BuildError):
-                build_release.prepare(self.args(root))
-            self.assertFalse((root / "shutterspool-compose.zip").exists())
+                build_release.prepare(args)
+            self.assertFalse((root / ARCHIVE_NAME).exists())
 
 
 if __name__ == "__main__":

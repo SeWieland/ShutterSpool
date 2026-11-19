@@ -40,7 +40,7 @@ class CameraFtpClientChecks(unittest.TestCase):
             client.prot_p.assert_called_once_with()
 
     def test_connection_address_does_not_replace_certificate_hostname(self):
-        with mock.patch.object(ftplib, 'FTP_TLS') as factory:
+        with mock.patch.object(ftplib, 'FTP_TLS'):
             client = camera_ftp.connect_camera_ftp({'ftp': {'address': '127.0.0.1', 'port': 2131}}, {'username': 'synthetic', 'secret': 'synthetic'})
             client.connect.assert_called_once_with('127.0.0.1', 2131, timeout=90)
             self.assertEqual('ingest.shutterspool.com', client.host)
@@ -54,7 +54,7 @@ class CameraFtpClientChecks(unittest.TestCase):
             plaintext.assert_not_called()
 
     def test_plaintext_requires_explicit_compatibility_mode(self):
-        with mock.patch.object(ftplib, 'FTP') as factory, mock.patch.object(ftplib, 'FTP_TLS') as secure:
+        with mock.patch.object(ftplib, 'FTP'), mock.patch.object(ftplib, 'FTP_TLS') as secure:
             client = camera_ftp.connect_camera_ftp({'ftp': {'mode': 'PlainFtpLan'}}, {'username': 'synthetic', 'secret': 'synthetic'})
             client.login.assert_called_once_with('synthetic', 'synthetic')
             secure.assert_not_called()

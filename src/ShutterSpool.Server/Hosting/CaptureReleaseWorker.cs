@@ -3,7 +3,7 @@ using ShutterSpool.Server.Api.Live;
 
 namespace ShutterSpool.Server.Hosting;
 
-internal sealed class CaptureReleaseWorker(IServiceScopeFactory scopes, TimeProvider clock,
+internal sealed partial class CaptureReleaseWorker(IServiceScopeFactory scopes, TimeProvider clock,
     ILogger<CaptureReleaseWorker> logger) : BackgroundService
 {
     private readonly WorkspaceWorkerCursor tenants = new(scopes);
@@ -28,12 +28,15 @@ internal sealed class CaptureReleaseWorker(IServiceScopeFactory scopes, TimeProv
             {
                 break;
             }
-            catch (Exception)
+            catch (Exception exception)
             {
-                logger.LogWarning("Capture release pass failed; retrying.");
+                LogCaptureReleaseFailure(logger, exception.GetType().Name);
             }
 
             if (!processed) await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
         }
     }
+
+    [LoggerMessage(EventId = 4002, Level = LogLevel.Warning, Message = "Capture release pass failed ({ExceptionType}). Retrying.")]
+    private static partial void LogCaptureReleaseFailure(ILogger logger, string exceptionType);
 }

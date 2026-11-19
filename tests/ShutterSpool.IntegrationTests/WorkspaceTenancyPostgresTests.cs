@@ -33,7 +33,7 @@ public sealed partial class WorkspaceTenancyPostgresTests
         Guid commonOperation = Guid.NewGuid();
         foreach (WorkspaceDefinition workspace in await fixture.RegistryAsync())
         {
-            await using AsyncServiceScope scope = fixture.Scope(provider, workspace);
+            await using AsyncServiceScope scope = WorkspaceFixture.Scope(provider, workspace);
             ShutterSpoolDbContext database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
             database.Sources.Add(new SourceEntity { Id = commonSource, Name = "Same name" });
             await database.SaveChangesAsync(token);
@@ -56,7 +56,7 @@ public sealed partial class WorkspaceTenancyPostgresTests
                 current with { IsActive = false }, token));
         }
         WorkspaceDefinition first = (await fixture.RegistryAsync())[0];
-        await using (AsyncServiceScope scope = fixture.Scope(provider, first))
+        await using (AsyncServiceScope scope = WorkspaceFixture.Scope(provider, first))
         {
             var database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
             AuthorizationGrant owner = await database.AuthorizationGrants.SingleAsync(token);
@@ -64,7 +64,7 @@ public sealed partial class WorkspaceTenancyPostgresTests
             await database.SaveChangesAsync(token);
         }
         await provider.InitializeShutterSpoolAsync(fixture.Configuration, token);
-        await using (AsyncServiceScope scope = fixture.Scope(provider, first))
+        await using (AsyncServiceScope scope = WorkspaceFixture.Scope(provider, first))
             Assert.False(await scope.ServiceProvider.GetRequiredService<AccessGrantService>()
                 .IsAllowedAsync("https://identity.example", first.Name, token));
         await using (AsyncServiceScope unselected = provider.CreateAsyncScope())
@@ -102,7 +102,7 @@ public sealed partial class WorkspaceTenancyPostgresTests
         Guid[] ids = [Guid.NewGuid(), Guid.NewGuid()];
         for (int index = 0; index < workspaces.Length; index++)
         {
-            await using AsyncServiceScope scope = fixture.Scope(provider, workspaces[index]);
+            await using AsyncServiceScope scope = WorkspaceFixture.Scope(provider, workspaces[index]);
             var source = new SourceProvisioning(ids[index], "Same name", SourceCurationMode.Delay, 60, "shared-wire-login",
                 $"sources/{ids[index]:N}", [1, 2, 3], SourceType.CameraFtpUpload, SourceConnectionProfile.ModernFtps,
                 ShutterSpool.Domain.Collections.CollectionName.BuiltInId);
@@ -131,7 +131,7 @@ public sealed partial class WorkspaceTenancyPostgresTests
         await using ServiceProvider provider = fixture.Services();
         await provider.InitializeShutterSpoolAsync(fixture.Configuration, TestContext.Current.CancellationToken);
         WorkspaceDefinition[] workspaces = await fixture.RegistryAsync();
-        await using AsyncServiceScope scope = fixture.Scope(provider, workspaces[0]);
+        await using AsyncServiceScope scope = WorkspaceFixture.Scope(provider, workspaces[0]);
         var context = scope.ServiceProvider.GetRequiredService<WorkspaceContext>();
         var quota = scope.ServiceProvider.GetRequiredService<ISpoolQuotaStore>();
         await using (SeekableMedia copy = await SeekableMediaStream.OpenAsync(new Nonseekable([7, 8, 9]), 3, 3, context, quota,
@@ -153,14 +153,14 @@ public sealed partial class WorkspaceTenancyPostgresTests
         CancellationToken token = TestContext.Current.CancellationToken;
         await WorkspaceOperator.RunAsync(["--workspace-control-init"], fixture.Configuration, token);
         string original = fixture.Connection(0)!;
-        fixture.Configuration[fixture.ConnectionKey(0)] = new NpgsqlConnectionStringBuilder(original) { Password = Guid.NewGuid().ToString("N") }.ConnectionString;
+        fixture.Configuration[WorkspaceFixture.ConnectionKey(0)] = new NpgsqlConnectionStringBuilder(original) { Password = Guid.NewGuid().ToString("N") }.ConnectionString;
         await Assert.ThrowsAsync<PostgresException>(() => fixture.ProvisionWorkspaceAsync(0));
         Assert.Empty(await fixture.RegistryAsync());
-        string ownerKey = $"ShutterSpool:Workspaces:Definitions:{fixture.WorkspaceName(0)}:OwnerSubject";
+        string ownerKey = $"ShutterSpool:Workspaces:Definitions:{WorkspaceFixture.WorkspaceName(0)}:OwnerSubject";
         fixture.Configuration[ownerKey] = "different-owner";
         await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => fixture.ProvisionWorkspaceAsync(0));
         fixture.Configuration[ownerKey] = "studio0";
-        fixture.Configuration[fixture.ConnectionKey(0)] = original;
+        fixture.Configuration[WorkspaceFixture.ConnectionKey(0)] = original;
         await fixture.ProvisionAsync();
         await fixture.ProvisionAsync();
         await using var database = fixture.MigrationDatabase(0);
@@ -192,7 +192,7 @@ public sealed partial class WorkspaceTenancyPostgresTests
         Assert.Equal(workspace.StorageRoot, changed.StorageRoot);
         await using ServiceProvider restarted = fixture.Services();
         await restarted.InitializeShutterSpoolAsync(fixture.Configuration, TestContext.Current.CancellationToken);
-        await using AsyncServiceScope scope = fixture.Scope(restarted, changed);
+        await using AsyncServiceScope scope = WorkspaceFixture.Scope(restarted, changed);
         Assert.Equal(1_000_000, (await scope.ServiceProvider.GetRequiredService<ISpoolQuotaStore>().GetSettingsAsync(TestContext.Current.CancellationToken)).QuotaBytes);
     }
 
@@ -200,7 +200,7 @@ public sealed partial class WorkspaceTenancyPostgresTests
     public async Task Existing_unowned_storage_is_preserved_and_never_attached_by_provisioning()
     {
         await using var fixture = await WorkspaceFixture.CreateAsync();
-        string root = fixture.Configuration[$"ShutterSpool:Workspaces:Definitions:{fixture.WorkspaceName(0)}:StorageRoot"]!;
+        string root = fixture.Configuration[$"ShutterSpool:Workspaces:Definitions:{WorkspaceFixture.WorkspaceName(0)}:StorageRoot"]!;
         string original = Path.Combine(root, "unmanaged-original.jpg");
         await File.WriteAllBytesAsync(original, [1, 9, 8], TestContext.Current.CancellationToken);
         await Assert.ThrowsAsync<WorkspaceOperator.RefusedException>(() => fixture.ProvisionAsync());
@@ -217,7 +217,7 @@ public sealed partial class WorkspaceTenancyPostgresTests
         fixture.Configuration["ShutterSpool:Workspaces:UsableCapacityBytes"] = "20000000";
         fixture.Configuration["ShutterSpool:Preview:CacheMode"] = mode;
         for (int index = 0; index < 2; index++)
-            fixture.Configuration[$"ShutterSpool:Workspaces:Definitions:{fixture.WorkspaceName(index)}:AllocatedBytes"] = "10000000";
+            fixture.Configuration[$"ShutterSpool:Workspaces:Definitions:{WorkspaceFixture.WorkspaceName(index)}:AllocatedBytes"] = "10000000";
         await fixture.ProvisionAsync();
         await using ServiceProvider provider = fixture.Services();
         await provider.InitializeShutterSpoolAsync(fixture.Configuration, TestContext.Current.CancellationToken);
@@ -229,23 +229,23 @@ public sealed partial class WorkspaceTenancyPostgresTests
         byte[][] expected = [first, second];
         for (int index = 0; index < 2; index++)
         {
-            await using AsyncServiceScope scope = fixture.Scope(provider, workspaces[index]);
+            await using AsyncServiceScope scope = WorkspaceFixture.Scope(provider, workspaces[index]);
             Assert.True(await scope.ServiceProvider.GetRequiredService<IPreviewCache>().WriteAsync(key, expected[index], TestContext.Current.CancellationToken));
         }
         for (int index = 0; index < 2; index++)
         {
-            await using AsyncServiceScope scope = fixture.Scope(provider, workspaces[index]);
+            await using AsyncServiceScope scope = WorkspaceFixture.Scope(provider, workspaces[index]);
             Assert.Equal(expected[index], await scope.ServiceProvider.GetRequiredService<IPreviewCache>().ReadAsync(key, new(480, 480), TestContext.Current.CancellationToken));
         }
-        await using (AsyncServiceScope lost = fixture.Scope(provider, workspaces[0]))
+        await using (AsyncServiceScope lost = WorkspaceFixture.Scope(provider, workspaces[0]))
             await lost.ServiceProvider.GetRequiredService<IPreviewAssetCacheInvalidator>().RemoveAssetAsync(asset, TestContext.Current.CancellationToken);
-        await using (AsyncServiceScope recreate = fixture.Scope(provider, workspaces[0]))
+        await using (AsyncServiceScope recreate = WorkspaceFixture.Scope(provider, workspaces[0]))
         {
             IPreviewCache cache = recreate.ServiceProvider.GetRequiredService<IPreviewCache>();
             Assert.Null(await cache.ReadAsync(key, new(480, 480), TestContext.Current.CancellationToken));
             Assert.True(await cache.WriteAsync(key, first, TestContext.Current.CancellationToken));
         }
-        await using AsyncServiceScope other = fixture.Scope(provider, workspaces[1]);
+        await using AsyncServiceScope other = WorkspaceFixture.Scope(provider, workspaces[1]);
         Assert.Equal(second, await other.ServiceProvider.GetRequiredService<IPreviewCache>().ReadAsync(key, new(480, 480), TestContext.Current.CancellationToken));
     }
 
@@ -258,8 +258,8 @@ public sealed partial class WorkspaceTenancyPostgresTests
         await using (ServiceProvider provider = fixture.Services())
         {
             await provider.InitializeShutterSpoolAsync(fixture.Configuration, TestContext.Current.CancellationToken);
-            fixture.Configuration[fixture.ConnectionKey(0)] = fixture.Connection(1);
-            await using AsyncServiceScope unchanged = fixture.Scope(provider, workspaces[0]);
+            fixture.Configuration[WorkspaceFixture.ConnectionKey(0)] = fixture.Connection(1);
+            await using AsyncServiceScope unchanged = WorkspaceFixture.Scope(provider, workspaces[0]);
             var database = unchanged.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
             Assert.Equal(workspaces[0].Id, (await database.WorkspaceIdentities.SingleAsync(TestContext.Current.CancellationToken)).Id);
         }
@@ -278,7 +278,7 @@ public sealed partial class WorkspaceTenancyPostgresTests
         try
         {
             fixture.Configuration[$"ShutterSpool:Workspaces:Definitions:{original[0].Name}:StorageRoot"] = restored;
-            foreach (string key in new[] { "ConnectionStrings:shutterspool-control", fixture.ConnectionKey(0), fixture.ConnectionKey(1) })
+            foreach (string key in new[] { "ConnectionStrings:shutterspool-control", WorkspaceFixture.ConnectionKey(0), WorkspaceFixture.ConnectionKey(1) })
                 fixture.Configuration[key] = new NpgsqlConnectionStringBuilder(fixture.Configuration[key]) { Host = "localhost" }.ConnectionString;
             await using (ServiceProvider restarted = fixture.Services())
             {
@@ -287,7 +287,7 @@ public sealed partial class WorkspaceTenancyPostgresTests
                 WorkspaceDefinition relocated = (await control.ServiceProvider.GetRequiredService<IWorkspaceRegistry>().ListReadyAsync(TestContext.Current.CancellationToken))[0];
                 Assert.Equal(original[0].Id, relocated.Id);
                 Assert.Equal(restored, relocated.StorageRoot);
-                await using var tenant = fixture.Scope(restarted, relocated);
+                await using var tenant = WorkspaceFixture.Scope(restarted, relocated);
                 ShutterSpoolDbContext database = tenant.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
                 Assert.Equal("localhost", new NpgsqlConnectionStringBuilder(database.Database.GetConnectionString()).Host);
                 Assert.Equal(original[0].Id, (await database.WorkspaceIdentities.SingleAsync(TestContext.Current.CancellationToken)).Id);
@@ -318,8 +318,8 @@ public sealed partial class WorkspaceTenancyPostgresTests
         await using ServiceProvider provider = fixture.Services();
         await provider.InitializeShutterSpoolAsync(fixture.Configuration, TestContext.Current.CancellationToken);
         WorkspaceDefinition[] workspaces = await fixture.RegistryAsync();
-        await using AsyncServiceScope first = fixture.Scope(provider, workspaces[0]);
-        await using AsyncServiceScope second = fixture.Scope(provider, workspaces[1]);
+        await using AsyncServiceScope first = WorkspaceFixture.Scope(provider, workspaces[0]);
+        await using AsyncServiceScope second = WorkspaceFixture.Scope(provider, workspaces[1]);
         ISpoolQuotaStore a = first.ServiceProvider.GetRequiredService<ISpoolQuotaStore>();
         ISpoolQuotaStore b = second.ServiceProvider.GetRequiredService<ISpoolQuotaStore>();
         bool[] admitted = await Task.WhenAll(
@@ -343,7 +343,7 @@ public sealed partial class WorkspaceTenancyPostgresTests
         byte[] jpeg = [0xff, 0xd8, 0xff, 0xe0, 0, 2, 0xff, 0xd9];
         for (int index = 0; index < 2; index++)
         {
-            await using AsyncServiceScope scope = fixture.Scope(provider, workspaces[index]);
+            await using AsyncServiceScope scope = WorkspaceFixture.Scope(provider, workspaces[index]);
             var database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
             database.Sources.Add(new() { Id = sourceId, Name = "Synthetic worker camera" });
             await database.SaveChangesAsync(TestContext.Current.CancellationToken);
@@ -354,10 +354,10 @@ public sealed partial class WorkspaceTenancyPostgresTests
         await RunUntilAsync(workspaces[1], 1);
         int processedA = await CompletedAsync(workspaces[0], TestContext.Current.CancellationToken);
         Assert.InRange(processedA, 1, 11);
-        await using (AsyncServiceScope scope = fixture.Scope(provider, workspaces[1]))
+        await using (AsyncServiceScope scope = WorkspaceFixture.Scope(provider, workspaces[1]))
             await scope.ServiceProvider.GetRequiredService<IngestService>().AcceptAsync(new(sourceId, "second.jpg",
                 new MemoryStream(jpeg), jpeg.Length), TestContext.Current.CancellationToken);
-        string connectionKey = fixture.ConnectionKey(0);
+        string connectionKey = WorkspaceFixture.ConnectionKey(0);
         string original = fixture.Configuration[connectionKey]!;
         await fixture.SetDatabaseAvailableAsync(1, false);
         try { await RunUntilAsync(workspaces[1], 2); }
@@ -365,7 +365,7 @@ public sealed partial class WorkspaceTenancyPostgresTests
         await RunUntilAsync(workspaces[0], processedA + 1);
         for (int index = 0; index < 2; index++)
         {
-            await using AsyncServiceScope scope = fixture.Scope(provider, workspaces[index]);
+            await using AsyncServiceScope scope = WorkspaceFixture.Scope(provider, workspaces[index]);
             AssetEntity[] originals = await scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>().Assets.ToArrayAsync(TestContext.Current.CancellationToken);
             Assert.Equal(index == 0 ? 12 : 2, originals.Length);
             Assert.All(originals, asset => { Assert.Equal(sourceId, asset.SourceId); Assert.Equal("Spooled", asset.State); });
@@ -373,7 +373,7 @@ public sealed partial class WorkspaceTenancyPostgresTests
 
         async Task<int> CompletedAsync(WorkspaceDefinition workspace, CancellationToken token)
         {
-            await using AsyncServiceScope scope = fixture.Scope(provider, workspace);
+            await using AsyncServiceScope scope = WorkspaceFixture.Scope(provider, workspace);
             return await scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>().Assets.CountAsync(asset => asset.MetadataState == "Partial", token);
         }
         async Task RunUntilAsync(WorkspaceDefinition watched, int count)
@@ -439,7 +439,7 @@ public sealed partial class WorkspaceTenancyPostgresTests
                 var fixture = new WorkspaceFixture([.. databases], roles, admin, new ConfigurationBuilder().AddInMemoryCollection(values).Build());
                 for (int index = 0; index < workspaceCount; index++)
                 {
-                    string prefix = $"ShutterSpool:Workspaces:Definitions:{fixture.WorkspaceName(index)}:";
+                    string prefix = $"ShutterSpool:Workspaces:Definitions:{WorkspaceFixture.WorkspaceName(index)}:";
                     fixture.Configuration[prefix + "StorageRoot"] = databases[index + 1].SpoolRoot;
                     fixture.Configuration[prefix + "AllocatedBytes"] = "1000000";
                     fixture.Configuration[prefix + "OwnerIssuer"] = "https://identity.example";
@@ -481,8 +481,8 @@ public sealed partial class WorkspaceTenancyPostgresTests
                 await WorkspaceOperator.RunAsync(["--workspace-provision", WorkspaceName(index)], Configuration, TestContext.Current.CancellationToken);
         }
         public ArchitectureTestDatabase Database(int index) => databases[index + 1];
-        public string WorkspaceName(int index) => "studio" + index;
-        public string ConnectionKey(int index) => $"ConnectionStrings:Workspaces:{WorkspaceName(index)}:Runtime";
+        public static string WorkspaceName(int index) => "studio" + index;
+        public static string ConnectionKey(int index) => $"ConnectionStrings:Workspaces:{WorkspaceName(index)}:Runtime";
         public string Connection(int index) => Configuration[ConnectionKey(index)]!;
         public Task ProvisionWorkspaceAsync(int index) => WorkspaceOperator.RunAsync(["--workspace-provision", WorkspaceName(index)], Configuration, TestContext.Current.CancellationToken);
         public async Task<WorkspaceDefinition[]> RegistryAsync()
@@ -492,7 +492,7 @@ public sealed partial class WorkspaceTenancyPostgresTests
             return await scope.ServiceProvider.GetRequiredService<IWorkspaceRegistry>().ListReadyAsync(TestContext.Current.CancellationToken);
         }
         public ServiceProvider Services() => new ServiceCollection().AddLogging().AddShutterSpoolInfrastructure(Configuration).BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
-        public AsyncServiceScope Scope(IServiceProvider provider, WorkspaceDefinition workspace)
+        public static AsyncServiceScope Scope(IServiceProvider provider, WorkspaceDefinition workspace)
         { AsyncServiceScope scope = provider.CreateAsyncScope(); scope.ServiceProvider.GetRequiredService<WorkspaceContext>().Bind(workspace); return scope; }
         public ShutterSpoolDbContext MigrationDatabase(int index) => new(databases[index + 1].Options);
         public async Task SetDatabaseAvailableAsync(int index, bool available)

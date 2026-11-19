@@ -57,6 +57,8 @@ internal sealed class CameraHookEndpointMetadata;
 
 internal static class CameraIngressEndpoints
 {
+    private const string PatchMethod = "PATCH";
+
     public static void MapCameraIngressEndpoints(this WebApplication app, CameraIngressSettings settings)
     {
         if (!settings.Enabled) return;
@@ -69,7 +71,7 @@ internal static class CameraIngressEndpoints
         group.MapPost("/plain-auth", (SftpGoAuthRequest request, CameraIngressService ingress, CameraIngressSettings options, ILogger<CameraIngressService> logger,
             CancellationToken token) => AuthenticateAsync(request, ingress, options, logger, SourceConnectionProfile.PlainFtpLan, token));
         group.MapPost("/hook", HookAsync).WithMetadata(new CameraHookEndpointMetadata());
-        group.MapMethods("/fs/{loginId:guid}/{operation}/{**path}", ["GET", "POST", "DELETE", "PATCH"], FileSystemAsync);
+        group.MapMethods("/fs/{loginId:guid}/{operation}/{**path}", ["GET", "POST", "DELETE", PatchMethod], FileSystemAsync);
 
         app.MapGet("/management/ingress/transfers", async (CameraIngressService ingress, CancellationToken token) =>
                 Results.Ok((await ingress.GetStatusAsync(null, token)).Select(item =>
@@ -157,18 +159,7 @@ internal static class CameraIngressEndpoints
             switch (context.Request.Method, operation)
             {
                 case ("POST", "create"):
-                    if (!int.TryParse(context.Request.Query["flags"], NumberStyles.None, CultureInfo.InvariantCulture, out int flags))
-                        return Results.StatusCode(403);
-                    if (flags != SftpGoOpenFlags.UploadOverwrite) return Results.StatusCode(403);
-                    IHttpMaxRequestBodySizeFeature? bodyLimit = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
-                    if (bodyLimit?.IsReadOnly == true) return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
-                    if (bodyLimit is not null) bodyLimit.MaxRequestBodySize = settings.MaximumUploadBytes;
-                    using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
-                    {
-                        deadline.CancelAfter(TimeSpan.FromSeconds(settings.TransferTimeoutSeconds));
-                        await ingress.ReceiveAsync(loginId, path, context.Request.Body, settings.MaximumUploadBytes, deadline.Token);
-                    }
-                    return Results.Ok();
+                    return await ReceiveAdmittedUploadAsync(context, loginId, path, ingress, settings, cancellationToken);
                 case ("POST", "mkdir"):
                     await ingress.CreateDirectoryAsync(loginId, path, cancellationToken);
                     return Results.Ok();
@@ -184,10 +175,10 @@ internal static class CameraIngressEndpoints
                     return Results.Json(new SftpGoDirSizeResponse(files, size));
                 case ("GET", "open"):
                 case ("DELETE", "remove"):
-                case ("PATCH", "rename"):
-                case ("PATCH", "chmod"):
-                case ("PATCH", "chtimes"):
-                case ("PATCH", "truncate"):
+                case (PatchMethod, "rename"):
+                case (PatchMethod, "chmod"):
+                case (PatchMethod, "chtimes"):
+                case (PatchMethod, "truncate"):
                     return Results.StatusCode(StatusCodes.Status403Forbidden);
                 default:
                     return Results.StatusCode(StatusCodes.Status501NotImplemented);
@@ -198,6 +189,21 @@ internal static class CameraIngressEndpoints
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return Results.StatusCode(StatusCodes.Status408RequestTimeout); }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { return Results.StatusCode(500); }
         catch (Exception) { return Results.StatusCode(500); }
+    }
+
+    private static async Task<IResult> ReceiveAdmittedUploadAsync(HttpContext context, Guid loginId, string path,
+        CameraIngressService ingress, CameraIngressSettings settings, CancellationToken cancellationToken)
+    {
+        if (!int.TryParse(context.Request.Query["flags"], NumberStyles.None, CultureInfo.InvariantCulture, out int flags)
+            || flags != SftpGoOpenFlags.UploadOverwrite) return Results.StatusCode(403);
+
+        IHttpMaxRequestBodySizeFeature? bodyLimit = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
+        if (bodyLimit?.IsReadOnly == true) return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+        if (bodyLimit is not null) bodyLimit.MaxRequestBodySize = settings.MaximumUploadBytes;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(settings.TransferTimeoutSeconds));
+        await ingress.ReceiveAsync(loginId, path, context.Request.Body, settings.MaximumUploadBytes, deadline.Token);
+        return Results.Ok();
     }
 
     private static SftpGoStatResponse ToStat(CameraFileInfo info)
@@ -219,7 +225,7 @@ internal static class CameraIngressEndpoints
 
     internal static bool TryLoginId(string? endpoint, CameraIngressSettings settings, out Guid loginId)
     {
-        loginId = default;
+        loginId = Guid.Empty;
         if (!Uri.TryCreate(endpoint, UriKind.Absolute, out Uri? actual)
             || !Uri.TryCreate($"{settings.CallbackBaseUrl.TrimEnd('/')}/fs/", UriKind.Absolute, out Uri? root)
             || !string.Equals(actual.Scheme, root.Scheme, StringComparison.OrdinalIgnoreCase)

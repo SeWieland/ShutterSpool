@@ -54,7 +54,10 @@ internal sealed class WebDavEgressPolicy
         foreach (IPAddress address in addresses)
         {
             try { return await _connect(new IPEndPoint(address, endpoint.Port), token); }
-            catch (SocketException) when (!token.IsCancellationRequested) { }
+            catch (SocketException) when (!token.IsCancellationRequested)
+            {
+                // Try the next address from the already approved DNS response.
+            }
         }
         throw new HttpRequestException("The destination network connection failed.");
     }

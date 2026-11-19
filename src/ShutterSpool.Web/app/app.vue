@@ -2,20 +2,20 @@
 import {
     session,
     accessMessage,
+    onAccessLost,
     signIn,
     signOut,
     restoreSession,
     restoring,
 } from "./lib/session";
-import { onAccessLost } from './lib/session';
-import { pageWorkspaceId, bindInitialWorkspace, workspaceSelection, withWorkspace, type WorkspaceMembership } from './lib/workspace-context';
+import { getPageWorkspaceId, bindInitialWorkspace, workspaceSelection, withWorkspace, type WorkspaceMembership } from './lib/workspace-context';
 import { workspaceAccess, workspaceAccessVersion, workspaceAccessError, workspaceRevoked, refreshWorkspaceAccess, discardWorkspacePrivateState } from './lib/workspace-access';
 const route = useRoute();
 const router = useRouter();
 const { sftpgo } = useAppConfig();
 const workspace = ref<{ requestDeparture: () => boolean } | null>(null);
 const memberships = shallowRef<WorkspaceMembership[]>([]);
-const selectedWorkspaceId = shallowRef(pageWorkspaceId ?? '');
+const selectedWorkspaceId = shallowRef(getPageWorkspaceId() ?? '');
 const workspaceIncomplete = shallowRef(false);
 const hasDiscovery = shallowRef(false);
 const discoveryBusy = shallowRef(false);
@@ -33,10 +33,10 @@ let discoveryController: AbortController | undefined;
 const activeWorkspaceSelection = computed(() => hasDiscovery.value ? workspaceSelection(
     memberships.value,
     workspaceIncomplete.value,
-    pageWorkspaceId,
+    getPageWorkspaceId(),
 ) : { state: 'loading' } as const);
 const hasSelectedWorkspace = computed(() => activeWorkspaceSelection.value.state === 'selected' &&
-    activeWorkspaceSelection.value.workspace.id === pageWorkspaceId);
+    activeWorkspaceSelection.value.workspace.id === getPageWorkspaceId());
 const canMountOperationalWorkspace = computed(() => hasSelectedWorkspace.value && !!workspaceAccess.value);
 const activeWorkspace = computed(() => activeWorkspaceSelection.value.state === 'selected'
     ? activeWorkspaceSelection.value.workspace
@@ -58,7 +58,7 @@ function openInvitations() {
     invitationsVisible.value = true;
 }
 function joinedWorkspace(id: string) {
-    if (pageWorkspaceId === id && canMountOperationalWorkspace.value) invitationsVisible.value = false;
+    if (getPageWorkspaceId() === id && canMountOperationalWorkspace.value) invitationsVisible.value = false;
     else {
         if (workspace.value?.requestDeparture() === false) return;
         window.location.assign(withWorkspace('/', id));
@@ -88,9 +88,10 @@ async function loadMemberships() {
         const items = validMemberships(result?.items);
         if (typeof result?.incomplete !== 'boolean')
             throw new Error('Workspace membership response is invalid.');
-        if (bindInitialWorkspace(items, result.incomplete) ||
-            pageWorkspaceId && !hasDiscovery.value && route.query.workspace !== pageWorkspaceId) {
-            const failure = await router.replace(withWorkspace(route.fullPath, pageWorkspaceId));
+        const bound = bindInitialWorkspace(items, result.incomplete);
+        const workspaceId = getPageWorkspaceId();
+        if (bound || workspaceId && !hasDiscovery.value && route.query.workspace !== workspaceId) {
+            const failure = await router.replace(withWorkspace(route.fullPath, workspaceId));
             controller.signal.throwIfAborted();
             if (current !== discoverySequence) return;
             if (failure) throw new Error('Workspace selection could not be opened.');
@@ -98,7 +99,7 @@ async function loadMemberships() {
         memberships.value = items;
         workspaceIncomplete.value = result.incomplete;
         hasDiscovery.value = true;
-        selectedWorkspaceId.value = items.some(item => item.id === pageWorkspaceId) ? pageWorkspaceId! : '';
+        selectedWorkspaceId.value = items.find(item => item.id === getPageWorkspaceId())?.id ?? '';
         if (hasSelectedWorkspace.value) await refreshWorkspaceAccess();
     } catch (error) {
         if (current !== discoverySequence || controller.signal.aborted) return;
@@ -114,7 +115,7 @@ function chooseWorkspace() {
     window.location.assign(withWorkspace('/', selectedWorkspaceId.value));
 }
 function switchWorkspace(next: string) {
-    if (!next || next === pageWorkspaceId || !memberships.value.some(item => item.id === next)) return;
+    if (!next || next === getPageWorkspaceId() || !memberships.value.some(item => item.id === next)) return;
     if (workspace.value?.requestDeparture() === false) return;
     window.location.assign(withWorkspace('/', next));
 }
@@ -128,7 +129,7 @@ const stopWatchingSession = watch([session, () => route.path], ([value]) => {
         hasDiscovery.value = false;
         discoveryBusy.value = false;
         discoveryError.value = false;
-        selectedWorkspaceId.value = pageWorkspaceId ?? '';
+        selectedWorkspaceId.value = getPageWorkspaceId() ?? '';
         invitationsVisible.value = false;
         invitationCount.value = undefined;
         profileOpen.value = false;
@@ -168,7 +169,7 @@ onUnmounted(() => { clearInterval(accessTimer); discoveryController?.abort(); st
         ><div class="app-shell">
             <ApertureBackground v-if="!session && !route.path.startsWith('/auth/')" view="Sources" :motion-enabled="signInVisible" :hidden="false" continuous />
             <header class="app-header">
-                <NuxtLink :to="withWorkspace('/', pageWorkspaceId)" class="brand"
+                <NuxtLink :to="withWorkspace('/', getPageWorkspaceId())" class="brand"
                     ><img
                         src="/shutter-color.png"
                         alt=""
@@ -240,8 +241,8 @@ onUnmounted(() => { clearInterval(accessTimer); discoveryController?.abort(); st
                 <UButton :disabled="discoveryBusy" @click="loadMemberships">{{ discoveryBusy ? 'Checking…' : 'Retry' }}</UButton>
             </section>
             <section v-else-if="activeWorkspaceSelection.state === 'incomplete'" class="empty" role="alert">
-                <h1>{{ pageWorkspaceId !== null ? 'Workspace access could not be confirmed' : 'Workspace memberships could not be checked' }}</h1>
-                <p>{{ pageWorkspaceId !== null ? 'Retry to check this workspace again. No other workspace has been opened.' : 'No workspace was confirmed in this incomplete check. Retry to continue.' }}</p>
+                <h1>{{ getPageWorkspaceId() !== null ? 'Workspace access could not be confirmed' : 'Workspace memberships could not be checked' }}</h1>
+                <p>{{ getPageWorkspaceId() !== null ? 'Retry to check this workspace again. No other workspace has been opened.' : 'No workspace was confirmed in this incomplete check. Retry to continue.' }}</p>
                 <UButton :disabled="discoveryBusy" @click="loadMemberships">{{ discoveryBusy ? 'Checking…' : 'Retry' }}</UButton>
                 <form v-if="memberships.length" class="workspace-choice" @submit.prevent="chooseWorkspace">
                     <label for="workspace-choice-incomplete">Or choose a listed workspace</label>

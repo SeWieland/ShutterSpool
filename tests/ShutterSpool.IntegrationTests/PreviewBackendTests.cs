@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using ShutterSpool.Application.Preview;
+using ShutterSpool.Application.Retention;
 using ShutterSpool.Application.Spool;
 using ShutterSpool.Infrastructure.Preview;
 
@@ -38,6 +40,65 @@ public sealed class PreviewBackendTests
         finally
         {
             if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Cancelling_a_contended_disk_lock_allows_the_next_cache_operation()
+    {
+        string root = Directory.CreateTempSubdirectory("shutterspool-preview-").FullName;
+        try
+        {
+            var cache = new FileSystemPreviewCache(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ShutterSpool:Preview:CacheRootPath"] = root,
+            }).Build());
+            string key = $"{Guid.NewGuid():N}/{Guid.NewGuid():N}/grid-480x480.webp";
+            using var caller = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+            await using (File.Open(Path.Combine(root, ".shutterspool-preview-cache.lock"), FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
+            {
+                Task<bool> write = cache.WriteAsync(key, [1], caller.Token);
+                Assert.False(write.IsCompleted);
+                caller.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => write);
+            }
+
+            Assert.True(await cache.WriteAsync(key, [1], TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task A_declined_preview_does_not_dispose_its_quota_scope_twice_if_disposal_fails()
+    {
+        DirectoryInfo root = Directory.CreateTempSubdirectory("shutterspool-preview-");
+        try
+        {
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ShutterSpool:Preview:CacheRootPath"] = root.FullName,
+            }).Build();
+            var quota = new DecliningPreviewQuota();
+            using var services = new ServiceCollection().AddSingleton<ISpoolQuotaStore>(quota).BuildServiceProvider();
+            var failure = new InvalidOperationException("Synthetic quota scope disposal failure.");
+            var scope = new ThrowingQuotaScope(services, failure);
+            var cache = new FileSystemPreviewCache(config, scope);
+            string key = $"{Guid.NewGuid():N}/{Guid.NewGuid():N}/grid-480x480.webp";
+
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                cache.WriteAsync(key, [1], TestContext.Current.CancellationToken));
+
+            Assert.Same(failure, error);
+            Assert.Equal(1, quota.ReservationAttempts);
+            Assert.Equal(1, scope.Disposals);
+            Assert.False(File.Exists(Path.Combine(root.FullName, key)));
+        }
+        finally
+        {
+            root.Delete(recursive: true);
         }
     }
 
@@ -286,6 +347,48 @@ public sealed class PreviewBackendTests
     private static byte[] JpegHeader(ushort width, ushort height) =>
         [0xff, 0xd8, 0xff, 0xc0, 0, 17, 8, (byte)(height >> 8), (byte)height, (byte)(width >> 8), (byte)width,
             3, 1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0, 0xff, 0xd9];
+
+    private sealed class ThrowingQuotaScope(IServiceProvider provider, InvalidOperationException failure)
+        : IServiceScopeFactory, IServiceScope
+    {
+        public IServiceProvider ServiceProvider => provider;
+        public int Disposals { get; private set; }
+        public IServiceScope CreateScope() => this;
+
+        public void Dispose()
+        {
+            Disposals++;
+            throw failure;
+        }
+    }
+
+    private sealed class DecliningPreviewQuota : ISpoolQuotaStore
+    {
+        public int ReservationAttempts { get; private set; }
+
+        public Task<SpoolQuotaSettings> GetSettingsAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new SpoolQuotaSettings(IsActive: true, QuotaBytes: 1024, HighWatermarkBytes: 896, RecoveryTargetBytes: 512));
+
+        public Task<bool> TryReserveAsync(SpoolQuotaReservation reservation, CancellationToken cancellationToken)
+        {
+            ReservationAttempts++;
+            return Task.FromResult(false);
+        }
+
+        public Task<SpoolQuotaSnapshot> GetSnapshotAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<SpoolQuotaSettings?> StageSettingsUpdateAsync(int expectedRevision, SpoolQuotaSettings settings,
+            bool authorizeStorageMarkerAdoption, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<SpoolQuotaSettings?> UpdateSettingsAsync(int expectedRevision, SpoolQuotaSettings settings,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<bool> UpdateReservationAsync(Guid operationId, Guid? assetId, IReadOnlyList<string> spoolKeys,
+            long reservedBytes, long writtenBytes, long filesystemReservedBytes, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+        public Task<bool> MarkReservationRetainedAsync(Guid operationId, long actualBytes, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+        public Task ReleaseUnadmittedReservationAsync(Guid operationId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task ReleaseReservationAsync(Guid operationId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task ReconcileReservationsAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
 
     private sealed class MemoryOriginal(byte[] bytes) : ICommittedOriginalReader
     {

@@ -35,21 +35,7 @@ internal static class LocalDirectoryBrowser
                 && (currentAttributes & (FileAttributes.Hidden | FileAttributes.System)) != 0)
                 return new(null, "The directory does not exist or cannot be read.");
 
-            List<LocalDirectoryEntry> entries = [];
-            string[] children = Directory.EnumerateDirectories(fullPath).Take(MaximumEntries + 1).ToArray();
-            bool truncated = children.Length > MaximumEntries;
-            foreach (string child in children.Take(MaximumEntries))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                FileAttributes attributes = File.GetAttributes(child);
-                if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint | FileAttributes.Hidden | FileAttributes.System))
-                    != FileAttributes.Directory) continue;
-                entries.Add(new(Path.GetFileName(child), Path.GetFullPath(child)));
-            }
-            entries.Sort((left, right) => StringComparer.OrdinalIgnoreCase.Compare(left.Name, right.Name));
-            string? parent = Directory.GetParent(fullPath)?.FullName;
-            if (assignedRoot is not null && parent is not null && !WithinRoot(parent, assignedRoot)) parent = null;
-            return new(new LocalDirectoryListing(fullPath, parent is null ? null : Path.GetFullPath(parent), entries, truncated), null);
+            return ListDirectory(fullPath, assignedRoot, cancellationToken);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
@@ -60,6 +46,25 @@ internal static class LocalDirectoryBrowser
         {
             return new(null, "The directory does not exist or cannot be read.");
         }
+    }
+
+    private static LocalDirectoryListingResult ListDirectory(string fullPath, string? assignedRoot, CancellationToken cancellationToken)
+    {
+        List<LocalDirectoryEntry> entries = [];
+        string[] children = Directory.EnumerateDirectories(fullPath).Take(MaximumEntries + 1).ToArray();
+        bool truncated = children.Length > MaximumEntries;
+        foreach (string child in children.Take(MaximumEntries))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            FileAttributes attributes = File.GetAttributes(child);
+            if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint | FileAttributes.Hidden | FileAttributes.System))
+                != FileAttributes.Directory) continue;
+            entries.Add(new(Path.GetFileName(child), Path.GetFullPath(child)));
+        }
+        entries.Sort((left, right) => StringComparer.OrdinalIgnoreCase.Compare(left.Name, right.Name));
+        string? parent = Directory.GetParent(fullPath)?.FullName;
+        if (assignedRoot is not null && parent is not null && !WithinRoot(parent, assignedRoot)) parent = null;
+        return new(new LocalDirectoryListing(fullPath, parent is null ? null : Path.GetFullPath(parent), entries, truncated), null);
     }
 
     private static bool WithinRoot(string path, string root)

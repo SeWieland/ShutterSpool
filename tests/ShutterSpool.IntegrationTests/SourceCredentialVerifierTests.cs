@@ -62,9 +62,15 @@ public sealed class SourceCredentialVerifierTests
         Assert.NotNull(access);
         Assert.Equal("sources/camera", access.VirtualRoot);
         Assert.Equal(4, access.CredentialGeneration);
-        Assert.DoesNotContain(loggerProvider.Entries, eventId => eventId.Id == 2004 && eventId.Name == "SourceAuthenticationSucceeded");
+        Assert.Empty(loggerProvider.Entries);
         verifier.RecordSucceeded(sourceId);
-        Assert.Contains(loggerProvider.Entries, eventId => eventId.Id == 2004 && eventId.Name == "SourceAuthenticationSucceeded");
+        LogEntry audit = Assert.Single(loggerProvider.Entries);
+        Assert.Equal(2004, audit.EventId.Id);
+        Assert.Equal("SourceAuthenticationSucceeded", audit.EventId.Name);
+        Assert.Equal(LogLevel.Information, audit.Level);
+        Assert.Equal(2, audit.Fields.Count);
+        Assert.Equal(sourceId, audit.Fields["SourceId"]);
+        Assert.Equal("Source authentication succeeded for {SourceId}.", audit.Fields["{OriginalFormat}"]);
         Assert.Null(await verifier.VerifyAsync("cam_test", "wrong-secret", cancellationToken: TestContext.Current.CancellationToken));
     }
 
@@ -147,9 +153,11 @@ public sealed class SourceCredentialVerifierTests
         Assert.True(credential.IsIngressEnabled);
     }
 
+    private sealed record LogEntry(EventId EventId, LogLevel Level, Dictionary<string, object?> Fields);
+
     private sealed class CapturingLoggerProvider : ILoggerProvider
     {
-        public List<EventId> Entries { get; } = [];
+        public List<LogEntry> Entries { get; } = [];
 
         public ILogger CreateLogger(string categoryName) => new CapturingLogger(Entries);
 
@@ -158,7 +166,7 @@ public sealed class SourceCredentialVerifierTests
         }
     }
 
-    private sealed class CapturingLogger(List<EventId> entries) : ILogger
+    private sealed class CapturingLogger(List<LogEntry> entries) : ILogger
     {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
@@ -166,7 +174,8 @@ public sealed class SourceCredentialVerifierTests
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
-            entries.Add(eventId);
+            var fields = Assert.IsAssignableFrom<IEnumerable<KeyValuePair<string, object?>>>(state);
+            entries.Add(new(eventId, logLevel, fields.ToDictionary()));
         }
     }
 }

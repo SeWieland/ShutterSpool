@@ -56,7 +56,10 @@ internal sealed class PostgresProtectionAdmissionLock(string connectionString, I
                 command.Parameters.AddWithValue("lock_key", keys[index]);
                 await command.ExecuteScalarAsync(CancellationToken.None);
             }
-            catch { }
+            catch
+            {
+                // Still attempt to release the remaining acquired keys before disposing the connection.
+            }
         }
     }
 

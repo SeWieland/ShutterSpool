@@ -14,22 +14,36 @@ export function originalRemovalScope(evidence?: RetentionEvidence | null) {
     return remaining.map(asset => `${asset.variant} (${asset.byteLength!.toLocaleString('en')} bytes, ${retentionLabel(asset.state)})`).join('; ') || 'No remaining original variants recorded';
 }
 
+function validTime(date?: Date | null) {
+    const time = date?.getTime();
+    return time !== undefined && Number.isFinite(time) ? time : undefined;
+}
+
 export function retentionTiming(evidence: RetentionEvidence | null | undefined, now: number, details: boolean, unavailable = false) {
     const interval = evidence?.timeline;
-    const observed = (interval?.observedAt ?? evidence?.asOf)?.getTime();
-    if (observed == null || !Number.isFinite(observed)) return { visible: false, stale: true, title: 'Retention observation unavailable. Refresh to establish current evidence.', fraction: undefined, tone: 'neutral' };
-    const stale = unavailable || observed == null || !Number.isFinite(observed) || now - observed > 90000;
-    const clock = stale && observed != null ? observed : now;
-    const end = interval?.endsAt?.getTime();
-    const start = interval?.startedAt?.getTime();
-    if (end == null || !Number.isFinite(end)) return { visible: false, stale, title: 'Retention interval unavailable', fraction: undefined, tone: 'neutral' };
-    const duration = start != null && Number.isFinite(start) && start < end ? end - start : undefined;
+    const observed = validTime(interval?.observedAt ?? evidence?.asOf);
+    if (observed === undefined) return { visible: false, stale: true, title: 'Retention observation unavailable. Refresh to establish current evidence.', fraction: undefined, tone: 'neutral' };
+    const stale = unavailable || now - observed > 90000;
+    const clock = stale ? observed : now;
+    const end = validTime(interval?.endsAt);
+    if (end === undefined) return { visible: false, stale, title: 'Retention interval unavailable', fraction: undefined, tone: 'neutral' };
+    const start = validTime(interval?.startedAt);
+    const duration = start !== undefined && start < end ? end - start : undefined;
     const remaining = Math.max(0, end - clock);
     const recovery = interval?.kind === 'trashRecovery';
-    const warning = interval?.kind === 'heldOrBlocked' || recovery ? 86400000 : duration != null ? Math.min(86400000, duration * .2) : 0;
-    const approaching = remaining <= warning;
-    const title = `${stale ? 'Last known · ' : ''}${interval?.meaning ?? (recovery ? 'Trash recovery' : 'Retention eligibility')} · ${remaining ? end != null ? new Date(end).toLocaleString() : '' : 'eligible · pending server action'}${stale && observed != null ? ` · observed ${new Date(observed).toLocaleString()}` : ''}`;
-    return { visible: details || recovery || approaching, stale, title, fraction: duration == null ? undefined : Math.min(1, remaining / duration), tone: approaching ? recovery ? 'red' : 'amber' : 'neutral' };
+    const day = 86400000;
+    const fixedWarning = interval?.kind === 'heldOrBlocked' || recovery;
+    const warningWindow = fixedWarning ? day : Math.min(day, (duration ?? 0) * .2);
+    const approaching = remaining <= warningWindow;
+    const defaultMeaning = recovery ? 'Trash recovery' : 'Retention eligibility';
+    const meaning = interval?.meaning ?? defaultMeaning;
+    const deadline = remaining ? new Date(end).toLocaleString() : 'eligible · pending server action';
+    const currentTitle = `${meaning} · ${deadline}`;
+    const title = stale ? `Last known · ${currentTitle} · observed ${new Date(observed).toLocaleString()}` : currentTitle;
+    const fraction = duration == null ? undefined : Math.min(1, remaining / duration);
+    const warningTone = recovery ? 'red' : 'amber';
+    const tone = approaching ? warningTone : 'neutral';
+    return { visible: details || recovery || approaching, stale, title, fraction, tone };
 }
 
 export function durationHours(value?: string | null) {

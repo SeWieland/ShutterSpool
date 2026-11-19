@@ -14,6 +14,7 @@ using ShutterSpool.Application.Spool;
 using ShutterSpool.Application.Workspaces;
 using ShutterSpool.Infrastructure.Composition;
 using ShutterSpool.Infrastructure.Persistence;
+using WorkspaceFixture = ShutterSpool.IntegrationTests.WorkspaceTenancyPostgresTests.WorkspaceFixture;
 
 namespace ShutterSpool.IntegrationTests;
 
@@ -23,7 +24,7 @@ public sealed class CorePipelineTests
     public async Task Composed_pipeline_survives_restart_and_disposable_service_outages()
     {
         CancellationToken token = TestContext.Current.CancellationToken;
-        await using var fixture = await WorkspaceTenancyPostgresTests.WorkspaceFixture.CreateAsync(workspaceCount: 1);
+        await using var fixture = await WorkspaceFixture.CreateAsync(workspaceCount: 1);
         fixture.Configuration["ShutterSpool:Destinations:EnabledKinds:0"] = "local";
         fixture.Configuration["ShutterSpool:Preview:ImaginaryUrl"] = "http://127.0.0.1:1/";
         fixture.Configuration["ConnectionStrings:valkey"] = "127.0.0.1:1,connectTimeout=100,connectRetry=0,asyncTimeout=100";
@@ -38,7 +39,7 @@ public sealed class CorePipelineTests
         {
             await first.InitializeShutterSpoolAsync(configuration, token);
             Directory.CreateDirectory(targetRoot);
-            await using AsyncServiceScope scope = fixture.Scope(first, workspace);
+            await using AsyncServiceScope scope = WorkspaceFixture.Scope(first, workspace);
             var source = await scope.ServiceProvider.GetRequiredService<SourceManagementService>().CreateAsync("Synthetic", "Manual", null, cancellationToken: token);
             var destination = await scope.ServiceProvider.GetRequiredService<DestinationManagementService>().CreateAsync("Local", "local", null, token);
             await scope.ServiceProvider.GetRequiredService<ILocalDestinationConfiguration>().ConfigureAsync(destination.Id, destination.ConfigurationRevision, targetRoot, token);
@@ -52,7 +53,7 @@ public sealed class CorePipelineTests
         await using ServiceProvider restarted = Build(configuration);
         await restarted.InitializeShutterSpoolAsync(configuration, token);
         Guid captureId;
-        await using (AsyncServiceScope scope = fixture.Scope(restarted, workspace))
+        await using (AsyncServiceScope scope = WorkspaceFixture.Scope(restarted, workspace))
         {
             Assert.True(await scope.ServiceProvider.GetRequiredService<MetadataProcessingService>().ProcessOneAsync(token));
             Assert.True(await scope.ServiceProvider.GetRequiredService<CaptureGroupingService>().ProcessOneAsync(token));
@@ -68,7 +69,7 @@ public sealed class CorePipelineTests
             Assert.Equal(4, frozen.ReleasedRating);
             Assert.Equal("Picked", frozen.ReleasedSelection?.ToString());
         }
-        await using (AsyncServiceScope scope = fixture.Scope(restarted, workspace))
+        await using (AsyncServiceScope scope = WorkspaceFixture.Scope(restarted, workspace))
         {
             // The generator endpoint and Valkey are deliberately unavailable.
             Assert.Equal(PreviewState.Unavailable, (await scope.ServiceProvider.GetRequiredService<PreviewService>()
@@ -86,7 +87,7 @@ public sealed class CorePipelineTests
             Assert.Equal("Delivered", Assert.Single(history.Items).State);
         }
         Assert.Equal(bytes, await File.ReadAllBytesAsync(Path.Combine(targetRoot, "delivered", "synthetic.jpg"), token));
-        await using AsyncServiceScope readScope = fixture.Scope(restarted, workspace);
+        await using AsyncServiceScope readScope = WorkspaceFixture.Scope(restarted, workspace);
         await using Stream original = await readScope.ServiceProvider.GetRequiredService<ICommittedOriginalReader>().OpenReadAsync(accepted.Asset.SpoolKey, token);
         using var copy = new MemoryStream();
         await original.CopyToAsync(copy, token);

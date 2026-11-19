@@ -1,9 +1,11 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using ShutterSpool.ServiceDefaults;
+using System.Net;
 using System.Text.Json;
 
 namespace ShutterSpool.IntegrationTests;
@@ -34,11 +36,11 @@ public sealed class FoundationTests(WorkspaceWebApplicationFactory factory)
     [Fact]
     public async Task Server_exposes_liveness_health_check()
     {
-        using HttpClient client = factory.CreateWorkspaceClient();
+        using HttpClient client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
 
-        HttpResponseMessage response = await client.GetAsync("/health/live", TestContext.Current.CancellationToken);
+        using HttpResponseMessage response = await client.GetAsync("/health/live", TestContext.Current.CancellationToken);
 
-        response.EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]

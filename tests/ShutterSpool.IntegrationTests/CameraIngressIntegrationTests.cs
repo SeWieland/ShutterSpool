@@ -49,9 +49,8 @@ public sealed partial class CameraIngressIntegrationTests
         await fixture.Ingress.ReceiveAsync(login.Id, path, new MemoryStream(bytes), 1_024, Token);
 
         Assert.True(Directory.Exists(Path.Combine(fixture.DirectoriesRoot, sourceId.ToString("N"), "files")));
-        string[] privatePayloads = EnumeratePayloads(fixture.SpoolRoot);
-        Assert.Single(privatePayloads);
-        Assert.Equal(bytes, await File.ReadAllBytesAsync(privatePayloads[0], Token));
+        string privatePayload = Assert.Single(EnumeratePayloads(fixture.SpoolRoot));
+        Assert.Equal(bytes, await File.ReadAllBytesAsync(privatePayload, Token));
         Assert.Empty(await fixture.Database.Assets.AsNoTracking().ToListAsync(Token));
 
         IngestResult result = await fixture.Ingress.CompleteAsync(login.Id, login.Username, session, path, timestamp + 1_000, bytes.Length, Token);
@@ -580,6 +579,56 @@ public sealed partial class CameraIngressIntegrationTests
 
         Assert.Contains(await fixture.Ingress.GetStatusAsync(login.SourceId, Token), transfer => transfer.State == CameraTransferState.Quarantined);
         Assert.Contains(await fixture.Store.GetRecoverableAsync(Token), transfer => transfer.AdmissionTimestamp == now);
+    }
+
+    [Fact]
+    public async Task Competing_camera_logins_share_the_last_admission_slot_and_exact_replay_keeps_the_winner()
+    {
+        await using var fixture = await CameraIngressFixture.CreateAsync();
+        await fixture.CreateSourceAsync("first", "camera-secret");
+        await fixture.CreateSourceAsync("second", "camera-secret");
+        CameraLogin first = (await fixture.Ingress.AuthenticateAsync("cam_first", "camera-secret", cancellationToken: Token))!;
+        CameraLogin second = (await fixture.Ingress.AuthenticateAsync("cam_second", "camera-secret", cancellationToken: Token))!;
+        await using var otherContext = new ShutterSpoolDbContext(fixture.DatabaseOptions);
+        var otherStore = new EfCameraIngressStore(otherContext, TimeProvider.System);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        deadline.CancelAfter(TimeSpan.FromSeconds(15));
+        CancellationToken token = deadline.Token;
+        long timestamp = CurrentTimestamp();
+
+        Task<CameraUploadAdmission?> Admit(EfCameraIngressStore store, CameraLogin login)
+        {
+            Guid assetId = Guid.NewGuid();
+            return store.AdmitAsync(login.Id, login.Username, "FTP_session", "/camera.jpg", timestamp,
+                Guid.NewGuid(), assetId, 1_024, $"spool/{assetId:N}", 1, 600, token);
+        }
+
+        await using var gate = new ShutterSpoolDbContext(fixture.DatabaseOptions);
+        await using var transaction = await gate.Database.BeginTransactionAsync(token);
+        await gate.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(hashtextextended('shutterspool-camera-admission', 0))", token);
+        Task<CameraUploadAdmission?[]> pending = Task.WhenAll(Admit(fixture.Store, first), Admit(otherStore, second));
+        CameraUploadAdmission?[] attempts;
+        try
+        {
+            while (!await gate.Database.SqlQuery<bool>($"""
+                SELECT COUNT(DISTINCT pid) = 2 AS "Value" FROM pg_locks
+                WHERE locktype = 'advisory' AND NOT granted
+                  AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+                """).SingleAsync(token))
+                await Task.Delay(20, token);
+        }
+        finally
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            attempts = await pending;
+        }
+        CameraUploadAdmission winner = Assert.Single(attempts.OfType<CameraUploadAdmission>());
+        CameraLogin winningLogin = winner.LoginId == first.Id ? first : second;
+
+        CameraUploadAdmission? replay = await Admit(fixture.Store, winningLogin);
+
+        Assert.Equal(winner, replay);
+        Assert.Equal(winner.Id, await fixture.Database.CameraUploadAdmissions.Select(item => item.Id).SingleAsync(token));
     }
 
     private static CancellationToken Token => TestContext.Current.CancellationToken;

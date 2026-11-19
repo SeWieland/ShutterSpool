@@ -60,7 +60,10 @@ internal sealed class PostgresOriginalAssetLock(string connectionString) : IOrig
             if (connection.State == System.Data.ConnectionState.Open)
             {
                 try { await UnlockAsync(connection, lockKey, shared); }
-                catch { }
+                catch
+                {
+                    // Ownership is uncertain after acquisition fails. Preserve that failure if unlocking also fails.
+                }
             }
             await connection.DisposeAsync();
             throw;
@@ -79,7 +82,8 @@ internal sealed class PostgresOriginalAssetLock(string connectionString) : IOrig
             ? "SELECT pg_advisory_unlock_shared(hashtextextended(@lock_key, 0))"
             : "SELECT pg_advisory_unlock(hashtextextended(@lock_key, 0))";
         command.Parameters.AddWithValue("lock_key", lockKey);
-        if ((bool)(await command.ExecuteScalarAsync(CancellationToken.None))! != true)
+        bool unlocked = (bool)(await command.ExecuteScalarAsync(CancellationToken.None))!;
+        if (!unlocked)
             throw new InvalidOperationException("The original storage lock was not owned by this PostgreSQL session.");
     }
 
@@ -119,16 +123,17 @@ internal sealed class PostgresOriginalAssetLock(string connectionString) : IOrig
             try { await UnlockAsync(owned, _lockKey, _isShared); }
             finally { await owned.DisposeAsync(); }
         }
-    }
 
-    private static void Unlock(NpgsqlConnection connection, string lockKey, bool shared)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = shared
-            ? "SELECT pg_advisory_unlock_shared(hashtextextended(@lock_key, 0))"
-            : "SELECT pg_advisory_unlock(hashtextextended(@lock_key, 0))";
-        command.Parameters.AddWithValue("lock_key", lockKey);
-        if ((bool)command.ExecuteScalar()! != true)
-            throw new InvalidOperationException("The original storage lock was not owned by this PostgreSQL session.");
+        private static void Unlock(NpgsqlConnection connection, string lockKey, bool shared)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = shared
+                ? "SELECT pg_advisory_unlock_shared(hashtextextended(@lock_key, 0))"
+                : "SELECT pg_advisory_unlock(hashtextextended(@lock_key, 0))";
+            command.Parameters.AddWithValue("lock_key", lockKey);
+            bool unlocked = (bool)command.ExecuteScalar()!;
+            if (!unlocked)
+                throw new InvalidOperationException("The original storage lock was not owned by this PostgreSQL session.");
+        }
     }
 }

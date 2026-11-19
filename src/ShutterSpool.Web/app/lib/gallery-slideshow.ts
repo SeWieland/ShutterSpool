@@ -1,15 +1,16 @@
-export interface Slide { id?: unknown; mediaKind?: string | null; }
+export interface Slide { id?: string | null; mediaKind?: string | null; }
 export interface SlidePage { items?: Slide[] | null; nextCursor?: string | null; }
 export type DisplayState = 'pending' | 'ready' | 'unavailable';
 export function slideshowState() {
     return { playing: false, loading: false, seconds: 5, message: '', retry: false, failure: '' as '' | 'preview' | 'sequence', photographsOnly: false };
 }
 type State = ReturnType<typeof slideshowState>;
+type Timer = number | ReturnType<typeof setTimeout>;
 interface Dependencies {
     read: (cursor: string | undefined, startAt: string | undefined, signal: AbortSignal, direction?: -1 | 1) => Promise<SlidePage>;
     show: (id: string) => void;
-    schedule?: (action: () => void, milliseconds: number) => ReturnType<typeof setTimeout>;
-    cancel?: (timer: ReturnType<typeof setTimeout>) => void;
+    schedule?: (action: () => void, milliseconds: number) => Timer;
+    cancel?: (timer: Timer) => void;
     yield?: (signal: AbortSignal) => Promise<void>;
 }
 
@@ -24,9 +25,12 @@ export class GallerySlideshow {
     private version = 0;
     private request?: AbortController;
     private pendingRead?: () => Promise<void>;
-    private timer?: ReturnType<typeof setTimeout>;
+    private timer?: Timer;
     constructor(readonly state: State, readonly dependencies: Dependencies) {}
     get generation() { return this.version; }
+    private ownsRead(version: number, signal: AbortSignal) {
+        return version === this.version && !signal.aborted;
+    }
     private clearTimer() {
         if (this.timer !== undefined) (this.dependencies.cancel ?? clearTimeout)(this.timer);
         this.timer = undefined;
@@ -58,7 +62,7 @@ export class GallerySlideshow {
         this.pendingRead = undefined;
         this.state.loading = false;
         this.page = page.items ?? [];
-        this.index = this.page.findIndex(item => String(item.id) === this.current);
+        this.index = this.page.findIndex(item => item.id === this.current);
         this.cursor = page.nextCursor ?? undefined;
         this.initialized = true;
         if (this.state.playing) this.arm();
@@ -102,12 +106,12 @@ export class GallerySlideshow {
         try {
             this.pendingRead = () => this.retry(id);
             await this.dependencies.read(undefined, id, request.signal);
-            if (request.signal.aborted || version !== this.version) return;
+            if (!this.ownsRead(version, request.signal)) return;
             this.pendingRead = undefined;
             this.state.retry = false;
             this.state.message = 'Sequence available. Choose Play to continue.';
         } catch {
-            if (!request.signal.aborted && version === this.version) this.fail('The slideshow sequence could not be loaded. Retry the sequence, then choose Play.', 'sequence');
+            if (this.ownsRead(version, request.signal)) this.fail('The slideshow sequence could not be loaded. Retry the sequence, then choose Play.', 'sequence');
         } finally { if (version === this.version) this.state.loading = false; }
     }
     private arm() {
@@ -115,6 +119,13 @@ export class GallerySlideshow {
             if (this.decoded) return this.advance();
             else this.fail('The preview did not load within 15 seconds. Retry the preview, then choose Play.');
         }, this.decoded ? this.state.seconds * 1000 : 15_000);
+    }
+    private nextPhotograph(items: Slide[], start: number, skipId?: string) {
+        for (let index = start; index < items.length; index++) {
+            const item = items[index]!;
+            if (item.mediaKind === 'Video') this.state.photographsOnly = true;
+            else if (item.id && item.id !== skipId) return { index, id: item.id };
+        }
     }
     async navigate(id: string, direction: -1 | 1, removed = false) {
         this.pause();
@@ -130,18 +141,19 @@ export class GallerySlideshow {
             do {
                 this.pendingRead = () => this.navigate(id, direction, removed);
                 const page = await this.dependencies.read(cursor, cursor ? undefined : id, request.signal, direction);
-                if (version !== this.version || request.signal.aborted) return;
+                if (!this.ownsRead(version, request.signal)) return;
                 this.pendingRead = undefined;
-                for (const item of page.items ?? []) {
-                    if (item.mediaKind === 'Video') { this.state.photographsOnly = true; continue; }
-                    if (item.id && String(item.id) !== id) { this.dependencies.show(String(item.id)); return; }
+                const next = this.nextPhotograph(page.items ?? [], 0, id);
+                if (next) {
+                    this.dependencies.show(next.id);
+                    return;
                 }
                 cursor = page.nextCursor ?? undefined;
                 if (cursor) await this.yieldPage(request.signal);
-            } while (cursor && version === this.version && !request.signal.aborted);
+            } while (cursor && this.ownsRead(version, request.signal));
             if (removed && version === this.version) this.pause('No photographs match these Gallery filters.');
         } catch {
-            if (version === this.version && !request.signal.aborted) this.fail('The slideshow sequence could not be loaded. Retry the sequence, then choose Play.', 'sequence');
+            if (this.ownsRead(version, request.signal)) this.fail('The slideshow sequence could not be loaded. Retry the sequence, then choose Play.', 'sequence');
         } finally { if (version === this.version) this.state.loading = false; }
     }
     private yieldPage(signal: AbortSignal) {
@@ -151,6 +163,32 @@ export class GallerySlideshow {
             signal.addEventListener('abort', done, { once: true });
         });
     }
+    private async loadNextPage(startAt: string | undefined, version: number, signal: AbortSignal) {
+        this.pendingRead = () => this.advance(startAt);
+        const page = await this.dependencies.read(this.initialized ? this.cursor : undefined, this.initialized ? undefined : startAt, signal);
+        if (!this.ownsRead(version, signal)) return;
+        this.pendingRead = undefined;
+        this.page = page.items ?? [];
+        this.index = -1;
+        this.cursor = page.nextCursor ?? undefined;
+        this.initialized = true;
+        if (!this.page.length && !this.cursor) {
+            this.pause('No photographs match these Gallery filters.');
+            return;
+        }
+        if (!this.page.length || this.page.every(row => row.mediaKind === 'Video')) await this.yieldPage(signal);
+    }
+    private displayPhotograph(id: string, startAt: string | undefined, version: number) {
+        if (id === this.current && !startAt) {
+            this.pause('Only one photograph matches. It will stay on screen.');
+            return;
+        }
+        this.current = id;
+        this.decoded = false;
+        this.state.loading = false;
+        this.dependencies.show(id);
+        if (version === this.version && this.state.playing) this.arm();
+    }
     async advance(startAt?: string) {
         if (!this.state.playing || this.state.loading) return;
         this.clearTimer();
@@ -159,48 +197,31 @@ export class GallerySlideshow {
         this.state.loading = true;
         let restarted = false;
         try {
-            while (version === this.version && !request.signal.aborted) {
-                let item = this.page[++this.index];
-                if (!item) {
-                    if (this.initialized && !this.cursor) {
-                        if (restarted) { this.pause('No photographs match these Gallery filters.'); return; }
-                        restarted = true;
-                    }
-                    this.pendingRead = () => this.advance(startAt);
-                    const page = await this.dependencies.read(this.initialized ? this.cursor : undefined, this.initialized ? undefined : startAt, request.signal);
-                    if (version !== this.version || request.signal.aborted) return;
-                    this.pendingRead = undefined;
-                    this.page = page.items ?? [];
-                    this.index = -1;
-                    this.cursor = page.nextCursor ?? undefined;
-                    this.initialized = true;
-                    if (!this.page.length && !this.cursor) { this.pause('No photographs match these Gallery filters.'); return; }
-                    // Empty and future video-only pages yield between bounded reads, without polling.
-                    if (!this.page.length || this.page.every(row => row.mediaKind === 'Video')) {
-                        await this.yieldPage(request.signal);
-                    }
-                    continue;
+            while (this.ownsRead(version, request.signal)) {
+                const next = this.nextPhotograph(this.page, this.index + 1);
+                if (next) {
+                    this.index = next.index;
+                    this.displayPhotograph(next.id, startAt, version);
+                    return;
                 }
-                if (item.mediaKind === 'Video') { this.state.photographsOnly = true; continue; }
-                if (!item.id) continue;
-                const id = String(item.id);
-                if (id === this.current && !startAt) { this.pause('Only one photograph matches. It will stay on screen.'); return; }
-                this.current = id;
-                this.decoded = false;
-                this.state.loading = false;
-                this.dependencies.show(id);
-                if (version === this.version && this.state.playing) this.arm();
-                return;
+                this.index = this.page.length;
+                const atEnd = this.initialized && !this.cursor;
+                if (atEnd && restarted) {
+                    this.pause('No photographs match these Gallery filters.');
+                    return;
+                }
+                restarted ||= atEnd;
+                await this.loadNextPage(startAt, version, request.signal);
             }
         } catch {
-            if (version === this.version && !request.signal.aborted) this.fail('The slideshow sequence could not be loaded. Retry the sequence, then choose Play.', 'sequence');
+            if (this.ownsRead(version, request.signal)) this.fail('The slideshow sequence could not be loaded. Retry the sequence, then choose Play.', 'sequence');
         } finally {
             if (version === this.version) this.state.loading = false;
         }
     }
     remove(id: string, displayed = false) {
         const restart = this.pendingRead;
-        this.page = this.page.map(row => String(row.id) === id ? {} : row);
+        this.page = this.page.map(row => row.id === id ? {} : row);
         if (id === this.current || displayed || restart) {
             this.version++;
             this.request?.abort();

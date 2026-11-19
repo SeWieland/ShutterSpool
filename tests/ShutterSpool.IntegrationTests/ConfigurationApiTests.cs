@@ -30,6 +30,7 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using WorkspaceFixture = ShutterSpool.IntegrationTests.WorkspaceTenancyPostgresTests.WorkspaceFixture;
 
 namespace ShutterSpool.IntegrationTests;
 
@@ -250,7 +251,13 @@ public sealed partial class ConfigurationApiTests
         using HttpResponseMessage unchanged = await fixture.Client.PostAsJsonAsync($"/management/sources/{source.Id}/regenerate-secret",
             new RegenerateSourceSecretRequest(0, PasswordMode: "Custom", Password: "!A23456789~!"), token);
         Assert.Equal(HttpStatusCode.BadRequest, unchanged.StatusCode);
-        Assert.DoesNotContain("!A23456789~!", await unchanged.Content.ReadAsStringAsync(token), StringComparison.Ordinal);
+        string unchangedBody = await unchanged.Content.ReadAsStringAsync(token);
+        Assert.DoesNotContain("!A23456789~!", unchangedBody, StringComparison.Ordinal);
+        using var problem = JsonDocument.Parse(unchangedBody);
+        JsonProperty error = Assert.Single(problem.RootElement.GetProperty("errors").EnumerateObject());
+        Assert.Equal("password", error.Name);
+        Assert.Equal(new ArgumentException("Choose a different username or password.", error.Name).Message,
+            Assert.Single(error.Value.EnumerateArray()).GetString());
 
         using HttpResponseMessage replaced = await fixture.Client.PostAsJsonAsync($"/management/sources/{source.Id}/regenerate-secret",
             new RegenerateSourceSecretRequest(0, Username: "camera-two", PasswordMode: "Custom", Password: "CustomCamera!43"), token);
@@ -471,11 +478,22 @@ public sealed partial class ConfigurationApiTests
         Assert.Empty(body.RootElement.GetProperty("items").EnumerateArray());
         Assert.True(body.RootElement.GetProperty("epoch").GetString()!.Length > 0);
 
-        using HttpResponseMessage duplicate = await fixture.Client.GetAsync(
-            $"/management/activity/transfers?sourceIds={sourceId}&sourceIds={sourceId}", token);
-        Assert.Equal(HttpStatusCode.BadRequest, duplicate.StatusCode);
-        using HttpResponseMessage missing = await fixture.Client.GetAsync("/management/activity/transfers", token);
-        Assert.Equal(HttpStatusCode.BadRequest, missing.StatusCode);
+        const string invalidIds = "Provide either 1 to 100 Source IDs or 1 to 100 transfer IDs, plus a page size from 1 to 100.";
+        await AssertErrorAsync("", "sourceIds", invalidIds);
+        await AssertErrorAsync($"sourceIds={sourceId}&transferIds={sourceId}", "sourceIds", invalidIds);
+        await AssertErrorAsync($"transferIds={sourceId}&transferIds={sourceId}&transferIds=invalid&cursor=invalid",
+            "sourceIds", invalidIds);
+        await AssertErrorAsync($"sourceIds={sourceId}&sourceIds={sourceId}&cursor=invalid",
+            "sourceIds", "Requested IDs must be distinct.");
+        await AssertErrorAsync($"transferIds={sourceId}&cursor=invalid", "cursor", "The activity cursor is invalid.");
+
+        async Task AssertErrorAsync(string query, string field, string expected)
+        {
+            using HttpResponseMessage response = await fixture.Client.GetAsync($"/management/activity/transfers?{query}", token);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            using JsonDocument problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
+            Assert.Equal(expected, problem.RootElement.GetProperty("errors").GetProperty(field)[0].GetString());
+        }
     }
 
     [Fact]
@@ -575,6 +593,12 @@ public sealed partial class ConfigurationApiTests
         JsonElement oldReady = await ReadTransferAsync(oldTransferId);
         Assert.Equal("Ready", oldReady.GetProperty("phase").GetString());
         Assert.True(oldReady.GetProperty("previewReady").GetBoolean());
+
+        using JsonDocument byTransfer = JsonDocument.Parse(await fixture.Client.GetStringAsync(
+            $"/management/activity/transfers?transferIds={oldTransferId}", token));
+        JsonElement requested = Assert.Single(byTransfer.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal(oldTransferId, requested.GetProperty("transferId").GetGuid());
+        Assert.True(byTransfer.RootElement.GetProperty("coverageComplete").GetBoolean());
 
         await using (var database = new ShutterSpoolDbContext(fixture.Database.Options))
         {
@@ -879,22 +903,22 @@ public sealed partial class ConfigurationApiTests
     {
         private static readonly byte[] SigningKey = Encoding.UTF8.GetBytes("synthetic-api-test-signing-key-at-least-32-bytes");
 
-        private ConfigurationApiFixture(WorkspaceTenancyPostgresTests.WorkspaceFixture storage, WorkspaceDefinition workspace, WebApplicationFactory<Program> server, HttpClient client)
+        private ConfigurationApiFixture(WorkspaceFixture storage, WorkspaceDefinition workspace, WebApplicationFactory<Program> server, HttpClient client)
         {
             Storage = storage;
             Workspace = workspace;
             Database = storage.Database(0);
             Server = server;
             Client = client;
-            BoundScope = storage.Scope(server.Services, workspace);
+            BoundScope = WorkspaceFixture.Scope(server.Services, workspace);
         }
 
-        private WorkspaceTenancyPostgresTests.WorkspaceFixture Storage { get; }
+        private WorkspaceFixture Storage { get; }
         private WorkspaceDefinition Workspace { get; }
         private AsyncServiceScope BoundScope { get; }
         public IServiceProvider Services => BoundScope.ServiceProvider;
         public string RuntimeRole => new Npgsql.NpgsqlConnectionStringBuilder(Storage.Connection(0)).Username!;
-        public AsyncServiceScope Scope() => Storage.Scope(Server.Services, Workspace);
+        public AsyncServiceScope Scope() => WorkspaceFixture.Scope(Server.Services, Workspace);
         public ArchitectureTestDatabase Database { get; }
         public WebApplicationFactory<Program> Server { get; }
         public HttpClient Client { get; }
@@ -904,7 +928,7 @@ public sealed partial class ConfigurationApiTests
             CameraIngressSettings? profileSettings = null, string? minimumPasswordLength = null,
             ICameraIngressDirectories? directoriesOverride = null)
         {
-            var storage = await WorkspaceTenancyPostgresTests.WorkspaceFixture.CreateAsync(workspaceCount: 1);
+            var storage = await WorkspaceFixture.CreateAsync(workspaceCount: 1);
             storage.Configuration["Logging:LogLevel:Default"] = "Warning";
             storage.Configuration["Logging:LogLevel:Microsoft.EntityFrameworkCore.Database.Command"] = "None";
             storage.Configuration["ShutterSpool:Security:Authority"] = "https://issuer.test";

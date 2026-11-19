@@ -47,7 +47,11 @@ public sealed class PreviewAssetUseGate
 
     private State GetState(Guid assetId)
     {
-        if (!_states.TryGetValue(assetId, out State? state)) _states.Add(assetId, state = new());
+        if (!_states.TryGetValue(assetId, out State? state))
+        {
+            state = new();
+            _states.Add(assetId, state);
+        }
         return state;
     }
 

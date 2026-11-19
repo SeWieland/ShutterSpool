@@ -82,7 +82,7 @@ internal sealed class FileSystemPreviewCache : IPreviewCache, IPreviewAssetCache
         {
             if (File.Exists(temporary)) File.Delete(temporary);
             reservation.Scope?.Dispose();
-            if (reservation.Reserved && File.Exists(path) is false)
+            if (reservation.Reserved && !File.Exists(path))
             {
                 using IServiceScope releaseScope = _scopeFactory!.CreateScope();
                 await releaseScope.ServiceProvider.GetRequiredService<ISpoolQuotaStore>()
@@ -108,15 +108,15 @@ internal sealed class FileSystemPreviewCache : IPreviewCache, IPreviewAssetCache
                 AssetIdFromKey(key), MaximumOutputBytes, 0, [quotaKey], MaximumOutputBytes,
                 SpoolQuotaReservationCategory.DiskPreview), cancellationToken);
             if (reserved) return new(reservationId, scope, quota, true, false);
-
-            scope.Dispose();
-            return new(reservationId, null, quota, false, true);
         }
         catch
         {
             scope.Dispose();
             throw;
         }
+
+        scope.Dispose();
+        return new(reservationId, null, null, false, true);
     }
 
     public async Task RemoveAssetAsync(Guid assetId, CancellationToken cancellationToken)
@@ -136,27 +136,32 @@ internal sealed class FileSystemPreviewCache : IPreviewCache, IPreviewAssetCache
             if (File.GetAttributes(captureDirectory).HasFlag(FileAttributes.ReparsePoint))
                 throw new IOException("Preview cache contains a linked capture directory.");
             if (!Guid.TryParseExact(Path.GetFileName(captureDirectory), "N", out _)) continue;
-            string assetDirectory = Path.Combine(captureDirectory, assetId.ToString("N"));
-            try { _ = File.GetAttributes(assetDirectory); }
-            catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException) { continue; }
-            EnsureNoReparsePoints(assetDirectory);
-            foreach (string entry in System.IO.Directory.EnumerateFiles(assetDirectory))
-            {
-                string filename = Path.GetFileName(entry);
-                bool derivative = PreviewCacheReclamation.IsDerivativeFilename(filename);
-                if (!derivative && !IsTemporaryDerivativeFilename(filename)) continue;
-                if (File.GetAttributes(entry).HasFlag(FileAttributes.ReparsePoint))
-                    throw new IOException("Preview cache contains a linked derivative.");
-                File.Delete(entry);
-                if (derivative)
-                {
-                    string key = $"{Path.GetFileName(captureDirectory)}/{assetId:N}/{filename}";
-                    await ReleaseReservationAsync(key);
-                }
-            }
-            if (!System.IO.Directory.EnumerateFileSystemEntries(assetDirectory).Any())
-                System.IO.Directory.Delete(assetDirectory);
+            await RemoveAssetDerivativesAsync(captureDirectory, assetId);
         }
+    }
+
+    private async Task RemoveAssetDerivativesAsync(string captureDirectory, Guid assetId)
+    {
+        string assetDirectory = Path.Combine(captureDirectory, assetId.ToString("N"));
+        try { _ = File.GetAttributes(assetDirectory); }
+        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException) { return; }
+        EnsureNoReparsePoints(assetDirectory);
+        foreach (string entry in System.IO.Directory.EnumerateFiles(assetDirectory))
+        {
+            string filename = Path.GetFileName(entry);
+            bool derivative = PreviewCacheReclamation.IsDerivativeFilename(filename);
+            if (!derivative && !IsTemporaryDerivativeFilename(filename)) continue;
+            if (File.GetAttributes(entry).HasFlag(FileAttributes.ReparsePoint))
+                throw new IOException("Preview cache contains a linked derivative.");
+            File.Delete(entry);
+            if (derivative)
+            {
+                string key = $"{Path.GetFileName(captureDirectory)}/{assetId:N}/{filename}";
+                await ReleaseReservationAsync(key);
+            }
+        }
+        if (!System.IO.Directory.EnumerateFileSystemEntries(assetDirectory).Any())
+            System.IO.Directory.Delete(assetDirectory);
     }
 
     public async Task<PreviewCacheReclaimResult> ReclaimAsync(long maximumBytes, int maximumEntries,
@@ -208,38 +213,44 @@ internal sealed class FileSystemPreviewCache : IPreviewCache, IPreviewAssetCache
             }
             string root = ValidateCacheRoot();
             string lockPath = Path.Combine(root, OperationLockFileName);
-            if (File.Exists(lockPath) && File.GetAttributes(lockPath).HasFlag(FileAttributes.ReparsePoint))
-                throw new IOException("The preview cache operation lock is linked.");
-
-            Stopwatch timer = Stopwatch.StartNew();
-            while (true)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                FileStream? stream = null;
-                try
-                {
-                    stream = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None,
-                        1, FileOptions.Asynchronous | FileOptions.SequentialScan);
-                    if (File.GetAttributes(lockPath).HasFlag(FileAttributes.ReparsePoint))
-                        throw new IOException("The preview cache operation lock is linked.");
-                    return new CacheOperationGate(stream, _operationGate);
-                }
-                catch (IOException) when (timer.Elapsed < lockWait)
-                {
-                    if (stream is not null) await stream.DisposeAsync();
-                    await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken);
-                }
-                catch
-                {
-                    if (stream is not null) await stream.DisposeAsync();
-                    throw;
-                }
-            }
+            return await OpenOperationLockAsync(lockPath, lockWait, cancellationToken);
         }
         catch
         {
             _operationGate.Release();
             throw;
+        }
+    }
+
+    private async Task<CacheOperationGate> OpenOperationLockAsync(string lockPath, TimeSpan lockWait,
+        CancellationToken cancellationToken)
+    {
+        if (File.Exists(lockPath) && File.GetAttributes(lockPath).HasFlag(FileAttributes.ReparsePoint))
+            throw new IOException("The preview cache operation lock is linked.");
+
+        Stopwatch timer = Stopwatch.StartNew();
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            FileStream? stream = null;
+            try
+            {
+                stream = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None,
+                    1, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                if (File.GetAttributes(lockPath).HasFlag(FileAttributes.ReparsePoint))
+                    throw new IOException("The preview cache operation lock is linked.");
+                return new CacheOperationGate(stream, _operationGate);
+            }
+            catch (IOException) when (timer.Elapsed < lockWait)
+            {
+                if (stream is not null) await stream.DisposeAsync();
+                await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken);
+            }
+            catch
+            {
+                if (stream is not null) await stream.DisposeAsync();
+                throw;
+            }
         }
     }
 

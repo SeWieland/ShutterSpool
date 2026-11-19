@@ -15,11 +15,11 @@ internal sealed class FileSystemSpoolOptions
     internal Func<string, FileStream>? ReceiveOutputFactory { get; init; }
 }
 
-internal sealed class FileSystemSpool(FileSystemSpoolOptions options) : ISpool, IAdmittedSpool, IQuotaAwareSpool, ICommittedOriginalReader
+internal sealed class FileSystemSpool(FileSystemSpoolOptions options) : IAdmittedSpool, IQuotaAwareSpool, ICommittedOriginalReader
 {
-    private const string IncomingDirectory = "incoming";
-    private const string SpoolDirectory = "spool";
-    private const string QuarantineDirectory = "quarantine";
+    internal const string IncomingDirectory = "incoming";
+    internal const string SpoolDirectory = "spool";
+    internal const string QuarantineDirectory = "quarantine";
     private readonly string _root = Path.GetFullPath(options.RootPath);
     private readonly Lock _admissionGate = new();
     private long _inFlightReservation;
@@ -159,26 +159,30 @@ internal sealed class FileSystemSpool(FileSystemSpoolOptions options) : ISpool, 
             CopyAndFlush(partialPath, path);
         }
         (long size, string sha256) = await FingerprintAsync(path, cancellationToken);
-        if (operation.Size is not null && (size != operation.Size || operation.Sha256 is null || !CryptographicOperations.FixedTimeEquals(Convert.FromHexString(operation.Sha256), Convert.FromHexString(sha256))))
-        {
-            if (operation.Sha256 is null) return null;
-            string partialPath = Resolve(operation.PartialKey);
-            EnsureNoReparsePoints(partialPath);
-            if (!await MatchesAsync(partialPath, operation.Size.Value, operation.Sha256, cancellationToken)) return null;
-            MoveToQuarantine(path, operation.Id, "Final spool bytes did not match the recovery journal.");
-            EnsureNoReparsePoints(path);
-            CopyAndFlush(partialPath, path);
-            return new SpoolWrite(operation.PartialKey, finalKey, operation.Size.Value, operation.Sha256);
-        }
-        if (operation.Size is null)
-        {
-            string partialPath = Resolve(operation.PartialKey);
-            EnsureNoReparsePoints(partialPath);
-            if (!File.Exists(partialPath) || new FileInfo(partialPath).Length != size) return null;
-            await using var partial = File.OpenRead(partialPath);
-            if (!CryptographicOperations.FixedTimeEquals(await SHA256.HashDataAsync(partial, cancellationToken), Convert.FromHexString(sha256))) return null;
-        }
-        return new SpoolWrite(operation.PartialKey, finalKey, size, sha256);
+        var final = new SpoolWrite(operation.PartialKey, finalKey, size, sha256);
+        if (operation.Size is long expectedSize)
+            return await VerifyOrRepairFinalAsync(operation, final, path, expectedSize, cancellationToken);
+
+        string candidate = Resolve(operation.PartialKey);
+        EnsureNoReparsePoints(candidate);
+        return await MatchesAsync(candidate, size, sha256, cancellationToken) ? final : null;
+    }
+
+    private async Task<SpoolWrite?> VerifyOrRepairFinalAsync(IngestOperation operation, SpoolWrite final, string finalPath,
+        long expectedSize, CancellationToken cancellationToken)
+    {
+        if (operation.Sha256 is null) return null;
+        if (final.Size == expectedSize && CryptographicOperations.FixedTimeEquals(
+            Convert.FromHexString(operation.Sha256), Convert.FromHexString(final.Sha256))) return final;
+
+        string partialPath = Resolve(operation.PartialKey);
+        EnsureNoReparsePoints(partialPath);
+        if (!await MatchesAsync(partialPath, expectedSize, operation.Sha256, cancellationToken)) return null;
+
+        MoveToQuarantine(finalPath, operation.Id, "Final spool bytes did not match the recovery journal.");
+        EnsureNoReparsePoints(finalPath);
+        CopyAndFlush(partialPath, finalPath);
+        return final with { Size = expectedSize, Sha256 = operation.Sha256 };
     }
 
     public Task QuarantineAsync(IngestOperation operation, string reason, CancellationToken cancellationToken)
@@ -332,7 +336,7 @@ internal sealed class FileSystemSpool(FileSystemSpoolOptions options) : ISpool, 
         }
     }
 
-    private async Task<bool> MatchesAsync(string path, long size, string sha256, CancellationToken cancellationToken)
+    private static async Task<bool> MatchesAsync(string path, long size, string sha256, CancellationToken cancellationToken)
     {
         if (!File.Exists(path) || new FileInfo(path).Length != size) return false;
         await using var input = File.OpenRead(path);

@@ -10,6 +10,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Json;
+using WorkspaceFixture = ShutterSpool.IntegrationTests.WorkspaceTenancyPostgresTests.WorkspaceFixture;
 
 namespace ShutterSpool.IntegrationTests;
 
@@ -21,7 +22,7 @@ public sealed partial class WorkspaceTenancyHttpTests
         await using var fixture = await TenantHttpFixture.CreateAsync();
         var workspace = fixture.Workspaces[0];
         WorkspaceInvitation offer;
-        await using (var scope = fixture.Storage.Scope(fixture.Server.Services, workspace))
+        await using (var scope = WorkspaceFixture.Scope(fixture.Server.Services, workspace))
         {
             var database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
             var store = new EfAccessGrantStore(database);
@@ -52,7 +53,7 @@ public sealed partial class WorkspaceTenancyHttpTests
         using HttpResponseMessage beforeMembership = await SendAsync(recipientClient, HttpMethod.Get, "/management/access", workspace.Id);
         Assert.Equal(HttpStatusCode.Forbidden, beforeMembership.StatusCode);
         using HttpResponseMessage ordinaryGet = await recipientClient.GetAsync(join, Token);
-        await using (var scope = fixture.Storage.Scope(fixture.Server.Services, workspace))
+        await using (var scope = WorkspaceFixture.Scope(fixture.Server.Services, workspace))
             Assert.False(await scope.ServiceProvider.GetRequiredService<IAccessGrantStore>().IsActiveAsync(Issuer, "invited-http", Token));
         using HttpResponseMessage missing = await recipientClient.PostAsJsonAsync(join, attempt with { OperationId = Guid.NewGuid() }, Token);
         Assert.Equal(HttpStatusCode.Forbidden, missing.StatusCode);
@@ -89,7 +90,7 @@ public sealed partial class WorkspaceTenancyHttpTests
         await using var fixture = await TenantHttpFixture.CreateAsync();
         var workspace = fixture.Workspaces[0];
         WorkspaceInvitation offer;
-        await using (var scope = fixture.Storage.Scope(fixture.Server.Services, workspace))
+        await using (var scope = WorkspaceFixture.Scope(fixture.Server.Services, workspace))
         {
             var database = scope.ServiceProvider.GetRequiredService<ShutterSpoolDbContext>();
             var store = new EfAccessGrantStore(database);
@@ -103,7 +104,7 @@ public sealed partial class WorkspaceTenancyHttpTests
             new WorkspaceInvitationChangeRequest(Guid.NewGuid(), offer.Revision), Token);
         Assert.Equal(HttpStatusCode.Forbidden, result.StatusCode);
         Assert.Equal("email-verification-required", (await result.Content.ReadFromJsonAsync<WorkspaceOfferProblemDetails>(Token))!.ErrorCode);
-        await using var verify = fixture.Storage.Scope(fixture.Server.Services, workspace);
+        await using var verify = WorkspaceFixture.Scope(fixture.Server.Services, workspace);
         Assert.False(await verify.ServiceProvider.GetRequiredService<IAccessGrantStore>().IsActiveAsync(Issuer, "unverified", Token));
     }
 
@@ -128,7 +129,7 @@ public sealed partial class WorkspaceTenancyHttpTests
         Assert.Equal("applied", created.Status);
         Assert.Equal("setup-email-failed", created.SetupEmailStatus);
         Assert.Equal("Viewer", created.Offer!.Role);
-        await using (var saved = fixture.Storage.Scope(fixture.Server.Services, workspace))
+        await using (var saved = WorkspaceFixture.Scope(fixture.Server.Services, workspace))
         {
             var store = saved.ServiceProvider.GetRequiredService<IWorkspaceInvitationStore>();
             Assert.Equal(created.Offer.Id, Assert.Single(await store.ListInvitationsAsync(Token)).Id);
@@ -151,7 +152,7 @@ public sealed partial class WorkspaceTenancyHttpTests
             Assert.Equal(HttpStatusCode.ServiceUnavailable, unavailable.StatusCode);
         }
         finally { await fixture.Storage.SetDatabaseAvailableAsync(1, true); }
-        await using var verify = fixture.Storage.Scope(fixture.Server.Services, workspace);
+        await using var verify = WorkspaceFixture.Scope(fixture.Server.Services, workspace);
         Assert.False(await verify.ServiceProvider.GetRequiredService<IAccessGrantStore>().IsActiveAsync(Issuer, "selected-reference", Token));
         Assert.Equal("pending", Assert.Single(await verify.ServiceProvider.GetRequiredService<IWorkspaceInvitationStore>().ListInvitationsAsync(Token)).Status);
         using HttpResponseMessage retry = await client.PostAsJsonAsync(acceptPath, accept, Token);
@@ -174,7 +175,7 @@ public sealed partial class WorkspaceTenancyHttpTests
             new WorkspaceInvitationCreateRequest(Guid.NewGuid(), "selected@example.test"));
         Assert.Equal(expected, result.StatusCode);
         Assert.Equal(status, (await result.Content.ReadFromJsonAsync<WorkspaceInvitationProblemDetails>(Token))!.ErrorCode);
-        await using var scope = fixture.Storage.Scope(fixture.Server.Services, workspace);
+        await using var scope = WorkspaceFixture.Scope(fixture.Server.Services, workspace);
         Assert.Empty(await scope.ServiceProvider.GetRequiredService<IWorkspaceInvitationStore>().ListInvitationsAsync(Token));
         Assert.Equal(0, enrollment.SetupCalls);
     }
