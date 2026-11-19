@@ -24,7 +24,7 @@ RUN test -n "$VERSION" && test -n "$COMMIT" && \
     dotnet publish src/ShutterSpool.Server --no-restore -c Release -o /out \
       -p:OpenApiGenerateDocuments=false -p:Version="$VERSION" -p:SourceRevisionId="$COMMIT"
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:9e3919aff68057f3e45125c5255a71d3b5f40364e45ede883348688851b9f0df
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:cae5b962bfb786606def03d250c6a645cc98839095c89e806e4bd8978a68115b
 WORKDIR /app
 COPY --from=build --chown=1654:1654 /out/ ./
 COPY LICENSE ./
