@@ -10,8 +10,8 @@ Dependabot checks GitHub Actions, npm, NuGet and Docker images weekly; updates s
 Docker scans the literal build-stage references in `deploy/Server.Dockerfile`, the shared `deploy/images/compose.yaml` pins, and the packaged component/proxy YAML files. Tags identify the update stream; digests remain the executable identity. SDK updates must still satisfy `global.json`, and database major-version changes need a supported migration path.
 GitHub-managed CodeQL scans Actions, C#, JavaScript/TypeScript and Python on supported pushes and pull requests and on its scheduled runs. Static analysis complements the checks below; it does not qualify camera or recovery behavior.
 The [CI workflow](../.github/workflows/ci.yml) runs SonarQube analysis on `main` pushes and same-repository pull requests targeting `main`. Fork and Dependabot changes are scanned after merge.
-CI runs both frontend suites even if one fails. The scan runs even when tests fail and imports available coverage reports,
-including separate frontend LCOV reports from the native Node and Vitest runs. Generated clients and build output are excluded.
+On noncancelled runs, CI uploads available coverage even when tests fail. Eligible SonarQube analysis imports the .NET XML report and a single frontend `lcov.info` when available.
+The frontend report maps coverage to the original TypeScript and Vue files. Generated clients and build output are excluded.
 SonarQube Cloud reports an advisory quality gate separately.
 
 Pushes to `main` and all pull requests run the .NET suites with PostgreSQL, frontend type/test/build checks, migration and generated-client consistency checks, camera-client security, edge certificate validation and release-builder checks.
@@ -55,8 +55,8 @@ Preserve meaningful regression expectations when changing implementation boundar
 ## Frontend checks
 
 From `src/ShutterSpool.Web`, run `npm ci`, `npm run typecheck`, `npm test` and `npm run build` as described in the [Web guide](../src/ShutterSpool.Web/README.md#build-and-check).
-The frontend suites cover browser state, autosave, reconciliation, private preview handling, Collections, retention presentation and interaction policies.
-Vitest also mounts Nuxt components to exercise rendering and interactions with synthetic DOM events.
+The Vitest suite covers browser state, autosave, reconciliation, private preview handling, Collections, retention presentation and interaction policies.
+Mounted Nuxt tests exercise rendering and interactions with synthetic DOM events.
 Use a real browser to verify layout, focus, keyboard and touch behavior, and visible failure states.
 
 ## Controlled Nextcloud delivery checks

@@ -76,21 +76,14 @@ jobs:
         id: frontend-tests
         continue-on-error: true
         run: |
-          legacy_status=0
-          vitest_status=0
-          npm exec --yes --package=c8@10.1.3 -- c8 --reporter=lcovonly --include 'app/**' \
-            --reports-dir="$RUNNER_TEMP/legacy-coverage" npm run test:legacy || legacy_status=$?
-          npm run test:vitest -- --coverage --coverage.reportsDirectory="$RUNNER_TEMP/vitest-coverage" || vitest_status=$?
-          printf 'Frontend runner exit codes: Node %s, Vitest %s\n' "$legacy_status" "$vitest_status"
-
+          test_status=0
+          npm test -- --coverage --coverage.reportsDirectory="$RUNNER_TEMP/vitest-coverage" || test_status=$?
           mkdir -p "$RUNNER_TEMP/ci-coverage"
-          for runner in legacy vitest; do
-            report="$RUNNER_TEMP/$runner-coverage/lcov.info"
-            if [ -s "$report" ]; then
-              sed 's|^SF:app/|SF:src/ShutterSpool.Web/app/|' "$report" > "$RUNNER_TEMP/ci-coverage/lcov-$runner.info"
-            fi
-          done
-          test "$legacy_status" -eq 0 && test "$vitest_status" -eq 0
+          report="$RUNNER_TEMP/vitest-coverage/lcov.info"
+          if [ -s "$report" ]; then
+            sed 's|^SF:app/|SF:src/ShutterSpool.Web/app/|' "$report" > "$RUNNER_TEMP/ci-coverage/lcov.info"
+          fi
+          exit "$test_status"
         working-directory: src/ShutterSpool.Web
       - name: Build frontend
         run: npm run build
@@ -158,8 +151,7 @@ jobs:
           name: sonar-coverage
           path: |
             ${{ runner.temp }}/ci-coverage/dotnet.xml
-            ${{ runner.temp }}/ci-coverage/lcov-legacy.info
-            ${{ runner.temp }}/ci-coverage/lcov-vitest.info
+            ${{ runner.temp }}/ci-coverage/lcov.info
           if-no-files-found: ignore
           overwrite: true
           retention-days: 7
@@ -232,18 +224,11 @@ jobs:
           else
             echo '::warning::.NET coverage report missing. SonarQube coverage will be incomplete.'
           fi
-          frontend_reports=()
-          for runner in legacy vitest; do
-            report="$RUNNER_TEMP/ci-coverage/lcov-$runner.info"
-            if [ -s "$report" ]; then
-              frontend_reports+=("$report")
-            else
-              echo "::warning::Frontend $runner coverage report missing. SonarQube coverage will be incomplete."
-            fi
-          done
-          if [ "${#frontend_reports[@]}" -gt 0 ]; then
-            reports=$(IFS=,; echo "${frontend_reports[*]}")
-            coverage_args+=("/d:sonar.javascript.lcov.reportPaths=$reports")
+          frontend_report="$RUNNER_TEMP/ci-coverage/lcov.info"
+          if [ -s "$frontend_report" ]; then
+            coverage_args+=("/d:sonar.javascript.lcov.reportPaths=$frontend_report")
+          else
+            echo '::warning::Frontend coverage report missing. SonarQube coverage will be incomplete.'
           fi
           # The PostgreSQL bootstrap script uses psql syntax outside Sonar's Oracle PL/SQL dialect.
           "$RUNNER_TEMP/sonar/dotnet-sonarscanner" begin \
