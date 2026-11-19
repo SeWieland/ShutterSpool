@@ -38,7 +38,7 @@ jobs:
       coverage-artifact-id: ${{ steps.coverage.outputs.artifact-id }}
     services:
       postgres:
-        image: postgres:17.12-trixie@sha256:b60e90042aa6b8dbecd58e224b3e36114dbf8ad754465264c2476ad58a86e45c
+        image: postgres:18.7-trixie@sha256:e754b839f447639b7004895f4d8a4bfcb4e9dbe3a1bc035f27f646562a16fd61
         env:
           POSTGRES_PASSWORD: controlled-ci-password
         ports: [5432:5432]

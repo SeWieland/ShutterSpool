@@ -67,7 +67,7 @@ class ReleasePackageTests(unittest.TestCase):
                 required = {".env", ".env.example", "compose.yaml", "profiles/all-camera-edges.yaml",
                             "README.md", "package/edge-entrypoint.sh", "package/identity-entrypoint.sh",
                             "package/postgres-init.sh", "package/workspace-databases.sql", "components/workspaces.yaml",
-                            "package/realms/shutterspool-enrollment-client.json", "components/keycloak.yaml",
+                            "package/realms/shutterspool-enrollment-client.json", "components/keycloak.yaml", "components/postgres.yaml",
                             "config/appsettings.json", "config/appsettings.Production.json",
                             "config/appsettings.Maintenance.json",
                             "certificates/README.md", "operations/README.md"}
@@ -104,10 +104,26 @@ class ReleasePackageTests(unittest.TestCase):
                 self.assertEqual(COMMIT, manifest["commit"])
                 self.assertEqual(DIGEST, manifest["serverImage"]["digest"])
                 self.assertIn(EDGE_IMAGE, manifest["upstreamImages"])
+                postgres_image, = build_release.image_refs(bundle.read("components/postgres.yaml").decode())
+                self.assertIn(postgres_image, manifest["upstreamImages"])
                 self.assertFalse(manifest["databaseCompatibility"]["historicalUpgradeSupported"])
                 self.assertEqual({"kind": "fresh-install-only", "publishedRelease": None}, manifest["upgradeBaseline"])
             self.assertEqual(f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n",
                              archive.with_suffix(".zip.sha256").read_text())
+
+    def test_postgres_component_matches_ci_image_and_mounts_versioned_data_parent(self):
+        if not shutil.which("docker"):
+            self.skipTest("Docker Compose CLI is unavailable; component interpretation check needs no daemon.")
+        compose = build_release.ROOT / "deploy/package/components/postgres.yaml"
+        result = subprocess.run(["docker", "compose", "-f", str(compose), "config", "--no-consistency", "--no-path-resolution", "--format", "json"],
+                                env=dict(os.environ, COMPOSE_PROJECT_NAME="synthetic-postgres-component"),
+                                capture_output=True, text=True, check=True)
+        postgres = json.loads(result.stdout)["services"]["postgres"]
+        workflow = (build_release.ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        ci_postgres = [image for image in build_release.image_refs(workflow) if image.startswith("postgres:")]
+        self.assertEqual([postgres["image"]], ci_postgres)
+        data_targets = [mount["target"] for mount in postgres["volumes"] if mount["source"] == "postgres-data"]
+        self.assertEqual(["/var/lib/postgresql"], data_targets)
 
     def test_workspace_component_separates_secret_grants_and_uses_existing_canonical_settings(self):
         if not shutil.which("docker"):
@@ -161,7 +177,7 @@ class ReleasePackageTests(unittest.TestCase):
     def test_compose_rejects_unpinned_images_source_mounts_and_unknown_parameters(self):
         with tempfile.TemporaryDirectory() as temp:
             compose = Path(temp) / "compose.yaml"
-            for invalid in ("services:\n  db:\n    image: postgres:17\n",
+            for invalid in ("services:\n  db:\n    image: postgres:18\n",
                             'services:\n  app:\n    image:',
                             'services:\n  app:\n    image: # Image is missing\n',
                             'services:\n  app:\n    volumes: ["./src:/src"]\n',
