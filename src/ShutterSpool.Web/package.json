@@ -21,7 +21,7 @@
     "@vitest/coverage-v8": "5.1.1",
     "@vue/test-utils": "2.6.0",
     "happy-dom": "21.0.4",
-    "nuxt": "4.6.2",
+    "nuxt": "4.6.4",
     "typescript": "5.9.3",
     "vitest": "5.1.1",
     "vue-tsc": "3.3.13"
