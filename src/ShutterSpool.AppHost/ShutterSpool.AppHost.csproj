@@ -7,11 +7,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Aspire.Hosting.Docker" Version="13.6.0" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.UserSecrets" Version="10.0.14" />
-    <PackageReference Include="Aspire.Hosting.JavaScript" Version="13.6.0" />
-    <PackageReference Include="Aspire.Hosting.PostgreSQL" Version="13.6.0" />
-    <PackageReference Include="Aspire.Hosting.Valkey" Version="13.6.0" />
+    <PackageReference Include="Aspire.Hosting.Docker" Version="13.6.5" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.UserSecrets" Version="10.0.15" />
+    <PackageReference Include="Aspire.Hosting.JavaScript" Version="13.6.5" />
+    <PackageReference Include="Aspire.Hosting.PostgreSQL" Version="13.6.5" />
+    <PackageReference Include="Aspire.Hosting.Valkey" Version="13.6.5" />
   </ItemGroup>
 
   <ItemGroup>
