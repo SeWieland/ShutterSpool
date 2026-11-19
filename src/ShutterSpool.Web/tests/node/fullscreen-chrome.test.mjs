@@ -1,11 +1,6 @@
-import { test } from 'node:test';
+import { test } from 'vitest';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import vm from 'node:vm';
-import ts from 'typescript';
-const context = vm.createContext({ exports: {}, setTimeout, clearTimeout });
-vm.runInContext(ts.transpileModule(readFileSync(new URL('../app/lib/fullscreen-chrome.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
-const { FullscreenChrome, chromeState } = context.exports;
+import { FullscreenChrome, chromeState } from '../../app/lib/fullscreen-chrome.ts';
 function fixture() {
     const state = chromeState(), timers = new Map();
     let id = 0;

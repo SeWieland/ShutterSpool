@@ -1,13 +1,6 @@
-import { test } from 'node:test';
+import { test } from 'vitest';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import vm from 'node:vm';
-import ts from 'typescript';
-const retention = vm.createContext({ exports: {} });
-vm.runInContext(ts.transpileModule(readFileSync(new URL('../app/lib/retention.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, retention);
-const context = vm.createContext({ exports: {}, require: () => retention.exports });
-vm.runInContext(ts.transpileModule(readFileSync(new URL('../app/lib/storage-presentation.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
-const { capacityComposition, settingsChanges, storageMessage, surfaceProgress, reviewEstimates } = context.exports;
+import { capacityComposition, settingsChanges, storageMessage, surfaceProgress, reviewEstimates } from '../../app/lib/storage-presentation.ts';
 const snapshot = { usedBytes: 100, activeBytes: 50, trashBytes: 20, diskPreviewBytes: 10, transientBytes: 15, quarantineBytes: 5, reservedBytes: 25, quotaBytes: 200, unknownAccounting: false, protectedBytes: 60, favoriteBytes: 40, observedAt: new Date() };
 test('capacity ring partitions usage and reservations without adding overlapping protection or historical amounts', () => {
     const result = capacityComposition({ ...snapshot, purgedBytes: 999, plannedReclamationBytes: 555 }, true);

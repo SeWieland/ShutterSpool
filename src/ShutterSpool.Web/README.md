@@ -22,10 +22,11 @@ and verifies that the five workspace sections remain dynamic without static-HTML
 Use `npm run check:bundle` to recheck the current generated output and manifest; generate them first.
 These are asset-size and loading-boundary checks, not measured load times.
 
-`npm test` runs the native Node tests in `scripts/` and the repository's attribution tests, then runs Vitest.
-The native Node checks cover serial/coalesced autosave, uncertain outcomes, revision conflicts, released-Capture
-guards, reconciliation, comparison/drafts, zoom bounds, motion preferences and bounded preview requests using the existing TypeScript compiler.
-The mounted Nuxt tests in `tests/nuxt-runtime/` exercise components with synthetic attribution and can run without generated metadata or registry access.
+`npm test` runs the native Node tests in `scripts/` followed by Vitest.
+Vitest's `node` project runs standalone utility tests in `tests/node/` and the repository's attribution checks.
+Its `nuxt` project covers reconciliation and mounted components in `tests/nuxt-runtime/` using synthetic attribution, so it can run without generated metadata or registry access.
+
+To run just the attribution checks, use `npm run test:vitest -- --project node generate-attribution.test.mjs`.
 
 Run these commands from this directory; there is intentionally no repository-root `package.json`.
 Run `npm run generate-client` after building the Server OpenAPI document.

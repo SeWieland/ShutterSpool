@@ -16,7 +16,7 @@ SonarQube Cloud reports an advisory quality gate separately.
 
 Pushes to `main` and all pull requests run the .NET suites with PostgreSQL, frontend type/test/build checks, migration and generated-client consistency checks, camera-client security, edge certificate validation and release-builder checks.
 The release-builder tests use temporary fixtures and perform no application builds or registry writes.
-`node --test tools/generate-attribution.test.mjs` checks metadata generation with controlled registry responses and also runs through `npm test`. Frontend builds resolve the actual pinned SFTPGo metadata; they require outbound access to Docker Hub.
+The [attribution checks](../src/ShutterSpool.Web/README.md#build-and-check) exercise metadata generation with controlled registry responses and run as part of `npm test`. Frontend builds resolve the pinned SFTPGo metadata and require outbound access to Docker Hub.
 Version tags on commits in `main` with successful CI run the [`release.yml` workflow](../.github/workflows/release.yml), which builds and pushes the image with the official Docker action, packages the Compose ZIP, checks anonymous manifest retrieval and release assets, then publishes the GitHub Release.
 Available package files are retained as a seven-day Actions artifact. Offline tests do not establish live GHCR access or anonymous retrieval. See the [release workflow conventions](../docs/release-policy.md#publish-from-a-version-tag).
 Backup/restore rehearsals and the opt-in runtime/provider checks below are separate qualification work; run the affected checks when changing those boundaries and before claiming release readiness.

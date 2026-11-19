@@ -13,7 +13,7 @@
     "pretypecheck": "node ../../tools/generate-attribution.mjs",
     "typecheck": "nuxt typecheck",
     "test": "npm run test:legacy && npm run test:vitest",
-    "test:legacy": "node --test ../../tools/generate-attribution.test.mjs scripts/*.test.mjs",
+    "test:legacy": "node --test scripts/*.test.mjs",
     "test:vitest": "vitest run",
     "generate-client": "dotnet tool run kiota generate --language TypeScript --openapi ../ShutterSpool.Server/openapi/ShutterSpool_Server.json --output app/api --clean-output --class-name ShutterSpoolClient --namespace-name ShutterSpool.Api --structured-mime-types application/json --structured-mime-types text/plain --structured-mime-types application/x-www-form-urlencoded --structured-mime-types multipart/form-data --structured-mime-types image/webp --structured-mime-types image/svg+xml --structured-mime-types text/event-stream && node scripts/trim-generated.mjs"
   },

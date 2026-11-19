@@ -1,11 +1,6 @@
-import { test } from 'node:test';
+import { test } from 'vitest';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import vm from 'node:vm';
-import ts from 'typescript';
-const context = vm.createContext({ exports: {} });
-vm.runInContext(ts.transpileModule(readFileSync(new URL('../app/lib/source-activity.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
-const { SourceActivityState, activityPresentation, sourceActivityCounters, sourceStatusPosition } = context.exports;
+import { SourceActivityState, activityPresentation, sourceActivityCounters, sourceStatusPosition } from '../../app/lib/source-activity.ts';
 const item = (transferId, patch = {}) => ({ transferId, sourceId: 'synthetic', phase: 'Receiving', observedAt: '2026-10-13T12:00:00Z', version: 1, accepted: false, previewReady: false, epoch: 'epoch-one', ...patch });
 
 test('status popup starts at its anchor and flips/clamps at desktop and phone edges', () => {

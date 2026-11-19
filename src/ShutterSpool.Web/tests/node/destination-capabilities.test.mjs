@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
-import { isDestinationKindEnabled } from '../app/lib/destination-capabilities.ts';
+import { test } from 'vitest';
+import { isDestinationKindEnabled } from '../../app/lib/destination-capabilities.ts';
 
 test('only enables destination kinds explicitly returned by deployment capabilities', () => {
     assert.equal(isDestinationKindEnabled(['local', 'webdav'], 'local'), true);

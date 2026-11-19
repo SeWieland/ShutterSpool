@@ -1,14 +1,8 @@
-import { test } from 'node:test';
+import { test } from 'vitest';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import vm from 'node:vm';
-import ts from 'typescript';
-const context = vm.createContext({ exports: {} });
-vm.runInContext(ts.transpileModule(readFileSync(new URL('../app/lib/workspace-interactions.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
-const { ratingInterval, zoomAround, clampPan, effectiveMotion, reconcileCaptures, curationTiming, deliveryPresentation } = context.exports;
+import { ratingInterval, zoomAround, clampPan, effectiveMotion, reconcileCaptures, curationTiming, deliveryPresentation, formatFileSize } from '../../app/lib/workspace-interactions.ts';
 
 test('file sizes keep missing values distinct from zero and use readable binary units', () => {
-    const { formatFileSize } = context.exports;
     assert.equal(formatFileSize(null), 'Unavailable');
     assert.equal(formatFileSize(0), '0 B');
     assert.equal(formatFileSize(1023), '1,023 B');

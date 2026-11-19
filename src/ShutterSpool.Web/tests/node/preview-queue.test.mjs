@@ -1,6 +1,6 @@
-import { test } from 'node:test'
+import { test } from 'vitest'
 import assert from 'node:assert/strict'
-import { withPreviewSlot } from '../app/lib/preview-queue.ts'
+import { withPreviewSlot } from '../../app/lib/preview-queue.ts'
 
 test('preview bursts stay within four reads and failed reads release their slot', async () => {
   let active = 0

@@ -1,11 +1,6 @@
-import { test } from 'node:test';
+import { test } from 'vitest';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import vm from 'node:vm';
-import ts from 'typescript';
-const context = vm.createContext({ exports: {} });
-vm.runInContext(ts.transpileModule(readFileSync(new URL('../app/lib/workspace-preferences.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
-const { decodePreferences, previewDimension } = context.exports;
+import { decodePreferences, previewDimension } from '../../app/lib/workspace-preferences.ts';
 test('legacy appearance migrates into independent scopes and retains validated filters only', () => {
     const result = decodePreferences(JSON.stringify({ appearance: { density: 'dense', width: 'full', details: false, motion: 'reduce', sort: 'oldest', gridMaximumDimension: 768, secret: 'discard' }, filters: { Gallery: { sourceId: 'source', workflow: 'All', tag: 'bounded', collectionIds: ['collection', 7] } }, selection: ['private'] }));
     assert.equal(result.value.workspace.width, 'full'); assert.equal(result.value.workspace.gridMaximumDimension, 768);

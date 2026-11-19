@@ -1,11 +1,6 @@
-import { test } from 'node:test';
+import { test } from 'vitest';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import vm from 'node:vm';
-import ts from 'typescript';
-const context = vm.createContext({ exports: {}, AbortController, setTimeout, clearTimeout });
-vm.runInContext(ts.transpileModule(readFileSync(new URL('../app/lib/gallery-slideshow.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
-const { GallerySlideshow, slideshowState } = context.exports;
+import { GallerySlideshow, slideshowState } from '../../app/lib/gallery-slideshow.ts';
 function fixture(pages) {
     const state = slideshowState();
     const displayed = [];

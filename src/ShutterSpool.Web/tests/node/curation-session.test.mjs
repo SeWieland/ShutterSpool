@@ -1,11 +1,6 @@
-import { test } from 'node:test';
+import { test } from 'vitest';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import ts from 'typescript';
-import vm from 'node:vm';
-const context = vm.createContext({ exports: {}, structuredClone });
-vm.runInContext(ts.transpileModule(readFileSync(new URL('../app/lib/curation-session.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText, context);
-const { CurationSession } = context.exports;
+import { CurationSession } from '../../app/lib/curation-session.ts';
 const initial = { revision: 1, rating: 0, tags: [], label: null };
 
 test('acknowledged bulk curation preserves opening values for discard', async () => {
@@ -63,8 +58,7 @@ test('lost responses reread without replay and cannot attribute the revision to 
 });
 test('an observation just after a recovery reread supplies the revision for the next edit', async () => {
     const writes = [];
-    // Keep the read in the session's realm so Promise adoption adds no extra microtask.
-    const reread = vm.runInContext('Promise.withResolvers()', context);
+    const reread = Promise.withResolvers();
     const started = Promise.withResolvers();
     const edit = new CurationSession(initial, async body => {
         writes.push(body);
@@ -77,6 +71,7 @@ test('an observation just after a recovery reread supplies the revision for the 
     edit.change({ rating: 3 });
     await started.promise;
     reread.resolve({ ...initial, revision: 2, rating: 3 });
+    // Deliver the observation after the reread is applied, before the write settles.
     queueMicrotask(() => queueMicrotask(() => edit.observe({ ...initial, revision: 3, rating: 5 })));
     await edit.settle();
     assert.equal(edit.server.revision, 3);
