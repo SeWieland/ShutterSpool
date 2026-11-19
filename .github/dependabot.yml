@@ -21,7 +21,13 @@ updates:
     groups:
       npm-compatible:
         patterns: ['*']
-        update-types: [minor, patch]
+        update-types: [minor]
+      npm-patch:
+        patterns: ['*']
+        update-types: [patch]
+      npm-major:
+        patterns: ['*']
+        update-types: [major]
       npm-security:
         applies-to: security-updates
         patterns: ['*']
@@ -33,7 +39,13 @@ updates:
     groups:
       nuget-compatible:
         patterns: ['*']
-        update-types: [minor, patch]
+        update-types: [minor]
+      nuget-patch:
+        patterns: ['*']
+        update-types: [patch]
+      nuget-major:
+        patterns: ['*']
+        update-types: [major]
       nuget-security:
         applies-to: security-updates
         patterns: ['*']
