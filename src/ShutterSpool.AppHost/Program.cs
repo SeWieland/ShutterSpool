@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Configuration;
 using ShutterSpool.AppHost;
 
+const string CameraInternalEndpoint = "camera-internal";
+
 var imagePins = ImagePins.Load();
 var builder = DistributedApplication.CreateBuilder(args);
 if (!builder.ExecutionContext.IsPublishMode) builder.Configuration.AddUserSecrets<Program>(optional: true);
@@ -185,10 +187,10 @@ static void ConfigureCameraIngress(IDistributedApplicationBuilder builder, IReso
     {
         MinLength = 64, Lower = true, Upper = true, Numeric = true, Special = false,
     }, secret: true, persist: true);
-    server.WithEndpoint(scheme: "http", name: "camera-internal", env: "ShutterSpool__CameraIngress__InternalPort", isExternal: false)
+    server.WithEndpoint(scheme: "http", name: CameraInternalEndpoint, env: "ShutterSpool__CameraIngress__InternalPort", isExternal: false)
         .WithEnvironment("ShutterSpool__CameraIngress__Enabled", "true")
         .WithEnvironment("ShutterSpool__CameraIngress__CallbackKey", callbackKey)
-        .WithEnvironment("ShutterSpool__CameraIngress__CallbackBaseUrl", ReferenceExpression.Create($"http://host.docker.internal:{server.GetEndpoint("camera-internal").Property(EndpointProperty.Port)}/internal/camera"));
+        .WithEnvironment("ShutterSpool__CameraIngress__CallbackBaseUrl", ReferenceExpression.Create($"http://host.docker.internal:{server.GetEndpoint(CameraInternalEndpoint).Property(EndpointProperty.Port)}/internal/camera"));
     ConfigureCameraIngressLimits(builder, server);
 
     foreach (var profile in profiles)
@@ -241,8 +243,8 @@ static void AddCameraEdge(IDistributedApplicationBuilder builder, IResourceBuild
         .WithEnvironment("SFTPGO_DATA_PROVIDER__DRIVER", "memory")
         .WithEnvironment("SFTPGO_DATA_PROVIDER__EXTERNAL_AUTH_SCOPE", "1")
         .WithEnvironment("SFTPGO_DATA_PROVIDER__EXTERNAL_AUTH_HOOK", ReferenceExpression.Create(
-            $"http://host.docker.internal:{server.GetEndpoint("camera-internal").Property(EndpointProperty.Port)}{authPath}"))
-        .WithEnvironment("SFTPGO_COMMON__ACTIONS__HOOK", ReferenceExpression.Create($"http://host.docker.internal:{server.GetEndpoint("camera-internal").Property(EndpointProperty.Port)}/internal/camera/hook"))
+            $"http://host.docker.internal:{server.GetEndpoint(CameraInternalEndpoint).Property(EndpointProperty.Port)}{authPath}"))
+        .WithEnvironment("SFTPGO_COMMON__ACTIONS__HOOK", ReferenceExpression.Create($"http://host.docker.internal:{server.GetEndpoint(CameraInternalEndpoint).Property(EndpointProperty.Port)}/internal/camera/hook"))
         .WithEnvironment("SFTPGO_COMMON__ACTIONS__EXECUTE_ON", "pre-upload,upload")
         .WithEnvironment("SFTPGO_COMMON__ACTIONS__EXECUTE_SYNC", "upload")
         .WithEnvironment("SFTPGO_HTTP__HEADERS__0__KEY", "X-API-KEY")
