@@ -108,6 +108,25 @@ test('targeted reconciliation fences late success and failure after view, query,
     }
 });
 
+test('Gallery reconciliation restores its visible scroll anchor and keeps the selected photograph', async () => {
+    const older = photo('older', { acceptedAt: new Date('2026-10-12T10:00:00Z') });
+    const oldest = photo('oldest', { acceptedAt: new Date('2026-10-12T09:59:00Z') });
+    const newer = photo('newer', { acceptedAt: new Date('2026-10-12T10:01:00Z') });
+    transport.page.mockResolvedValueOnce({ items: [older, oldest] });
+    const { tiles, view } = await mountWorkspace();
+    await view.get('button[aria-label="Select Photo older"]').trigger('click');
+    const anchor = view.get('[data-id="older"]').element;
+    vi.spyOn(anchor, 'getBoundingClientRect').mockImplementation(() => new DOMRect(0, tiles().indexOf('older') * 180, 100, 100));
+    const scroll = vi.spyOn(window, 'scrollBy').mockImplementation(() => {});
+    transport.page.mockResolvedValue({ items: [newer, older, oldest] });
+
+    await refresh();
+
+    expect(tiles()).toEqual(['newer', 'older', 'oldest']);
+    expect(view.get<HTMLInputElement>('input[aria-label="Select Photo older"]').element.checked).toBe(true);
+    expect(scroll).toHaveBeenCalledExactlyOnceWith(0, 180);
+});
+
 test('closing inspection or losing access fences a late Gallery detail response', async () => {
     for (const exit of ['close', 'access']) {
         const { view, inspect, dispose } = await mountWorkspace();
