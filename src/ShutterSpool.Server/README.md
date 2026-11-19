@@ -319,7 +319,7 @@ Preserve uncertain bytes and consult transfer status before operator cleanup; or
 
 ### Mesh-managed camera callbacks
 
-The default `CallbackTransport` is `ApplicationHttps`, which Aspire and the packaged Compose deployment use. Deployments that already run a service mesh can explicitly set `ShutterSpool__CameraIngress__CallbackTransport=MeshMtls`. Set the following Server options for that deployment.
+The default `CallbackTransport` is `ApplicationHttps`, which Aspire and the packaged Compose deployment use. Custom deployments that already run a service mesh can explicitly set `ShutterSpool__CameraIngress__CallbackTransport=MeshMtls`. Set the following Server options for that deployment.
 
 | Option | Value |
 | --- | --- |
@@ -329,7 +329,9 @@ The default `CallbackTransport` is `ApplicationHttps`, which Aspire and the pack
 | `CallbackCertificatePath` | Leave unset. The mesh issues and rotates the transport identities. |
 | `CallbackKey` | Supply the existing shared callback secret to Server and SFTPGo. |
 
-Configure each SFTPGo service's `SFTPGO_DATA_PROVIDER__EXTERNAL_AUTH_HOOK` with that same base URL plus `/auth`, `/legacy-auth`, or `/plain-auth` for its profile. Set `SFTPGO_COMMON__ACTIONS__HOOK` to the base URL plus `/hook`. Supply the shared callback key as the `X-API-KEY` header on those requests.
+Start the [pinned SFTPGo image](../../deploy/images/compose.yaml) directly with `sftpgo serve --log-file-path /dev/null --log-level error`. The [Compose entrypoint](../../deploy/package/edge-entrypoint.sh) requires a callback CA file at startup for every camera profile. Use the mesh's trust configuration for callbacks and provision and validate camera-facing FTPS certificates separately.
+
+Configure each SFTPGo service's `SFTPGO_DATA_PROVIDER__EXTERNAL_AUTH_HOOK` with that same base URL plus `/auth`, `/legacy-auth`, or `/plain-auth` for its profile. Set `SFTPGO_COMMON__ACTIONS__HOOK` to the base URL plus `/hook`, `SFTPGO_COMMON__ACTIONS__EXECUTE_ON=pre-upload,upload` and `SFTPGO_COMMON__ACTIONS__EXECUTE_SYNC=upload`. Set `SFTPGO_HTTP__HEADERS__0__KEY=X-API-KEY` and inject `SFTPGO_HTTP__HEADERS__0__VALUE` from the deployment's callback key secret.
 
 Enroll Server and every enabled SFTPGo service in the mesh. Require strict mTLS on the callback workload port. Set its authorization policy so that only the dedicated SFTPGo workload identities can reach it, including when broader allow rules apply. Apply this restriction specifically to the callback port. Forward authorized traffic from the Server's attached proxy to `127.0.0.1` on `InternalPort`. Keep the callback service internal to the mesh and out of public ingress. Server accepts callbacks on that port only if the local connection is loopback and the callback key is valid. The mesh supplies mTLS between workloads and the proxy forwards HTTP on the final loopback hop. An Istio sidecar can forward to loopback using its ingress `defaultEndpoint`. [Istio sidecar configuration](https://istio.io/latest/docs/reference/config/networking/sidecar/) · [Strict mTLS](https://istio.io/latest/docs/reference/config/security/peer_authentication/) · [Authorization policy](https://istio.io/latest/docs/reference/config/security/authorization-policy/)
 

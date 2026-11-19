@@ -6,6 +6,7 @@ This package targets one Server instance on one Linux amd64 Docker host.
 Inspect `release-manifest.json` for the version, source commit, platform, image digest, upstream image references, database compatibility and upgrade baseline.
 A build alone does not qualify compatibility; follow the instructions and limits published with that release.
 The observed test environment is Docker Desktop/WSL2 with Linux volumes. Native Linux storage, ARM and public FTPS require separate qualification.
+Packaged camera edges use `ApplicationHttps` and require a dedicated callback CA for every profile. `MeshMtls` is available to custom deployments that manage SFTPGo startup and mesh policy.
 
 ## Get a published release
 
