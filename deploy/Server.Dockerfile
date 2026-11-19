@@ -1,4 +1,4 @@
-FROM node:26.8.1-bookworm-slim@sha256:367679cf9792759492a486e4aa4b421764d71a9546a6dae8aab81a99eb797b3e AS web
+FROM node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1 AS web
 WORKDIR /source/src/ShutterSpool.Web
 COPY src/ShutterSpool.Web/package*.json ./
 RUN npm ci --ignore-scripts
