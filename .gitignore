@@ -2,6 +2,7 @@
 **/obj/
 **/node_modules/
 **/.nuxt/
+/src/ShutterSpool.Web/.nuxtrc
 **/.output/
 **/dist/
 src/ShutterSpool.Server/wwwroot/

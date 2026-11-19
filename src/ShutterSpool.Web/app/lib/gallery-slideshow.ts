@@ -5,11 +5,12 @@ export function slideshowState() {
     return { playing: false, loading: false, seconds: 5, message: '', retry: false, failure: '' as '' | 'preview' | 'sequence', photographsOnly: false };
 }
 type State = ReturnType<typeof slideshowState>;
+type Timer = number | ReturnType<typeof setTimeout>;
 interface Dependencies {
     read: (cursor: string | undefined, startAt: string | undefined, signal: AbortSignal, direction?: -1 | 1) => Promise<SlidePage>;
     show: (id: string) => void;
-    schedule?: (action: () => void, milliseconds: number) => ReturnType<typeof setTimeout>;
-    cancel?: (timer: ReturnType<typeof setTimeout>) => void;
+    schedule?: (action: () => void, milliseconds: number) => Timer;
+    cancel?: (timer: Timer) => void;
     yield?: (signal: AbortSignal) => Promise<void>;
 }
 
@@ -24,7 +25,7 @@ export class GallerySlideshow {
     private version = 0;
     private request?: AbortController;
     private pendingRead?: () => Promise<void>;
-    private timer?: ReturnType<typeof setTimeout>;
+    private timer?: Timer;
     constructor(readonly state: State, readonly dependencies: Dependencies) {}
     get generation() { return this.version; }
     private ownsRead(version: number, signal: AbortSignal) {

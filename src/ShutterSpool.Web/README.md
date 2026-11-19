@@ -21,8 +21,12 @@ The [bundle check](scripts/check-bundle.mjs) bounds initial JavaScript/CSS bytes
 and verifies that the five workspace sections remain dynamic without static-HTML prefetches.
 Use `npm run check:bundle` to recheck the current generated output and manifest; generate them first.
 These are asset-size and loading-boundary checks, not measured load times.
+
+`npm test` runs the native Node tests in `scripts/` and the repository's attribution tests, then runs Vitest.
 The native Node checks cover serial/coalesced autosave, uncertain outcomes, revision conflicts, released-Capture
 guards, reconciliation, comparison/drafts, zoom bounds, motion preferences and bounded preview requests using the existing TypeScript compiler.
+The mounted Nuxt tests in `tests/nuxt-runtime/` exercise components with synthetic attribution and can run without generated metadata or registry access.
+
 Run these commands from this directory; there is intentionally no repository-root `package.json`.
 Run `npm run generate-client` after building the Server OpenAPI document.
 The command replaces the generated `app/api` directory; keep handwritten code outside it. Explicit media types preserve binary preview return types. The pinned Kiota bundle supplies the generated client's runtime. Set the request adapter's base URL to the selected Server origin. CI rejects generated-client drift, and repeated generation from the same document must produce identical files.
