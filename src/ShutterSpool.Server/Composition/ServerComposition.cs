@@ -272,8 +272,10 @@ internal static class ServerComposition
         string? urls = builder.Configuration[Microsoft.AspNetCore.Hosting.WebHostDefaults.ServerUrlsKey]
             ?? builder.WebHost.GetSetting(Microsoft.AspNetCore.Hosting.WebHostDefaults.ServerUrlsKey);
         IConfigurationSection callback = builder.Configuration.GetSection("Kestrel:Endpoints:CameraCallback");
+        bool useMeshTransport = ingress.CallbackTransport == CameraCallbackTransport.MeshMtls;
+        string scheme = useMeshTransport ? "http" : "https";
         string address = ingress.InternalListenOnAllInterfaces ? "0.0.0.0" : "localhost";
-        callback["Url"] = $"https://{address}:{ingress.InternalPort}";
+        callback["Url"] = $"{scheme}://{address}:{ingress.InternalPort}";
         callback["Certificate:Path"] = ingress.CallbackCertificatePath;
         callback["Certificate:KeyPath"] = ingress.CallbackCertificatePath;
         builder.WebHost.ConfigureKestrel((_, server) =>
@@ -283,7 +285,7 @@ internal static class ServerComposition
                 foreach (string value in urls.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                     ConfigurePublicListener(server, value);
             }
-            if (string.IsNullOrWhiteSpace(ingress.CallbackCertificatePath))
+            if (!useMeshTransport && string.IsNullOrWhiteSpace(ingress.CallbackCertificatePath))
                 throw new InvalidOperationException("Enabled camera ingress requires a dedicated callback HTTPS certificate.");
         });
     }

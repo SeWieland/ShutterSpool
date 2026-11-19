@@ -304,7 +304,7 @@ For a self-hosted internal Nextcloud server, allow only its required network/add
 
 ## Camera ingress
 
-Enable `ShutterSpool:CameraIngress:Enabled` when at least one deployment profile is active, as described in the [AppHost guide](../ShutterSpool.AppHost/README.md#camera-ingress). Configure `CallbackKey` as a separate secret of at least 32 characters and `CallbackBaseUrl` as an edge-reachable private HTTPS URL ending in `/internal/camera`. `CallbackCertificatePath` points to the dedicated Server PEM bundle, including its key. `InternalPort` is the private listener port. It binds to loopback by default. Compose opts into all container interfaces with `InternalListenOnAllInterfaces` and leaves the port unpublished. The main listener denies internal callbacks, and the private listener denies management, media and web routes. Diagnostics and telemetry omit callback bodies, filenames, credentials and private paths. Each profile has independent `Enabled`, `ControlPort` and (for FTPS) `CaRootPath` settings. All profiles advertise the common `Hostname`.
+Enable `ShutterSpool:CameraIngress:Enabled` when at least one deployment profile is active, as described in the [AppHost guide](../ShutterSpool.AppHost/README.md#camera-ingress). Configure `CallbackKey` as a separate secret of at least 32 characters. For the default transport, configure `CallbackBaseUrl` as an edge-reachable private HTTPS URL ending in `/internal/camera`. `CallbackCertificatePath` points to the dedicated Server PEM bundle, including its key. `InternalPort` is the private listener port. It binds to loopback by default. Compose opts into all container interfaces with `InternalListenOnAllInterfaces` and leaves the port unpublished. The main listener denies internal callbacks, and the private listener denies management, media and web routes. Diagnostics and telemetry omit callback bodies, filenames, credentials and private paths. Each profile has independent `Enabled`, `ControlPort` and (for FTPS) `CaRootPath` settings. All profiles advertise the common `Hostname`.
 
 Defaults are `MaximumUploadBytes=536870912` (512 MiB), `MaximumConcurrentTransfers=16`, `MaximumSessionsPerSource=2`, `UploadBandwidthKiBPerSecond=8192` and `TransferTimeoutSeconds=600`. `MaximumSessionsPerSource` is enforced independently by each enabled SFTPGo edge; a Source authenticates only through its selected profile. `MaximumConcurrentTransfers` is enforced by the central PostgreSQL admission path and remains shared across edges. Pre-upload admission checks the one-copy spool capacity envelope for the configured concurrency; an admitted transfer continues while writes remain possible. Set the payload reserve through `ShutterSpool:Spool:ReservedBytes` or `ReservedPercent` (bytes wins). Each edge's separate bounded pipe buffer is configured by AppHost. Set finite limits to match the host; configuration errors fail startup.
 
@@ -316,6 +316,24 @@ SFTPGo uses authenticated `POST /internal/camera/auth` and `/hook`, plus per-log
 HTTPFs accepts complete/truncating uploads without download/delete/rename/link operations.
 The [acceptance sequence](../../docs/core-workflow.md#1-accept-responsibility-before-saying-success) explains byte receipt versus Asset commit; the [Infrastructure reference](../ShutterSpool.Infrastructure/README.md#camera-ingress-receive-and-recovery) owns recovery details.
 Preserve uncertain bytes and consult transfer status before operator cleanup; original removal follows the [retention policy](../../docs/retention.md).
+
+### Mesh-managed camera callbacks
+
+The default `CallbackTransport` is `ApplicationHttps`, which Aspire and the packaged Compose deployment use. Deployments that already run a service mesh can explicitly set `ShutterSpool__CameraIngress__CallbackTransport=MeshMtls`. Set the following Server options for that deployment.
+
+| Option | Value |
+| --- | --- |
+| `CallbackBaseUrl` | The private mesh service URL ending in `/internal/camera`, for example `http://shutterspool-camera.ingest.svc.cluster.local:8081/internal/camera`. Server uses it to construct the HTTPFs endpoint. |
+| `InternalPort` | The dedicated port on which Server accepts a local connection from the mesh proxy, for example `8081`. |
+| `InternalListenOnAllInterfaces` | Leave unset or set to `false`. |
+| `CallbackCertificatePath` | Leave unset. The mesh issues and rotates the transport identities. |
+| `CallbackKey` | Supply the existing shared callback secret to Server and SFTPGo. |
+
+Configure each SFTPGo service's `SFTPGO_DATA_PROVIDER__EXTERNAL_AUTH_HOOK` with that same base URL plus `/auth`, `/legacy-auth`, or `/plain-auth` for its profile. Set `SFTPGO_COMMON__ACTIONS__HOOK` to the base URL plus `/hook`. Supply the shared callback key as the `X-API-KEY` header on those requests.
+
+Enroll Server and every enabled SFTPGo service in the mesh. Require strict mTLS on the callback workload port. Set its authorization policy so that only the dedicated SFTPGo workload identities can reach it, including when broader allow rules apply. Apply this restriction specifically to the callback port. Forward authorized traffic from the Server's attached proxy to `127.0.0.1` on `InternalPort`. Keep the callback service internal to the mesh and out of public ingress. Server accepts callbacks on that port only if the local connection is loopback and the callback key is valid. The mesh supplies mTLS between workloads and the proxy forwards HTTP on the final loopback hop. An Istio sidecar can forward to loopback using its ingress `defaultEndpoint`. [Istio sidecar configuration](https://istio.io/latest/docs/reference/config/networking/sidecar/) · [Strict mTLS](https://istio.io/latest/docs/reference/config/security/peer_authentication/) · [Authorization policy](https://istio.io/latest/docs/reference/config/security/authorization-policy/)
+
+Before enabling camera traffic, verify that each enabled SFTPGo profile can authenticate and upload over the mesh, that the mesh blocks both an unauthorized meshed workload and a plaintext connection from outside the mesh, and that the callback is inaccessible via public ingress. Browser HTTPS and camera-facing FTPS keep their own certificates. Live mesh qualification is pending.
 
 ## HTTP and composition boundaries
 

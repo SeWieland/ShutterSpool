@@ -110,6 +110,8 @@ This order is required because the grant store itself needs the selected tenant 
 `WorkspaceIngressMiddleware` handles private camera callbacks instead: it checks the private listener and callback key, reads the bounded routing identity, then binds the workspace found in the control registry.
 The camera endpoint subsequently validates the Source credential or durable admission. Routing does not revoke an already admitted transfer when credentials change.
 
+In a mesh-managed deployment the attached proxy enforces mutual TLS and workload identity before forwarding over loopback to the callback listener. Server still enforces the listener boundary and callback key. [Mesh-managed callback configuration](../../src/ShutterSpool.Server/README.md#mesh-managed-camera-callbacks)
+
 `WorkspaceLiveTokenMiddleware` binds SignalR negotiation tokens to the selected workspace using data protection, and unwraps them before native SignalR transport handling.
 SignalR knows its connection token, but not ShutterSpool's workspace boundary; the wrapper prevents polling a connection under another selected workspace.
 Token expiry and current membership/visibility checks remain separate responsibilities.
