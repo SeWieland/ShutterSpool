@@ -14,6 +14,7 @@ using ShutterSpool.Application.Preview;
 using ShutterSpool.Application.Retention;
 using ShutterSpool.Application.Sources;
 using ShutterSpool.Application.Workspaces;
+using ShutterSpool.Domain.Sources;
 using Microsoft.Extensions.Hosting;
 using ShutterSpool.Server.Api.Live;
 using ShutterSpool.Infrastructure.Persistence;
@@ -408,6 +409,53 @@ public sealed partial class ConfigurationApiTests
         SourceConfigurationResponse preserved = (await omitted.Content.ReadFromJsonAsync<SourceConfigurationResponse>(token))!;
         Assert.Equal("ModernFtps", preserved.ConnectionProfile);
         Assert.Equal(disabled.CredentialGeneration, preserved.CredentialGeneration);
+    }
+
+    [Fact]
+    public async Task Source_curation_policy_update_preserves_configuration_and_rejects_stale_retry()
+    {
+        await using var fixture = await ConfigurationApiFixture.CreateAsync();
+        CancellationToken token = TestContext.Current.CancellationToken;
+        Guid collectionId = Guid.NewGuid();
+        await using (var database = new ShutterSpoolDbContext(fixture.Database.Options))
+        {
+            database.Collections.Add(new() { Id = collectionId, Name = "Incoming", Path = "Incoming", Identity = "INCOMING" });
+            await database.SaveChangesAsync(token);
+        }
+
+        using HttpResponseMessage create = await fixture.Client.PostAsJsonAsync("/management/sources",
+            new CreateSourceRequest("Policy camera", "CameraFtpUpload", "LegacyFtps", DelaySeconds: 90, CollectionId: collectionId), token);
+        Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+        CreatedSourceResponse source = (await create.Content.ReadFromJsonAsync<CreatedSourceResponse>(token))!;
+        string path = $"/management/sources/{source.Id}";
+        SourceConfigurationResponse before = (await fixture.Client.GetFromJsonAsync<SourceConfigurationResponse>(path, token))!;
+        Assert.Equal("Delay", before.CurationMode);
+        Assert.Equal(90, before.CurationDelaySeconds);
+        Assert.Equal(collectionId, before.CollectionId);
+        Assert.Equal("LegacyFtps", before.ConnectionProfile);
+
+        var request = new UpdateSourceCurationPolicyRequest(before.ConfigurationRevision, "Manual");
+        SourceConfigurationResponse expected = before with
+        {
+            ConfigurationRevision = before.ConfigurationRevision + 1,
+            CurationMode = "Manual",
+            CurationDelaySeconds = 3_600,
+        };
+        using HttpResponseMessage updated = await fixture.Client.PutAsJsonAsync($"{path}/curation-policy", request, token);
+        Assert.Equal(HttpStatusCode.OK, updated.StatusCode);
+        Assert.Equal(expected, await updated.Content.ReadFromJsonAsync<SourceConfigurationResponse>(token));
+
+        using HttpResponseMessage stale = await fixture.Client.PutAsJsonAsync($"{path}/curation-policy", request, token);
+        Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
+        SourceConfigurationConflictProblemDetails conflict = (await stale.Content.ReadFromJsonAsync<SourceConfigurationConflictProblemDetails>(token))!;
+        Assert.Equal("CONFIGURATION_CONFLICT", conflict.ErrorCode);
+        Assert.Equal(expected, conflict.Current);
+        Assert.Equal(expected, await fixture.Client.GetFromJsonAsync<SourceConfigurationResponse>(path, token));
+
+        await using var scope = fixture.Scope();
+        var verifier = scope.ServiceProvider.GetRequiredService<SourceCredentialVerifier>();
+        SourceAccess? credential = await verifier.VerifyAsync(source.Username, source.Secret!, SourceConnectionProfile.LegacyFtps, token);
+        Assert.Equal(new SourceAccess(source.Id, source.VirtualRoot, before.CredentialGeneration), credential);
     }
 
     [Fact]
