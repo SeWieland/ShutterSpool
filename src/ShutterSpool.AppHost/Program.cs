@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using ShutterSpool.AppHost;
 
 const string CameraInternalEndpoint = "camera-internal";
+const string DisabledEnvironmentValue = "false";
 
 var imagePins = ImagePins.Load();
 var builder = DistributedApplication.CreateBuilder(args);
@@ -175,11 +176,7 @@ static void ConfigureCameraIngress(IDistributedApplicationBuilder builder, IReso
     IReadOnlyDictionary<string, ImagePin> imagePins)
 {
     var profiles = CameraIngressProfile.ReadEnabled(builder.Configuration);
-    foreach (string profile in CameraIngressProfile.Names)
-        server.WithEnvironment($"ShutterSpool__CameraIngress__Profiles__{profile}__Enabled",
-            profiles.Any(enabled => enabled.Name == profile) ? "true" : "false");
-    server.WithEnvironment("ShutterSpool__CameraIngress__Enabled", profiles.Length > 0 ? "true" : "false")
-        .WithEnvironment("ShutterSpool__CameraIngress__Hostname", builder.Configuration["ShutterSpool:CameraIngress:Hostname"] ?? "ingest.shutterspool.com");
+    ConfigureCameraProfileFlags(server, builder.Configuration, profiles);
     if (profiles.Length == 0) return;
 
     var settings = new CameraIngressConfiguration(builder.Configuration, profiles, builder.ExecutionContext.IsPublishMode);
@@ -204,7 +201,7 @@ static void ConfigureCameraIngress(IDistributedApplicationBuilder builder, IReso
         var edgeEndpoint = server.GetEndpoint(CameraInternalEndpoint, KnownNetworkIdentifiers.DefaultAspireContainerNetwork);
         callbackBaseUrl = ReferenceExpression.Create($"{edgeEndpoint}/internal/camera");
         server.WithEnvironment("ShutterSpool__CameraIngress__CallbackBaseUrl", callbackBaseUrl)
-            .WithEnvironment("ShutterSpool__CameraIngress__InternalListenOnAllInterfaces", "false")
+            .WithEnvironment("ShutterSpool__CameraIngress__InternalListenOnAllInterfaces", DisabledEnvironmentValue)
             .WithEnvironment("ShutterSpool__CameraIngress__CallbackCertificatePath", settings.CallbackCertificatePath);
     }
     ConfigureCameraIngressLimits(builder, server);
@@ -220,6 +217,15 @@ static void ConfigureCameraIngress(IDistributedApplicationBuilder builder, IReso
                 .WithCertificateTrustScope(CertificateTrustScope.Append)
                 .WithDeveloperCertificateTrust(false);
     }
+}
+
+static void ConfigureCameraProfileFlags(IResourceBuilder<ProjectResource> server, IConfiguration configuration, CameraIngressProfile[] profiles)
+{
+    foreach (string profile in CameraIngressProfile.Names)
+        server.WithEnvironment($"ShutterSpool__CameraIngress__Profiles__{profile}__Enabled",
+            profiles.Any(enabled => enabled.Name == profile) ? "true" : DisabledEnvironmentValue);
+    server.WithEnvironment("ShutterSpool__CameraIngress__Enabled", profiles.Length > 0 ? "true" : DisabledEnvironmentValue)
+        .WithEnvironment("ShutterSpool__CameraIngress__Hostname", configuration["ShutterSpool:CameraIngress:Hostname"] ?? "ingest.shutterspool.com");
 }
 
 static void ConfigureCameraIngressLimits(IDistributedApplicationBuilder builder, IResourceBuilder<ProjectResource> server)
@@ -252,7 +258,7 @@ static IResourceBuilder<ContainerResource> AddCameraEdge(IDistributedApplication
         .WithEnvironment("SFTPGO_FTPD__PASSIVE_PORT_RANGE__START", profile.Start.ToString())
         .WithEnvironment("SFTPGO_FTPD__PASSIVE_PORT_RANGE__END", profile.End.ToString())
         .WithEnvironment("SFTPGO_FTPD__DISABLE_ACTIVE_MODE", "true")
-        .WithEnvironment("SFTPGO_FTPD__ENABLE_SITE", "false")
+        .WithEnvironment("SFTPGO_FTPD__ENABLE_SITE", DisabledEnvironmentValue)
         .WithEnvironment("SFTPGO_FTPD__HASH_SUPPORT", "0")
         .WithEnvironment("SFTPGO_FTPD__COMBINE_SUPPORT", "0")
         .WithEnvironment("SFTPGO_COMMON__IDLE_TIMEOUT", settings.IdleMinutes.ToString())

@@ -15,6 +15,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ENTRYPOINT = ROOT / "deploy/package/edge-entrypoint.sh"
 EXPECTED_HOSTNAME = "ingest.example.test"
+TEST_KEY_TYPE = "rsa:2048"
+CALLBACK_CA_ERROR = "callback HTTPS CA certificate is missing or invalid"
 
 
 def run(*args: str, cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -55,7 +57,7 @@ class EdgeCertificateStartupTests(unittest.TestCase):
             "CAMERA_HOSTNAME": EXPECTED_HOSTNAME,
         }
         self._make_chain(EXPECTED_HOSTNAME)
-        self._openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "callback-ca.key",
+        self._openssl("req", "-x509", "-newkey", TEST_KEY_TYPE, "-nodes", "-keyout", "callback-ca.key",
                       "-out", self.callback_root.name, "-days", "2", "-subj", "/CN=ShutterSpool Callback Test CA",
                       "-addext", "basicConstraints=critical,CA:TRUE")
 
@@ -67,9 +69,9 @@ class EdgeCertificateStartupTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
 
     def _make_chain(self, hostname: str, *, expired: bool = False) -> None:
-        self._openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", self.root_certificate.name,
+        self._openssl("req", "-x509", "-newkey", TEST_KEY_TYPE, "-nodes", "-keyout", "ca.key", "-out", self.root_certificate.name,
                       "-days", "2", "-subj", "/CN=ShutterSpool Test CA", "-addext", "basicConstraints=critical,CA:TRUE")
-        self._openssl("req", "-newkey", "rsa:2048", "-nodes", "-keyout", "server.key", "-out", "server.csr",
+        self._openssl("req", "-newkey", TEST_KEY_TYPE, "-nodes", "-keyout", "server.key", "-out", "server.csr",
                       "-subj", "/CN=" + hostname)
         extension = self.root / "server.ext"
         extension.write_text("subjectAltName=DNS:" + hostname + "\nextendedKeyUsage=serverAuth\nkeyUsage=digitalSignature,keyEncipherment\n", encoding="utf-8")
@@ -106,19 +108,19 @@ class EdgeCertificateStartupTests(unittest.TestCase):
         self.callback_root.unlink()
         result = self._start()
         self.assertNotEqual(0, result.returncode)
-        self.assertIn("callback HTTPS CA certificate is missing or invalid", result.stderr)
+        self.assertIn(CALLBACK_CA_ERROR, result.stderr)
 
     def test_rejects_a_private_key_in_the_callback_authority_file(self) -> None:
         self.callback_root.write_bytes(self.callback_root.read_bytes() + (self.root / "callback-ca.key").read_bytes())
         result = self._start()
         self.assertNotEqual(0, result.returncode)
-        self.assertIn("callback HTTPS CA certificate is missing or invalid", result.stderr)
+        self.assertIn(CALLBACK_CA_ERROR, result.stderr)
 
     def test_rejects_a_second_certificate_in_the_callback_authority_file(self) -> None:
         self.callback_root.write_bytes(self.callback_root.read_bytes() + b"\n" + self.root_certificate.read_bytes())
         result = self._start()
         self.assertNotEqual(0, result.returncode)
-        self.assertIn("callback HTTPS CA certificate is missing or invalid", result.stderr)
+        self.assertIn(CALLBACK_CA_ERROR, result.stderr)
 
     def test_rejects_missing_certificate(self) -> None:
         self.server_bundle.unlink()

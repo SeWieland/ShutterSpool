@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
-import manifest from '../.nuxt/dist/server/client.manifest.mjs';
+import manifest from '../node_modules/.cache/nuxt/.nuxt/dist/server/client.manifest.mjs';
 
 const output = new URL('../.output/public/', import.meta.url);
 const html = readFileSync(new URL('index.html', output), 'utf8');
