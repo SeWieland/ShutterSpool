@@ -400,6 +400,12 @@ public sealed partial class ConfigurationApiTests
         using var tooManySources = await fixture.Client.GetAsync("/management/captures?" +
             string.Join('&', Enumerable.Range(0, 31).Select(_ => $"sourceIds={Guid.NewGuid()}")), token);
         Assert.Equal(HttpStatusCode.BadRequest, tooManySources.StatusCode);
+        using var tooManyCollections = await fixture.Client.GetAsync("/management/captures?" +
+            string.Join('&', Enumerable.Repeat($"collectionIds={Guid.Empty}", 31)), token);
+        Assert.Equal(HttpStatusCode.BadRequest, tooManyCollections.StatusCode);
+        using var collectionProblem = JsonDocument.Parse(await tooManyCollections.Content.ReadAsStringAsync(token));
+        Assert.Equal("Provide at most 30 Collections.",
+            collectionProblem.RootElement.GetProperty("errors").GetProperty("collectionIds")[0].GetString());
         using var tooManyWorkflows = await fixture.Client.GetAsync(
             "/management/captures?workflows=Waiting&workflows=Held&workflows=Released&workflows=Attention&workflows=Waiting", token);
         Assert.Equal(HttpStatusCode.BadRequest, tooManyWorkflows.StatusCode);

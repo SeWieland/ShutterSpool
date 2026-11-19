@@ -64,67 +64,86 @@ internal sealed class WorkspaceMaintenance(IConfiguration configuration)
         name = WorkspaceManifest.CanonicalName(configuration, name);
         WorkspaceManifest manifest = WorkspaceManifest.Read(configuration, name);
         string migration = manifest.MigrationConnection;
-        WorkspaceRecord? record = await control.Workspaces.SingleOrDefaultAsync(item => item.Name == name, token);
-        if (record is not null && !manifest.MatchesProof(record.Provisioning))
-            throw new WorkspaceOperator.RefusedException("The named workspace conflicts with its recorded targets, allocation or initial Owner. Existing state is preserved.");
-        if (record is null)
-        {
-            if (!Directory.Exists(manifest.StorageRoot) || Directory.EnumerateFileSystemEntries(manifest.StorageRoot).Any())
-                throw new WorkspaceOperator.RefusedException("Provisioning requires an existing empty allocated storage root.");
-            await using var empty = CreateDatabase(migration);
-            if (await HasObjectsAsync(empty, token)) throw new WorkspaceOperator.RefusedException("Provisioning requires an empty tenant database.");
-            int count = await control.Workspaces.CountAsync(token);
-            long allocated = await control.Workspaces.SumAsync(item => item.AllocatedBytes, token);
-            if (count >= EfWorkspaceRegistry.MaximumWorkspaces || checked(allocated + manifest.AllocatedBytes)
-                > configuration.GetValue<long>("ShutterSpool:Workspaces:UsableCapacityBytes"))
-                throw new WorkspaceOperator.RefusedException("The workspace count or total allocation exceeds the deployment budget.");
-            record = new WorkspaceRecord
-            {
-                Id = Guid.NewGuid(), Name = name, StorageIdentity = Guid.NewGuid().ToString("N"), OperationId = Guid.NewGuid(),
-                StorageRoot = manifest.StorageRoot, AllocatedBytes = manifest.AllocatedBytes,
-                RuntimeTarget = WorkspaceManifest.Target(manifest.ConnectionString), Provisioning = manifest.Proof,
-            };
-            control.Workspaces.Add(record);
-            await control.SaveChangesAsync(token);
-        }
-        WorkspaceDefinition definition = record.Definition;
+        WorkspaceRecord record = await ClaimWorkspaceAsync(control, name, manifest, migration, token);
         if (record.Ready)
         {
-            WorkspaceRuntime.ValidateRoot(definition);
-            await using var runtime = CreateDatabase(manifest.ConnectionString);
-            await WorkspaceRuntime.ValidateDatabaseAsync(runtime, definition, token);
+            await ValidateProvisionedTargetsAsync(record.Definition, manifest.ConnectionString, token);
             return;
         }
-        await using (ShutterSpoolDbContext database = CreateDatabase(migration))
+
+        await BootstrapTenantAsync(record, name, manifest, migration, token);
+        await PublishWorkspaceAsync(control, record, manifest.ConnectionString, token);
+    }
+
+    private async Task<WorkspaceRecord> ClaimWorkspaceAsync(WorkspaceControlDbContext control, string name,
+        WorkspaceManifest manifest, string migration, CancellationToken token)
+    {
+        WorkspaceRecord? record = await control.Workspaces.SingleOrDefaultAsync(item => item.Name == name, token);
+        if (record is not null)
         {
-            var initializer = new DatabaseInitializer(database);
-            await initializer.InitializeAsync(definition.StorageRoot, cancellationToken: token);
-            await using var transaction = await database.Database.BeginTransactionAsync(token);
-            WorkspaceIdentityEntity? identity = await database.WorkspaceIdentities.SingleOrDefaultAsync(token);
-            if (identity is null)
-            {
-                identity = new WorkspaceIdentityEntity { Id = record.Id, StorageIdentity = record.StorageIdentity, OperationId = record.OperationId };
-                database.WorkspaceIdentities.Add(identity);
-            }
-            if (identity.Id != record.Id || identity.StorageIdentity != record.StorageIdentity || identity.OperationId != record.OperationId)
-                throw new WorkspaceOperator.RefusedException("The tenant database belongs to another workspace or provisioning operation.");
-            if (!identity.BootstrapComplete)
-            {
-                await new EfAccessGrantStore(database).PrepareInitialOwnerAsync(record.OperationId, manifest.OwnerIssuer, manifest.OwnerSubject,
-                    configuration[$"ShutterSpool:Workspaces:Definitions:{name}:SetupOperatorIdentity"], token);
-                SpoolQuotaSettingsEntity quota = await database.SpoolQuotaSettings.SingleAsync(item => item.Id == 1, token);
-                quota.IsActive = true; quota.QuotaBytes = definition.AllocatedBytes;
-                quota.HighWatermarkBytes = Math.Max(1, definition.AllocatedBytes * 9 / 10);
-                quota.RecoveryTargetBytes = definition.AllocatedBytes * 8 / 10;
-                quota.StorageMarkerAdoptionAuthorized = true;
-                identity.BootstrapComplete = true;
-                await database.SaveChangesAsync(token);
-            }
-            await transaction.CommitAsync(token);
-            var protector = new SecretProtector(Options.Create(configuration.GetSection("ShutterSpool:Security").Get<CredentialProtectionOptions>() ?? new()));
-            await initializer.ValidateSecretKeyAsync(protector, enroll: true, token);
-            await GrantRuntimeAsync(database, manifest.ConnectionString, token);
+            if (!manifest.MatchesProof(record.Provisioning))
+                throw new WorkspaceOperator.RefusedException("The named workspace conflicts with its recorded targets, allocation or initial Owner. Existing state is preserved.");
+            return record;
         }
+
+        if (!Directory.Exists(manifest.StorageRoot) || Directory.EnumerateFileSystemEntries(manifest.StorageRoot).Any())
+            throw new WorkspaceOperator.RefusedException("Provisioning requires an existing empty allocated storage root.");
+        await using var empty = CreateDatabase(migration);
+        if (await HasObjectsAsync(empty, token)) throw new WorkspaceOperator.RefusedException("Provisioning requires an empty tenant database.");
+        int count = await control.Workspaces.CountAsync(token);
+        long allocated = await control.Workspaces.SumAsync(item => item.AllocatedBytes, token);
+        if (count >= EfWorkspaceRegistry.MaximumWorkspaces || checked(allocated + manifest.AllocatedBytes)
+            > configuration.GetValue<long>("ShutterSpool:Workspaces:UsableCapacityBytes"))
+            throw new WorkspaceOperator.RefusedException("The workspace count or total allocation exceeds the deployment budget.");
+        record = new WorkspaceRecord
+        {
+            Id = Guid.NewGuid(), Name = name, StorageIdentity = Guid.NewGuid().ToString("N"), OperationId = Guid.NewGuid(),
+            StorageRoot = manifest.StorageRoot, AllocatedBytes = manifest.AllocatedBytes,
+            RuntimeTarget = WorkspaceManifest.Target(manifest.ConnectionString), Provisioning = manifest.Proof,
+        };
+        control.Workspaces.Add(record);
+        await control.SaveChangesAsync(token);
+        return record;
+    }
+
+    private async Task BootstrapTenantAsync(WorkspaceRecord record, string name, WorkspaceManifest manifest, string migration,
+        CancellationToken token)
+    {
+        await using ShutterSpoolDbContext database = CreateDatabase(migration);
+        var initializer = new DatabaseInitializer(database);
+        await initializer.InitializeAsync(record.StorageRoot, cancellationToken: token);
+        await using var transaction = await database.Database.BeginTransactionAsync(token);
+        WorkspaceIdentityEntity? identity = await database.WorkspaceIdentities.SingleOrDefaultAsync(token);
+        if (identity is null)
+        {
+            identity = new WorkspaceIdentityEntity { Id = record.Id, StorageIdentity = record.StorageIdentity, OperationId = record.OperationId };
+            database.WorkspaceIdentities.Add(identity);
+        }
+        if (identity.Id != record.Id || identity.StorageIdentity != record.StorageIdentity || identity.OperationId != record.OperationId)
+            throw new WorkspaceOperator.RefusedException("The tenant database belongs to another workspace or provisioning operation.");
+        if (!identity.BootstrapComplete)
+        {
+            await new EfAccessGrantStore(database).PrepareInitialOwnerAsync(record.OperationId, manifest.OwnerIssuer, manifest.OwnerSubject,
+                configuration[$"ShutterSpool:Workspaces:Definitions:{name}:SetupOperatorIdentity"], token);
+            SpoolQuotaSettingsEntity quota = await database.SpoolQuotaSettings.SingleAsync(item => item.Id == 1, token);
+            quota.IsActive = true;
+            quota.QuotaBytes = record.AllocatedBytes;
+            quota.HighWatermarkBytes = Math.Max(1, record.AllocatedBytes * 9 / 10);
+            quota.RecoveryTargetBytes = record.AllocatedBytes * 8 / 10;
+            quota.StorageMarkerAdoptionAuthorized = true;
+            identity.BootstrapComplete = true;
+            await database.SaveChangesAsync(token);
+        }
+        await transaction.CommitAsync(token);
+        var protector = new SecretProtector(Options.Create(configuration.GetSection("ShutterSpool:Security").Get<CredentialProtectionOptions>() ?? new()));
+        await initializer.ValidateSecretKeyAsync(protector, enroll: true, token);
+        await GrantRuntimeAsync(database, manifest.ConnectionString, token);
+    }
+
+    private async Task PublishWorkspaceAsync(WorkspaceControlDbContext control, WorkspaceRecord record, string runtimeConnection,
+        CancellationToken token)
+    {
+        WorkspaceDefinition definition = record.Definition;
         string markerPath = Path.Combine(definition.StorageRoot, WorkspaceRuntime.Marker);
         if (!File.Exists(markerPath))
         {
@@ -132,13 +151,19 @@ internal sealed class WorkspaceMaintenance(IConfiguration configuration)
             await JsonSerializer.SerializeAsync(marker, new WorkspaceRuntime.StorageMarker(record.Id, record.StorageIdentity, record.OperationId), cancellationToken: token);
             marker.Flush(flushToDisk: true);
         }
-        WorkspaceRuntime.ValidateRoot(definition);
-        await using (var runtime = CreateDatabase(manifest.ConnectionString))
-            await WorkspaceRuntime.ValidateDatabaseAsync(runtime, definition, token);
+        await ValidateProvisionedTargetsAsync(definition, runtimeConnection, token);
         WorkspaceDefinition[] established = await ListReadyAsync(token);
         await WorkspaceInventoryValidator.ValidateAsync(configuration, [.. established, definition], token);
         record.Ready = true;
         await control.SaveChangesAsync(token);
+    }
+
+    private static async Task ValidateProvisionedTargetsAsync(WorkspaceDefinition definition, string runtimeConnection,
+        CancellationToken token)
+    {
+        WorkspaceRuntime.ValidateRoot(definition);
+        await using var runtime = CreateDatabase(runtimeConnection);
+        await WorkspaceRuntime.ValidateDatabaseAsync(runtime, definition, token);
     }
 
     private async Task UpgradeAsync(WorkspaceDefinition[] ready, CancellationToken token)

@@ -5,6 +5,7 @@ public sealed class AssetProtectionService(IAssetProtectionStore store, IProtect
     IRetentionSettingsStore retentionSettings, TimeProvider clock)
 {
     public const int MaximumAssetCount = 1_000;
+    private const string OriginalUnavailableErrorCode = "ORIGINAL_UNAVAILABLE";
 
     public Task<GalleryProtection?> GetGalleryAsync(Guid id, CancellationToken cancellationToken) =>
         store.GetGalleryAsync(id, cancellationToken);
@@ -20,10 +21,10 @@ public sealed class AssetProtectionService(IAssetProtectionStore store, IProtect
         ValidateGalleryExpiry(expiresAt, now,
             (await retentionSettings.GetAsync(cancellationToken)).Settings.GalleryMaximum);
         ProtectionOriginal[]? members = await store.GetAvailableOriginalsAsync(assetIds, cancellationToken);
-        if (members is null) return new(ProtectionOperationStatus.Blocked, ErrorCode: "ORIGINAL_UNAVAILABLE");
+        if (members is null) return new(ProtectionOperationStatus.Blocked, ErrorCode: OriginalUnavailableErrorCode);
         await using IProtectionAdmissionLease lease = await admissionLock.AcquireSharedAsync(members, cancellationToken);
         if (!await lease.AreAvailableAsync(cancellationToken))
-            return new(ProtectionOperationStatus.Blocked, ErrorCode: "ORIGINAL_UNAVAILABLE");
+            return new(ProtectionOperationStatus.Blocked, ErrorCode: OriginalUnavailableErrorCode);
         return await store.CreateGalleryAsync(members, expiresAt, now, cancellationToken);
     }
 
@@ -36,10 +37,10 @@ public sealed class AssetProtectionService(IAssetProtectionStore store, IProtect
             (await retentionSettings.GetAsync(cancellationToken)).Settings.GalleryMaximum);
         ProtectionOriginal[]? members = await store.GetGalleryOriginalsAsync(id, now, cancellationToken);
         if (members is null) return new(ProtectionOperationStatus.NotFound, ErrorCode: "GALLERY_PROTECTION_NOT_FOUND");
-        if (members.Length == 0) return new(ProtectionOperationStatus.Blocked, ErrorCode: "ORIGINAL_UNAVAILABLE");
+        if (members.Length == 0) return new(ProtectionOperationStatus.Blocked, ErrorCode: OriginalUnavailableErrorCode);
         await using IProtectionAdmissionLease lease = await admissionLock.AcquireSharedAsync(members, cancellationToken);
         if (!await lease.AreAvailableAsync(cancellationToken))
-            return new(ProtectionOperationStatus.Blocked, ErrorCode: "ORIGINAL_UNAVAILABLE");
+            return new(ProtectionOperationStatus.Blocked, ErrorCode: OriginalUnavailableErrorCode);
         return await store.ExtendGalleryAsync(id, expectedRevision, members, expiresAt, now, cancellationToken);
     }
 
@@ -59,10 +60,10 @@ public sealed class AssetProtectionService(IAssetProtectionStore store, IProtect
         DateTimeOffset now = clock.GetUtcNow();
         if (reviewAt <= now) throw new ArgumentOutOfRangeException(nameof(reviewAt), "Review time must be in the future.");
         ProtectionOriginal[]? members = await store.GetAvailableOriginalsAsync(assetIds, cancellationToken);
-        if (members is null) return new(ProtectionOperationStatus.Blocked, ErrorCode: "ORIGINAL_UNAVAILABLE");
+        if (members is null) return new(ProtectionOperationStatus.Blocked, ErrorCode: OriginalUnavailableErrorCode);
         await using IProtectionAdmissionLease lease = await admissionLock.AcquireSharedAsync(members, cancellationToken);
         if (!await lease.AreAvailableAsync(cancellationToken))
-            return new(ProtectionOperationStatus.Blocked, ErrorCode: "ORIGINAL_UNAVAILABLE");
+            return new(ProtectionOperationStatus.Blocked, ErrorCode: OriginalUnavailableErrorCode);
         return await store.CreatePreservationAsync(members, authority.Trim(), reason.Trim(), reviewAt, now,
             cancellationToken);
     }

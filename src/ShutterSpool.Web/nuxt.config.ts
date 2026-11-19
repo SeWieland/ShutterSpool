@@ -1,6 +1,11 @@
 import sftpgo from '../../artifacts/attribution/sftpgo.json'
 
 export default defineNuxtConfig({
+  $production: {
+    // Keep the production manifest location stable before and after typecheck.
+    buildDir: 'node_modules/.cache/nuxt/.nuxt',
+    typesDir: '.nuxt',
+  },
   ssr: false,
   modules: ['@nuxt/ui'],
   css: ['~/assets/main.css', '~/assets/workspace.css'],

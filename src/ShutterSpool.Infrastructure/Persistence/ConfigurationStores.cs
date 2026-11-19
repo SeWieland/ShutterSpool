@@ -35,12 +35,11 @@ internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database,
         .SingleOrDefaultAsync(cancellationToken);
 
     public async Task<SourceConfigurationWrite> UpdateConfigurationAsync(Guid id, long expectedRevision,
-        string name, SourceCurationMode mode, int delaySeconds, SourceType sourceType, SourceConnectionProfile connectionProfile,
-        Guid collectionId, CancellationToken cancellationToken)
+        SourceSettings settings, CancellationToken cancellationToken)
     {
         await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await LockCollectionAssignmentsAsync(cancellationToken);
-        if (!await database.Collections.AnyAsync(item => item.Id == collectionId, cancellationToken))
+        if (!await database.Collections.AnyAsync(item => item.Id == settings.CollectionId, cancellationToken))
         {
             await transaction.CommitAsync(cancellationToken);
             return new(false, await GetAsync(id, cancellationToken));
@@ -54,14 +53,14 @@ internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database,
             await transaction.CommitAsync(cancellationToken);
             return new(false, await GetAsync(id, cancellationToken));
         }
-        source.Name = name;
-        source.CollectionId = collectionId;
-        source.CurationMode = mode;
-        source.CurationDelaySeconds = delaySeconds;
-        if (source.SourceType != sourceType || source.ConnectionProfile != connectionProfile)
+        source.Name = settings.Name;
+        source.CollectionId = settings.CollectionId;
+        source.CurationMode = settings.CurationMode;
+        source.CurationDelaySeconds = settings.DelaySeconds;
+        if (source.SourceType != settings.SourceType || source.ConnectionProfile != settings.ConnectionProfile)
         {
-            source.SourceType = sourceType;
-            source.ConnectionProfile = connectionProfile;
+            source.SourceType = settings.SourceType;
+            source.ConnectionProfile = settings.ConnectionProfile;
             credential.CredentialGeneration = checked(credential.CredentialGeneration + 1);
         }
         source.ConfigurationRevision++;
@@ -185,15 +184,16 @@ internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database,
 
     public async Task CreateAsync(SourceProvisioning source, CancellationToken cancellationToken)
     {
+        SourceSettings settings = source.Settings;
         SourceCredentialEntity credentialEntity;
         await using (var transaction = await database.Database.BeginTransactionAsync(cancellationToken))
         {
             await LockCollectionAssignmentsAsync(cancellationToken);
-            if (!await database.Collections.AnyAsync(item => item.Id == source.CollectionId, cancellationToken))
+            if (!await database.Collections.AnyAsync(item => item.Id == settings.CollectionId, cancellationToken))
                 throw new ArgumentException("Choose an existing Collection.", nameof(source));
-            var sourceEntity = new SourceEntity { Id = source.Id, Name = source.Name, CurationMode = source.CurationMode,
-                CurationDelaySeconds = source.DelaySeconds, SourceType = source.SourceType, ConnectionProfile = source.ConnectionProfile,
-                CollectionId = source.CollectionId };
+            var sourceEntity = new SourceEntity { Id = source.Id, Name = settings.Name, CurationMode = settings.CurationMode,
+                CurationDelaySeconds = settings.DelaySeconds, SourceType = settings.SourceType, ConnectionProfile = settings.ConnectionProfile,
+                CollectionId = settings.CollectionId };
             credentialEntity = new SourceCredentialEntity
             {
                 SourceId = source.Id, Username = source.Username, VirtualRoot = source.VirtualRoot, SecretVerifier = source.SecretVerifier,

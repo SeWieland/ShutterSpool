@@ -23,6 +23,47 @@ test('cancelled navigation leaves the mounted aperture on the current view', asy
     expect(view.get<HTMLInputElement>('input[aria-label="Add tag"]').element.value).toBe('unfinished');
 });
 
+test('workspace departure protects unresolved edits and allows clean or confirmed navigation', async () => {
+    const { view } = await mountWorkspace({ curation: true });
+    const router = view.vm.$router;
+    const original = router.currentRoute.value.fullPath;
+    const target = { path: '/workspace-departure-test', query: router.currentRoute.value.query };
+    const removeRoute = router.addRoute({ path: target.path, component: { render: () => null } });
+    const input = view.get<HTMLInputElement>('input[aria-label="Add tag"]');
+    const unload = () => window.dispatchEvent(new Event('beforeunload', { cancelable: true }));
+
+    try {
+        expect(unload()).toBe(true);
+        await router.push(target);
+        expect(router.currentRoute.value.path).toBe(target.path);
+        expect(window.confirm).not.toHaveBeenCalled();
+        await router.push(original);
+
+        await input.setValue('unfinished draft');
+        expect(unload()).toBe(false);
+        vi.mocked(window.confirm).mockReturnValueOnce(false);
+        await router.push(target);
+        expect(router.currentRoute.value.fullPath).toBe(original);
+        expect(input.element.value).toBe('unfinished draft');
+
+        await input.setValue('');
+        expect(unload()).toBe(true);
+        await router.push(target);
+        expect(router.currentRoute.value.path).toBe(target.path);
+        expect(window.confirm).toHaveBeenCalledTimes(1);
+        await router.push(original);
+
+        await input.setValue('discard this draft');
+        vi.mocked(window.confirm).mockReturnValueOnce(true);
+        await router.push(target);
+        expect(router.currentRoute.value.path).toBe(target.path);
+        expect(window.confirm).toHaveBeenCalledTimes(2);
+    } finally {
+        await router.push(original);
+        removeRoute();
+    }
+});
+
 test('explicit Capture links retain the requested photo despite Curation membership', async () => {
     for (const released of [false, true]) {
         transport.detail.mockImplementation(async id => photo(id, { curation: { revision: 1, rating: 0, releasedAt: released ? new Date() : null } }));
@@ -102,10 +143,29 @@ test('targeted reconciliation fences late success and failure after view, query,
         else pending.resolve(photo('a', { displayName: 'stale detail' }));
         await active;
         expect(transport.failure).not.toHaveBeenCalled();
-        expect(transport.page.mock.calls.length).toBe(before + Number(change === 'query'));
+        expect(transport.page).toHaveBeenCalledTimes(before + Number(change === 'query'));
         if (change !== 'dispose') expect(view.text()).not.toContain('stale detail');
         dispose();
     }
+});
+
+test('Gallery reconciliation restores its visible scroll anchor and keeps the selected photograph', async () => {
+    const older = photo('older', { acceptedAt: new Date('2026-10-12T10:00:00Z') });
+    const oldest = photo('oldest', { acceptedAt: new Date('2026-10-12T09:59:00Z') });
+    const newer = photo('newer', { acceptedAt: new Date('2026-10-12T10:01:00Z') });
+    transport.page.mockResolvedValueOnce({ items: [older, oldest] });
+    const { tiles, view } = await mountWorkspace();
+    await view.get('button[aria-label="Select Photo older"]').trigger('click');
+    const anchor = view.get('[data-id="older"]').element;
+    vi.spyOn(anchor, 'getBoundingClientRect').mockImplementation(() => new DOMRect(0, tiles().indexOf('older') * 180, 100, 100));
+    const scroll = vi.spyOn(window, 'scrollBy').mockImplementation(() => {});
+    transport.page.mockResolvedValue({ items: [newer, older, oldest] });
+
+    await refresh();
+
+    expect(tiles()).toEqual(['newer', 'older', 'oldest']);
+    expect(view.get<HTMLInputElement>('input[aria-label="Select Photo older"]').element.checked).toBe(true);
+    expect(scroll).toHaveBeenCalledExactlyOnceWith(0, 180);
 });
 
 test('closing inspection or losing access fences a late Gallery detail response', async () => {

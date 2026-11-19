@@ -34,6 +34,23 @@ public sealed class AssetProtectionServiceTests
     }
 
     [Fact]
+    public async Task Preservation_admission_does_not_persist_when_the_shared_lease_cannot_validate_the_original()
+    {
+        var store = new ProtectionStore();
+        var admission = new AdmissionLock(false);
+        var service = Create(store, admission, new ProtectionSettingsStore(new()));
+
+        ProtectionOperation<PreservationHold> result = await service.CreatePreservationAsync(
+            [store.Original.AssetId], "test authority", "test reason", DateTimeOffset.UtcNow.AddDays(2),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, admission.AcquireCalls);
+        Assert.Equal(ProtectionOperationStatus.Blocked, result.Status);
+        Assert.Equal("ORIGINAL_UNAVAILABLE", result.ErrorCode);
+        Assert.Equal(0, store.CreatePreservationCalls);
+    }
+
+    [Fact]
     public async Task Gallery_admission_rejects_duplicate_or_unbounded_asset_membership_before_io()
     {
         var store = new ProtectionStore();
@@ -59,6 +76,7 @@ public sealed class AssetProtectionServiceTests
         public ProtectionOriginal Original { get; } = new(Guid.NewGuid(), Guid.NewGuid(), "spool/asset", 4);
         public int CandidateCalls { get; private set; }
         public int CreateGalleryCalls { get; private set; }
+        public int CreatePreservationCalls { get; private set; }
         public Task<GalleryProtection?> GetGalleryAsync(Guid id, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<PreservationHold?> GetPreservationAsync(Guid id, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<ProtectionOriginal[]?> GetAvailableOriginalsAsync(Guid[] assetIds, CancellationToken cancellationToken)
@@ -81,7 +99,11 @@ public sealed class AssetProtectionServiceTests
             DateTimeOffset now, CancellationToken cancellationToken) => throw new NotImplementedException();
         public Task<ProtectionOperation<PreservationHold>> CreatePreservationAsync(ProtectionOriginal[] originals,
             string authority, string reason, DateTimeOffset reviewAt, DateTimeOffset now,
-            CancellationToken cancellationToken) => throw new NotImplementedException();
+            CancellationToken cancellationToken)
+        {
+            CreatePreservationCalls++;
+            return Task.FromResult(new ProtectionOperation<PreservationHold>(ProtectionOperationStatus.Committed));
+        }
         public Task<ProtectionOperation<PreservationHold>> ResolvePreservationAsync(Guid id, int expectedRevision,
             string resolvedBy, string resolution, DateTimeOffset now,
             CancellationToken cancellationToken) => throw new NotImplementedException();

@@ -2,12 +2,21 @@ using ShutterSpool.Domain.Sources;
 
 namespace ShutterSpool.Server.Hosting;
 
+public enum CameraCallbackTransport
+{
+    ApplicationHttps,
+    MeshMtls,
+}
+
 public sealed class CameraIngressSettings
 {
     public bool Enabled { get; init; }
+    public CameraCallbackTransport CallbackTransport { get; init; } = CameraCallbackTransport.ApplicationHttps;
     public string CallbackKey { get; init; } = "";
     public string CallbackBaseUrl { get; init; } = "";
+    public string CallbackCertificatePath { get; init; } = "";
     public int InternalPort { get; init; } = 8081;
+    public bool InternalListenOnAllInterfaces { get; init; }
     public long MaximumUploadBytes { get; init; } = 512L * 1024 * 1024;
     public int MaximumConcurrentTransfers { get; init; } = 16;
     public int MaximumSessionsPerSource { get; init; } = 2;
@@ -37,9 +46,24 @@ public sealed class CameraIngressSettings
     private void ValidateCallback()
     {
         if (CallbackKey.Length < 32) throw new InvalidOperationException("Camera ingress callback key must contain at least 32 characters.");
+        string scheme = CallbackTransport switch
+        {
+            CameraCallbackTransport.ApplicationHttps => Uri.UriSchemeHttps,
+            CameraCallbackTransport.MeshMtls => Uri.UriSchemeHttp,
+            _ => throw new InvalidOperationException("Camera ingress callback transport is invalid."),
+        };
+        bool useMeshTransport = CallbackTransport == CameraCallbackTransport.MeshMtls;
         if (!Uri.TryCreate(CallbackBaseUrl.TrimEnd('/'), UriKind.Absolute, out Uri? callbackBase)
-            || callbackBase.Scheme is not ("http" or "https") || callbackBase.AbsolutePath != "/internal/camera")
-            throw new InvalidOperationException("Camera ingress callback base URL must point to /internal/camera.");
+            || callbackBase.Scheme != scheme || callbackBase.Port < 1 || callbackBase.AbsolutePath != "/internal/camera"
+            || callbackBase.UserInfo.Length != 0 || callbackBase.Query.Length != 0 || callbackBase.Fragment.Length != 0
+            || (useMeshTransport && (!callbackBase.IsWellFormedOriginalString() || callbackBase.OriginalString.Contains('@'))))
+            throw new InvalidOperationException($"Camera ingress callback base URL must be an {scheme.ToUpperInvariant()} URL pointing to /internal/camera.");
+
+        if (!useMeshTransport) return;
+        if (InternalListenOnAllInterfaces)
+            throw new InvalidOperationException("Camera ingress mesh mTLS requires a loopback callback listener.");
+        if (!string.IsNullOrEmpty(CallbackCertificatePath))
+            throw new InvalidOperationException("Camera ingress mesh mTLS cannot set a callback certificate path.");
     }
 
     private void ValidateLimits()

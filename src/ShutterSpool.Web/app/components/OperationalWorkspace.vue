@@ -447,6 +447,32 @@ function acceptCapturePage(page: CaptureInboxResponse | undefined, next: boolean
     }
     evidenceGeneration.value++;
 }
+function capturePageScrollAnchor(reconcile: boolean) {
+    if (!reconcile || galleryInspectionId.value) return undefined;
+    const tile = gridElement.value?.querySelector<HTMLElement>('.gallery-tile');
+    const id = tile?.dataset.id;
+    if (tile && id) return { id, top: tile.getBoundingClientRect().top };
+}
+function updateRenderedCapturePage(anchor: ReturnType<typeof capturePageScrollAnchor>, signal: AbortSignal) {
+    measureGrid();
+    if (anchor) {
+        const tile = [...(gridElement.value?.querySelectorAll<HTMLElement>('.gallery-tile') ?? [])].find(item => item.dataset.id === anchor.id);
+        if (tile) window.scrollBy(0, tile.getBoundingClientRect().top - anchor.top);
+    }
+    for (const row of rows.value)
+        if (row.curation)
+            curationVisit.sync(String(row.id), row.curation);
+    if ((!activeId.value || view.value === 'Curation' && !rows.value.some(row => String(row.id) === activeId.value)) && rows.value[0])
+        return openCapture(String(rows.value[0].id), false, undefined, false, signal);
+}
+function clearEmptyCurationPage() {
+    if (rows.value.length || view.value !== 'Curation') return;
+    closeFull(false);
+    detailSequence.value++;
+    activeId.value = paneAId.value = secondId.value = '';
+    capture.value = undefined;
+    compare.value = false;
+}
 async function loadPage(next: boolean, reconcile = false, parentSignal?: AbortSignal) {
     if (next && (loading.value || !cursor.value || pageError.value))
         return;
@@ -476,35 +502,17 @@ async function loadPage(next: boolean, reconcile = false, parentSignal?: AbortSi
         if (!response.current || !isCurrent()) return;
         if ('error' in response) throw response.error;
         const page = response.value;
-        const anchor = !galleryInspectionId.value ? gridElement.value?.querySelector<HTMLElement>('.gallery-tile') : undefined;
-        const anchorId = anchor?.dataset.id;
-        const before = anchor?.getBoundingClientRect().top;
-        let retained: Capture[] | undefined;
-        if (reconcile && page?.nextCursor) {
-            retained = await revalidateBoundary(page.items ?? [], isCurrent, signal);
-        }
+        const anchor = capturePageScrollAnchor(reconcile);
+        const retained = reconcile && page?.nextCursor
+            ? await revalidateBoundary(page.items ?? [], isCurrent, signal)
+            : undefined;
         if (!isCurrent()) return;
         acceptCapturePage(page, next, retained);
         await nextTick();
         if (!isCurrent()) return;
-        measureGrid();
-        if (reconcile && anchorId && before != null) {
-            const after = [...(gridElement.value?.querySelectorAll<HTMLElement>('.gallery-tile') ?? [])].find(item => item.dataset.id === anchorId)?.getBoundingClientRect().top;
-            if (after != null)
-                window.scrollBy(0, after - before);
-        }
-        for (const row of rows.value)
-            if (row.curation)
-                curationVisit.sync(String(row.id), row.curation);
-        if ((!activeId.value || view.value === 'Curation' && !rows.value.some(row => String(row.id) === activeId.value)) && rows.value[0])
-            await openCapture(String(rows.value[0].id), false, undefined, false, signal);
-        if (!rows.value.length && view.value === 'Curation') {
-            closeFull(false);
-            detailSequence.value++;
-            activeId.value = paneAId.value = secondId.value = '';
-            capture.value = undefined;
-            compare.value = false;
-        }
+        const opening = updateRenderedCapturePage(anchor, signal);
+        if (opening) await opening;
+        clearEmptyCurationPage();
     }
     catch (failure) {
         if (!isCurrent()) return;
@@ -884,7 +892,6 @@ async function switchView(next: View) {
 function beforeUnload(event: BeforeUnloadEvent) {
     if (unloadRisk.value) {
         event.preventDefault();
-        event.returnValue = '';
     }
 }
 function requestDeparture() {

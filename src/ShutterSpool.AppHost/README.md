@@ -100,7 +100,7 @@ The UI receives the declared hostname and profile control port from Server; it n
 Restrict control/passive ports to the camera network; current compatibility qualification is trusted-LAN only.
 
 For either FTPS profile, `CertificateDirectory` must contain `server.pem` (full chain and matching private key) and `root.pem` (the actual selected public CA root).
-The edge mounts this directory read-only. Server receives only the root's configured path for the bounded, authorized CA download;
+The edge mounts the FTPS bundle read-only. Server receives only the root's configured path for the bounded, authorized CA download;
 never put private keys in `root.pem`. Invalid certificates fail edge startup closed.
 Follow [development FTPS setup](CameraFtps.md) for supplied certificate validation and controlled replacement, and [camera setup](../../docs/camera-compatibility.md#camera-setup) for client instructions.
 The [camera guide](../../docs/camera-compatibility.md) distinguishes actual hardware observations from synthetic checks.
@@ -114,7 +114,7 @@ The edge and Imaginary use the tag and digest pins in [the canonical Compose ima
 Map and allow exactly the configured profile TCP ports in the host firewall; passive host and container port numbers match and are not proxied.
 Control/data peer checks stay enabled; active FTP and SITE are disabled.
 
-The AppHost generates and persists `Parameters:camera-callback-key` in User Secrets. Only Server and the edge receive it. The private callback endpoint uses a separate listener and shared-key authentication, and does not serve management, originals or the web application. On Docker Desktop, authentication/upload hooks and returned HTTPFs URLs use `host.docker.internal` and the private proxy port, so recreated edges do not depend on a manual hostname alias; do not publish or forward this endpoint. Other deployments must supply an edge-reachable private callback base URL.
+The AppHost generates and persists `Parameters:camera-callback-key` in User Secrets. Only Server and the edge receive it. The private HTTPS callback uses a loopback listener through the Aspire container tunnel. Supply the [dedicated callback certificate and root](CameraFtps.md#supply-and-validate-certificates) for every enabled profile. Keep the callback off the LAN and out of public proxy routes.
 
 Only Server writes the spool. FTP virtual folders are empty protocol metadata under the spool's `.camera-directories`; originals use generated private spool keys. Neither the camera nor edge receives a host path or mount. Failed hook cleanup cannot delete authoritative originals or uncertain receive bytes.
 

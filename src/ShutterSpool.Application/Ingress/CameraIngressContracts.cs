@@ -6,6 +6,12 @@ namespace ShutterSpool.Application.Ingress;
 public sealed record CameraLogin(Guid Id, Guid SourceId, string Username, string VirtualRoot, long CredentialGeneration,
     SourceConnectionProfile ConnectionProfile);
 
+public sealed record CameraUploadCorrelation(Guid LoginId, string Username, string SessionId, string VirtualPath, long Timestamp);
+
+public sealed record CameraAdmissionLimits(long MaximumUploadBytes, int MaximumConcurrentTransfers, int TransferTimeoutSeconds);
+
+public sealed record CameraAdmissionReservation(Guid AdmissionId, Guid AssetId, string ReceiveKey);
+
 public enum CameraTransferState
 {
     Admitted,
@@ -60,9 +66,8 @@ public interface ICameraIngressStore
     Task<CameraLogin?> CreateLoginAsync(Guid sourceId, string username, long credentialGeneration,
         SourceConnectionProfile connectionProfile = SourceConnectionProfile.ModernFtps, CancellationToken cancellationToken = default);
     Task<CameraLogin?> FindLoginAsync(Guid loginId, CancellationToken cancellationToken);
-    Task<CameraUploadAdmission?> AdmitAsync(Guid loginId, string username, string sessionId, string virtualPath, long timestamp,
-        Guid admissionId, Guid assetId, long maximumUploadBytes, string receiveKey,
-        int maximumConcurrentTransfers, int transferTimeoutSeconds, CancellationToken cancellationToken);
+    Task<CameraUploadAdmission?> AdmitAsync(CameraUploadCorrelation correlation, CameraAdmissionLimits limits,
+        CameraAdmissionReservation reservation, CancellationToken cancellationToken);
     Task QuarantineStaleAsync(long beforeTimestamp, CancellationToken cancellationToken);
     Task<CameraUploadAdmission?> ClaimReceiveAsync(Guid loginId, string virtualPath, CancellationToken cancellationToken);
     Task MarkReceivedAsync(Guid admissionId, long size, CancellationToken cancellationToken);

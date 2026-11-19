@@ -15,6 +15,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ENTRYPOINT = ROOT / "deploy/package/edge-entrypoint.sh"
 EXPECTED_HOSTNAME = "ingest.example.test"
+TEST_KEY_TYPE = "rsa:2048"
+CALLBACK_CA_ERROR = "callback HTTPS CA certificate is missing or invalid"
 
 
 def run(*args: str, cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -36,10 +38,12 @@ class EdgeCertificateStartupTests(unittest.TestCase):
         self.leaf_certificate = self.root / "leaf.pem"
         self.server_bundle = self.certs / "server.pem"
         self.callback_key = self.root / "camera-callback-key"
+        self.callback_root = self.root / "callback-root.pem"
         self.callback_key.write_text("synthetic-camera-callback-key", encoding="ascii")
         self.entrypoint = self.root / "edge-entrypoint.sh"
         script = (ENTRYPOINT.read_text(encoding="utf-8")
                   .replace("/etc/sftpgo/certs", str(self.certs))
+                  .replace("/etc/sftpgo/callback-trust/root.pem", str(self.callback_root))
                   .replace("/run/secrets/camera-callback-key", str(self.callback_key)))
         self.entrypoint.write_text(script, encoding="utf-8")
         fakebin = self.root / "bin"
@@ -53,6 +57,9 @@ class EdgeCertificateStartupTests(unittest.TestCase):
             "CAMERA_HOSTNAME": EXPECTED_HOSTNAME,
         }
         self._make_chain(EXPECTED_HOSTNAME)
+        self._openssl("req", "-x509", "-newkey", TEST_KEY_TYPE, "-nodes", "-keyout", "callback-ca.key",
+                      "-out", self.callback_root.name, "-days", "2", "-subj", "/CN=ShutterSpool Callback Test CA",
+                      "-addext", "basicConstraints=critical,CA:TRUE")
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -62,9 +69,9 @@ class EdgeCertificateStartupTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
 
     def _make_chain(self, hostname: str, *, expired: bool = False) -> None:
-        self._openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", self.root_certificate.name,
+        self._openssl("req", "-x509", "-newkey", TEST_KEY_TYPE, "-nodes", "-keyout", "ca.key", "-out", self.root_certificate.name,
                       "-days", "2", "-subj", "/CN=ShutterSpool Test CA", "-addext", "basicConstraints=critical,CA:TRUE")
-        self._openssl("req", "-newkey", "rsa:2048", "-nodes", "-keyout", "server.key", "-out", "server.csr",
+        self._openssl("req", "-newkey", TEST_KEY_TYPE, "-nodes", "-keyout", "server.key", "-out", "server.csr",
                       "-subj", "/CN=" + hostname)
         extension = self.root / "server.ext"
         extension.write_text("subjectAltName=DNS:" + hostname + "\nextendedKeyUsage=serverAuth\nkeyUsage=digitalSignature,keyEncipherment\n", encoding="utf-8")
@@ -93,6 +100,27 @@ class EdgeCertificateStartupTests(unittest.TestCase):
 
     def test_accepts_valid_supplied_certificate(self) -> None:
         self.assertEqual(0, self._start().returncode)
+
+    def test_plain_ftp_requires_the_callback_authority(self) -> None:
+        self.env["SFTPGO_FTPD__BINDINGS__0__TLS_MODE"] = "0"
+        self.server_bundle.unlink()
+        self.assertEqual(0, self._start().returncode)
+        self.callback_root.unlink()
+        result = self._start()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(CALLBACK_CA_ERROR, result.stderr)
+
+    def test_rejects_a_private_key_in_the_callback_authority_file(self) -> None:
+        self.callback_root.write_bytes(self.callback_root.read_bytes() + (self.root / "callback-ca.key").read_bytes())
+        result = self._start()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(CALLBACK_CA_ERROR, result.stderr)
+
+    def test_rejects_a_second_certificate_in_the_callback_authority_file(self) -> None:
+        self.callback_root.write_bytes(self.callback_root.read_bytes() + b"\n" + self.root_certificate.read_bytes())
+        result = self._start()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(CALLBACK_CA_ERROR, result.stderr)
 
     def test_rejects_missing_certificate(self) -> None:
         self.server_bundle.unlink()

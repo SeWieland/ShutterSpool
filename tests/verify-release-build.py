@@ -78,6 +78,8 @@ class ReleasePackageTests(unittest.TestCase):
                 self.assertEqual(NOTICES, bundle.read("THIRD-PARTY-NOTICES.md").decode())
                 self.assertEqual(ATTRIBUTION, json.loads(bundle.read("sftpgo.json")))
                 self.assertEqual(ATTRIBUTION, manifest["sftpgo"])
+                self.assertIn("callback-certificates/server.pem", bundle.read("certificates/README.md").decode())
+                self.assertIn("/etc/sftpgo/callback-trust/root.pem", bundle.read("package/edge-entrypoint.sh").decode())
                 enrollment = json.loads(bundle.read("package/realms/shutterspool-enrollment-client.json"))
                 self.assertTrue(enrollment["serviceAccountsEnabled"])
                 self.assertNotIn("secret", enrollment)

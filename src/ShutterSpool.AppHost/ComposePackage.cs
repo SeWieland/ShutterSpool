@@ -6,6 +6,10 @@ namespace ShutterSpool.AppHost;
 
 internal static class ComposePackage
 {
+    private const string CameraCallbackPort = "8081";
+    private const string CameraCallbackBaseUrl = $"https://server:{CameraCallbackPort}/internal/camera";
+    private const string CameraCallbackCertificate = "/run/camera-callback/server.pem";
+
     public static void Configure(IDistributedApplicationBuilder builder)
     {
         builder.AddDockerComposeEnvironment("compose")
@@ -74,9 +78,10 @@ internal static class ComposePackage
             edge.Entrypoint = ["/bin/sh", "/opt/package/edge-entrypoint.sh"];
             edge.Command.Clear();
             edge.Volumes.Add(Mount("bind", "./package/edge-entrypoint.sh", "/opt/package/edge-entrypoint.sh", true));
-            edge.Environment["SFTPGO_DATA_PROVIDER__EXTERNAL_AUTH_HOOK"] = "http://server:8081/internal/camera/"
-                + authSuffix;
-            edge.Environment["SFTPGO_COMMON__ACTIONS__HOOK"] = "http://server:8081/internal/camera/hook";
+            edge.Volumes.Add(Mount("bind", "./callback-certificates/root.pem", CameraIngressConfiguration.EdgeCallbackTrustPath, true));
+            edge.Environment["SSL_CERT_DIR"] = CameraIngressConfiguration.EdgeCertificateDirectories;
+            edge.Environment["SFTPGO_DATA_PROVIDER__EXTERNAL_AUTH_HOOK"] = $"{CameraCallbackBaseUrl}/{authSuffix}";
+            edge.Environment["SFTPGO_COMMON__ACTIONS__HOOK"] = $"{CameraCallbackBaseUrl}/hook";
             edge.Environment.Remove("SFTPGO_HTTP__HEADERS__0__VALUE");
             edge.Environment["SFTPGO_FTPD__BINDINGS__0__FORCE_PASSIVE_IP"] = "${INGEST_ADVERTISED_ADDRESS:?Set the camera-reachable passive IPv4 address}";
             edge.Environment["CAMERA_HOSTNAME"] = "${INGEST_HOSTNAME:?Set the certificate and Source ingest hostname}";
@@ -103,8 +108,11 @@ internal static class ComposePackage
         {
             server.Environment["ShutterSpool__CameraIngress__Enabled"] = "true";
             server.Environment["ShutterSpool__CameraIngress__Hostname"] = "${INGEST_HOSTNAME:?Set the certificate and Source ingest hostname}";
-            server.Environment["ShutterSpool__CameraIngress__InternalPort"] = "8081";
-            server.Environment["ShutterSpool__CameraIngress__CallbackBaseUrl"] = "http://server:8081/internal/camera";
+            server.Environment["ShutterSpool__CameraIngress__InternalPort"] = CameraCallbackPort;
+            server.Environment["ShutterSpool__CameraIngress__InternalListenOnAllInterfaces"] = "true";
+            server.Environment["ShutterSpool__CameraIngress__CallbackBaseUrl"] = CameraCallbackBaseUrl;
+            server.Environment["ShutterSpool__CameraIngress__CallbackCertificatePath"] = CameraCallbackCertificate;
+            server.Volumes.Add(Mount("bind", "./callback-certificates/server.pem", CameraCallbackCertificate, true));
             server.Volumes.Add(Mount("bind", "./certificates/root.pem", "/run/certificates/root.pem", true));
         }
 

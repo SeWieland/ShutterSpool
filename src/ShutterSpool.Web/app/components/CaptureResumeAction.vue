@@ -26,7 +26,14 @@ async function checkCurrent() {
         }
     } catch (failure) {
         if (!controller.signal.aborted && !disposed && request === sequence && access === accessGeneration()) { handleFailure(failure); feedback.value = 'We could not check the current photograph. Refresh before choosing another action.'; }
-    } finally { if (checkController === controller) checkController = undefined; if (!disposed && request === sequence && access === accessGeneration()) busy.value = false; }
+    } finally {
+        if (checkController === controller) {
+            checkController = undefined;
+        }
+        if (!disposed && request === sequence && access === accessGeneration()) {
+            busy.value = false;
+        }
+    }
 }
 async function resume() {
     if (busy.value || needsReconcile.value || props.disabled || props.evidence?.captureRevision == null || !props.evidence.isPaused || props.evidence.disposition !== 'active') return;

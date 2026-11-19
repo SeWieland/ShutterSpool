@@ -9,6 +9,7 @@ internal static class PreviewCacheReclamation
     private const int MaximumVisitedEntries = 50_000;
     private const int MaximumReclaimEntries = 10_000;
     internal const int MaximumOutputBytes = 4 * 1024 * 1024;
+    private const string LinkedPathFailureCode = "cache_reclaim_linked_path";
     private static readonly TimeSpan MaximumDuration = TimeSpan.FromSeconds(2);
 
     public static PreviewCacheReclaimResult Reclaim(string root, long maximumBytes, int maximumEntries,
@@ -70,7 +71,7 @@ internal static class PreviewCacheReclamation
             if (scan.ReachedBound()) break;
             if (IsLinked(captureDirectory))
             {
-                scan.FailureCode = "cache_reclaim_linked_path";
+                scan.FailureCode = LinkedPathFailureCode;
                 break;
             }
             if (!Guid.TryParseExact(Path.GetFileName(captureDirectory), "N", out _)) continue;
@@ -91,7 +92,7 @@ internal static class PreviewCacheReclamation
             if (scan.ReachedBound()) break;
             if (IsLinked(assetDirectory))
             {
-                scan.FailureCode = "cache_reclaim_linked_path";
+                scan.FailureCode = LinkedPathFailureCode;
                 break;
             }
             if (!Guid.TryParseExact(Path.GetFileName(assetDirectory), "N", out _)) continue;
@@ -112,7 +113,7 @@ internal static class PreviewCacheReclamation
             FileAttributes attributes = File.GetAttributes(entry);
             if (attributes.HasFlag(FileAttributes.ReparsePoint))
             {
-                scan.FailureCode = "cache_reclaim_linked_path";
+                scan.FailureCode = LinkedPathFailureCode;
                 break;
             }
             if (attributes.HasFlag(FileAttributes.Directory)) continue;
@@ -152,7 +153,7 @@ internal static class PreviewCacheReclamation
             return null;
         }
         if (attributes.HasFlag(FileAttributes.ReparsePoint) || attributes.HasFlag(FileAttributes.Directory))
-            return "cache_reclaim_linked_path";
+            return LinkedPathFailureCode;
 
         var current = new FileInfo(candidate.Path);
         if (!current.Exists || current.Length != candidate.Size || current.LastWriteTimeUtc != candidate.LastWriteUtc)

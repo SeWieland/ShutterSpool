@@ -1,15 +1,19 @@
 using ShutterSpool.Domain.Security;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using ShutterSpool.Application.Security;
 using ShutterSpool.Application.Workspaces;
 using ShutterSpool.Infrastructure.Persistence;
+using ShutterSpool.Server.Api.Live;
 using ShutterSpool.Server.Api.Workspaces;
 using System.Net;
 using System.Net.Http.Json;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using WorkspaceFixture = ShutterSpool.IntegrationTests.WorkspaceTenancyPostgresTests.WorkspaceFixture;
 
 namespace ShutterSpool.IntegrationTests;
@@ -55,6 +59,49 @@ public sealed partial class WorkspaceTenancyHttpTests
         Assert.NotEqual(first.Name, selected.GetProperty("source").GetProperty("name").GetString());
         using HttpResponseMessage firstPolicy = await SendAsync(client, HttpMethod.Get, "/management/viewer-policy", first.Id);
         Assert.False((await firstPolicy.Content.ReadFromJsonAsync<WorkspaceViewerPolicyResponse>(Token))!.IncludeUnreleased);
+    }
+
+    [Fact]
+    public async Task Exact_workspace_policy_replay_keeps_the_response_without_another_live_hint()
+    {
+        var messages = Channel.CreateUnbounded<(string Group, string Event)>();
+        await using var fixture = await TenantHttpFixture.CreateAsync(services =>
+            services.AddSingleton<HubLifetimeManager<LiveChangesHub>>(provider =>
+                new RecordingLiveLifetimeManager(provider.GetRequiredService<ILogger<DefaultHubLifetimeManager<LiveChangesHub>>>(),
+                    messages.Writer)));
+        WorkspaceDefinition workspace = fixture.Workspaces[0];
+        using HttpClient client = fixture.Client(workspace.Name);
+        const string path = "/management/viewer-policy";
+        using HttpResponseMessage read = await SendAsync(client, HttpMethod.Get, path, workspace.Id);
+        read.EnsureSuccessStatusCode();
+        WorkspaceViewerPolicyResponse current = (await read.Content.ReadFromJsonAsync<WorkspaceViewerPolicyResponse>(Token))!;
+        var request = new WorkspaceViewerPolicyRequest(Guid.NewGuid(), current.Revision, !current.IncludeUnreleased);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        deadline.CancelAfter(TimeSpan.FromSeconds(15));
+        string administrators = LiveChangeNotifier.Group(workspace.Id), members = LiveChangeNotifier.MemberGroup(workspace.Id);
+
+        using HttpResponseMessage applied = await SendAsync(client, HttpMethod.Put, path, workspace.Id, request);
+        Assert.Equal(HttpStatusCode.OK, applied.StatusCode);
+        Assert.Equal((administrators, "resyncRequired"), await messages.Reader.ReadAsync(deadline.Token));
+        Assert.Equal((members, "resyncRequired"), await messages.Reader.ReadAsync(deadline.Token));
+
+        using HttpResponseMessage replay = await SendAsync(client, HttpMethod.Put, path, workspace.Id, request);
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        Assert.Equal(await applied.Content.ReadAsStringAsync(Token), await replay.Content.ReadAsStringAsync(Token));
+        fixture.Publish(workspace, Guid.NewGuid());
+        Assert.Equal((administrators, "captureChanged"), await messages.Reader.ReadAsync(deadline.Token));
+        Assert.Equal((members, "resyncRequired"), await messages.Reader.ReadAsync(deadline.Token));
+    }
+
+    private sealed class RecordingLiveLifetimeManager(ILogger<DefaultHubLifetimeManager<LiveChangesHub>> logger,
+        ChannelWriter<(string Group, string Event)> messages) : DefaultHubLifetimeManager<LiveChangesHub>(logger)
+    {
+        public override Task SendGroupAsync(string groupName, string methodName, object?[] args,
+            CancellationToken cancellationToken = default)
+        {
+            messages.TryWrite((groupName, methodName));
+            return Task.CompletedTask;
+        }
     }
 
     [Fact]

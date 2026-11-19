@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using ShutterSpool.Infrastructure.Composition;
 using ShutterSpool.Infrastructure.Persistence;
+using ShutterSpool.Infrastructure.Workspaces;
 using System.Text.Json;
 
 namespace ShutterSpool.IntegrationTests;
@@ -57,6 +58,10 @@ public sealed partial class WorkspaceTenancyPostgresTests
             fixture.Configuration[key] = invalid;
             await Assert.ThrowsAsync<ArgumentException>(() => fixture.ProvisionWorkspaceAsync(0));
         }
+        await using var control = fixture.ControlMigrationDatabase();
+        WorkspaceRecord claim = await control.Workspaces.AsNoTracking().SingleAsync(token);
+        Assert.False(claim.Ready);
+        Assert.False(File.Exists(Path.Combine(claim.StorageRoot, WorkspaceRuntime.Marker)));
         await using var database = fixture.MigrationDatabase(0);
         await AssertBootstrapAbsentAsync(database, token);
         await database.Database.ExecuteSqlRawAsync("ALTER TABLE workspace_access_operations ADD CONSTRAINT reject_setup_audit CHECK (false)", token);
@@ -70,8 +75,10 @@ public sealed partial class WorkspaceTenancyPostgresTests
         database.ChangeTracker.Clear();
         Assert.Single(await database.AuthorizationGrants.ToArrayAsync(token));
         Assert.Single(await database.Set<WorkspaceAccessOperationEntity>().ToArrayAsync(token));
-        Assert.True((await database.WorkspaceIdentities.SingleAsync(token)).BootstrapComplete);
-        Assert.Single(await fixture.RegistryAsync());
+        WorkspaceIdentityEntity identity = await database.WorkspaceIdentities.SingleAsync(token);
+        Assert.True(identity.BootstrapComplete);
+        Assert.Equal(claim.OperationId, identity.OperationId);
+        Assert.Equal(claim.Definition, Assert.Single(await fixture.RegistryAsync()));
     }
 
     [Fact]

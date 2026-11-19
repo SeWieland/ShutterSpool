@@ -245,7 +245,8 @@ public sealed partial class CameraIngressIntegrationTests
     {
         const string session = "FTP_root-lifecycle";
         long timestamp = CurrentTimestamp();
-        await fixture.Ingress.AdmitAsync(login.Id, login.Username, session, path, timestamp, 1_024, 2, 600, Token);
+        await fixture.Ingress.AdmitAsync(new(login.Id, login.Username, session, path, timestamp),
+            new(1_024, 2, 600), Token);
         await fixture.Ingress.ReceiveAsync(login.Id, path, new MemoryStream(bytes), 1_024, Token);
         return await fixture.Ingress.CompleteAsync(login.Id, login.Username, session, path, timestamp + 1_000, bytes.Length, Token);
     }

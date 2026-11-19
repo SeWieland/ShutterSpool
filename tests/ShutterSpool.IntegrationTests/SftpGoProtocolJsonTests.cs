@@ -41,7 +41,7 @@ public sealed partial class ConfigurationApiTests
         await fixture.Services.GetRequiredService<IWorkspaceRegistry>().RegisterIngressAsync(
             WorkspaceIngressHandle.Username(username), sourceId, TestContext.Current.CancellationToken);
         using var callbackHandler = fixture.Server.Server.CreateHandler(context => context.Connection.LocalPort = 8081);
-        using var callbackClient = new HttpClient(callbackHandler) { BaseAddress = new Uri("http://localhost") };
+        using var callbackClient = new HttpClient(callbackHandler) { BaseAddress = new Uri("https://localhost") };
         callbackClient.DefaultRequestHeaders.Add("X-API-KEY", CameraCallbackKey);
         using HttpResponseMessage response = await callbackClient.PostAsJsonAsync("/internal/camera/auth",
             new { username, password }, TestContext.Current.CancellationToken);
@@ -72,7 +72,21 @@ public sealed partial class ConfigurationApiTests
     [Fact]
     public async Task SftpGo_auth_and_hook_accept_vendor_fields_and_omitted_optional_event_fields()
     {
-        await using var fixture = await ConfigurationApiFixture.CreateAsync(enableCameraIngress: true);
+        await using var fixture = await ConfigurationApiFixture.CreateAsync(enableCameraIngress: true,
+            profileSettings: new ShutterSpool.Server.Hosting.CameraIngressSettings
+            {
+                Enabled = true,
+                CallbackKey = CameraCallbackKey,
+                CallbackBaseUrl = "https://localhost:8081/internal/camera",
+                InternalPort = 8081,
+                MaximumUploadBytes = 1_024,
+                MaximumConcurrentTransfers = 2,
+                Profiles = new ShutterSpool.Server.Hosting.CameraIngressProfiles
+                {
+                    ModernFtps = new() { Enabled = true, ControlPort = 2121 },
+                    LegacyFtps = new() { Enabled = true, ControlPort = 2138 },
+                },
+            });
         CancellationToken token = TestContext.Current.CancellationToken;
         Guid sourceId = Guid.NewGuid();
         var protector = fixture.Services.GetRequiredService<ICredentialProtector>();
@@ -92,7 +106,7 @@ public sealed partial class ConfigurationApiTests
         await fixture.Services.GetRequiredService<IWorkspaceRegistry>().RegisterIngressAsync(
             WorkspaceIngressHandle.Username("cam_protocol"), sourceId, TestContext.Current.CancellationToken);
         using var callbackHandler = fixture.Server.Server.CreateHandler(context => context.Connection.LocalPort = 8081);
-        using var callbackClient = new HttpClient(callbackHandler) { BaseAddress = new Uri("http://localhost") };
+        using var callbackClient = new HttpClient(callbackHandler) { BaseAddress = new Uri("https://localhost") };
         callbackClient.DefaultRequestHeaders.Add("X-API-KEY", CameraCallbackKey);
 
         using HttpResponseMessage auth = await callbackClient.PostAsJsonAsync("/internal/camera/auth", new
@@ -140,7 +154,7 @@ public sealed partial class ConfigurationApiTests
         }, token);
         Assert.Equal(HttpStatusCode.Forbidden, staleProfileHook.StatusCode);
 
-        using HttpResponseMessage hook = await callbackClient.PostAsJsonAsync("/internal/camera/hook", new
+        var preUpload = new
         {
             action = "pre-upload",
             username = "cam_protocol",
@@ -153,11 +167,21 @@ public sealed partial class ConfigurationApiTests
             protocol = "FTP",
             fs_provider = 6,
             ip = "192.0.2.10",
-        }, token);
+        };
+        using HttpResponseMessage hook = await callbackClient.PostAsJsonAsync("/internal/camera/hook", preUpload, token);
         Assert.Equal(HttpStatusCode.OK, hook.StatusCode);
         await using var verify = new ShutterSpoolDbContext(fixture.Database.Options);
-        Assert.Equal("/DCIM/PHOTO.JPG", await verify.CameraUploadAdmissions.AsNoTracking()
-            .Select(item => item.VirtualPath).SingleAsync(token));
+        CameraUploadAdmissionEntity admission = await verify.CameraUploadAdmissions.AsNoTracking().SingleAsync(token);
+        Assert.Equal("/DCIM/PHOTO.JPG", admission.VirtualPath);
+
+        using HttpResponseMessage replay = await callbackClient.PostAsJsonAsync("/internal/camera/hook", preUpload, token);
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        Assert.Equal(admission.Id, await verify.CameraUploadAdmissions.AsNoTracking().Select(item => item.Id).SingleAsync(token));
+        SpoolQuotaReservationEntity reservation = await verify.SpoolQuotaReservations.AsNoTracking().SingleAsync(token);
+        Assert.Equal(admission.Id, reservation.OperationId);
+        Assert.Equal(admission.AssetId, reservation.AssetId);
+        Assert.Equal(admission.ReceiveKey, Assert.Single(reservation.SpoolKeys));
+        Assert.Equal(admission.MaximumUploadBytes, reservation.ReservedBytes);
     }
 
     [Fact]
@@ -168,7 +192,7 @@ public sealed partial class ConfigurationApiTests
             {
                 Enabled = true,
                 CallbackKey = CameraCallbackKey,
-                CallbackBaseUrl = "http://localhost:8081/internal/camera",
+                CallbackBaseUrl = "https://localhost:8081/internal/camera",
                 InternalPort = 8081,
                 Profiles = new ShutterSpool.Server.Hosting.CameraIngressProfiles
                 {
@@ -192,9 +216,9 @@ public sealed partial class ConfigurationApiTests
         }
 
         using var callbackHandler = fixture.Server.Server.CreateHandler(context => context.Connection.LocalPort = 8081);
-        using var callbackClient = new HttpClient(callbackHandler) { BaseAddress = new Uri("http://localhost") };
+        using var callbackClient = new HttpClient(callbackHandler) { BaseAddress = new Uri("https://localhost") };
         callbackClient.DefaultRequestHeaders.Add("X-API-KEY", CameraCallbackKey);
-        string endpoint = $"http://localhost:8081/internal/camera/fs/{loginId:N}";
+        string endpoint = $"https://localhost:8081/internal/camera/fs/{loginId:N}";
         using HttpResponseMessage hook = await callbackClient.PostAsJsonAsync("/internal/camera/hook", new
         {
             action = "pre-upload", username = "cam_withdrawn", path = "/DCIM/PHOTO.JPG",

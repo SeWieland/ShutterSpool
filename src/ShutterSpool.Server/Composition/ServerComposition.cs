@@ -20,6 +20,8 @@ using ShutterSpool.Server.Hosting;
 using ShutterSpool.Server.Security;
 using ShutterSpool.ServiceDefaults;
 using System.Text.Json.Serialization;
+using KestrelServerOptions = Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServerOptions;
+using ListenOptions = Microsoft.AspNetCore.Server.Kestrel.Core.ListenOptions;
 
 namespace ShutterSpool.Server.Composition;
 
@@ -67,7 +69,7 @@ internal static class ServerComposition
         cameraCredentialPolicy.Validate();
         builder.Services.AddSingleton(cameraCredentialPolicy);
         builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
-        if (cameraIngress.Enabled) ConfigureCameraListener(builder, cameraIngress.InternalPort);
+        if (cameraIngress.Enabled) ConfigureCameraListener(builder, cameraIngress);
         builder.AddServiceDefaults();
         builder.Services.AddOpenApi();
         builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
@@ -265,35 +267,46 @@ internal static class ServerComposition
             extensions: new Dictionary<string, object?> { ["errorCode"] = errorCode }).ExecuteAsync(context);
     }
 
-    private static void ConfigureCameraListener(WebApplicationBuilder builder, int internalPort)
+    private static void ConfigureCameraListener(WebApplicationBuilder builder, CameraIngressSettings ingress)
     {
         string? urls = builder.Configuration[Microsoft.AspNetCore.Hosting.WebHostDefaults.ServerUrlsKey]
             ?? builder.WebHost.GetSetting(Microsoft.AspNetCore.Hosting.WebHostDefaults.ServerUrlsKey);
+        IConfigurationSection callback = builder.Configuration.GetSection("Kestrel:Endpoints:CameraCallback");
+        bool useMeshTransport = ingress.CallbackTransport == CameraCallbackTransport.MeshMtls;
+        string scheme = useMeshTransport ? "http" : "https";
+        string address = ingress.InternalListenOnAllInterfaces ? "0.0.0.0" : "localhost";
+        callback["Url"] = $"{scheme}://{address}:{ingress.InternalPort}";
+        callback["Certificate:Path"] = ingress.CallbackCertificatePath;
+        callback["Certificate:KeyPath"] = ingress.CallbackCertificatePath;
         builder.WebHost.ConfigureKestrel((_, server) =>
         {
             if (!string.IsNullOrWhiteSpace(urls))
             {
                 foreach (string value in urls.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                {
-                    if (!Uri.TryCreate(value, UriKind.Absolute, out Uri? address) || address.Port < 1)
-                        throw new InvalidOperationException("Camera ingress cannot preserve an invalid configured server URL.");
-                    if (address.Scheme is not ("http" or "https"))
-                        throw new InvalidOperationException($"Camera ingress cannot preserve the configured '{address.Scheme}' server URL.");
-
-                    void ConfigureEndpoint(Microsoft.AspNetCore.Server.Kestrel.Core.ListenOptions endpoint)
-                    {
-                        if (address.Scheme == "https") endpoint.UseHttps();
-                    }
-
-                    if (string.Equals(address.Host, "localhost", StringComparison.OrdinalIgnoreCase))
-                        server.ListenLocalhost(address.Port, ConfigureEndpoint);
-                    else if (System.Net.IPAddress.TryParse(address.Host, out System.Net.IPAddress? ip))
-                        server.Listen(ip, address.Port, ConfigureEndpoint);
-                    else
-                        server.ListenAnyIP(address.Port, ConfigureEndpoint);
-                }
+                    ConfigurePublicListener(server, value);
             }
-            server.ListenAnyIP(internalPort);
+            if (!useMeshTransport && string.IsNullOrWhiteSpace(ingress.CallbackCertificatePath))
+                throw new InvalidOperationException("Enabled camera ingress requires a dedicated callback HTTPS certificate.");
         });
+    }
+
+    private static void ConfigurePublicListener(KestrelServerOptions server, string value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out Uri? address) || address.Port < 1)
+            throw new InvalidOperationException("Camera ingress cannot preserve an invalid configured server URL.");
+        if (address.Scheme is not ("http" or "https"))
+            throw new InvalidOperationException($"Camera ingress cannot preserve the configured '{address.Scheme}' server URL.");
+
+        void ConfigureEndpoint(ListenOptions endpoint)
+        {
+            if (address.Scheme == "https") endpoint.UseHttps();
+        }
+
+        if (string.Equals(address.Host, "localhost", StringComparison.OrdinalIgnoreCase))
+            server.ListenLocalhost(address.Port, ConfigureEndpoint);
+        else if (IPAddress.TryParse(address.Host, out IPAddress? ip))
+            server.Listen(ip, address.Port, ConfigureEndpoint);
+        else
+            server.ListenAnyIP(address.Port, ConfigureEndpoint);
     }
 }

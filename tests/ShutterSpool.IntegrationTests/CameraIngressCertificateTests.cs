@@ -26,6 +26,36 @@ public sealed class CameraIngressCertificateTests : IDisposable
     }
 
     [Fact]
+    public void Validate_rejects_a_private_key_in_the_public_root_file()
+    {
+        using var certificates = new CertificateFixture(_directory);
+        using RSA key = RSA.Create(2048);
+        File.AppendAllText(certificates.RootPath, Environment.NewLine + key.ExportPkcs8PrivateKeyPem());
+
+        Assert.Throws<InvalidOperationException>(() =>
+            CameraIngressCertificate.Validate(certificates.BundlePath, certificates.RootPath, "ingest.shutterspool.com"));
+    }
+
+    [Fact]
+    public void Callback_validation_rejects_a_second_authority_in_the_public_root_file()
+    {
+        const string hostname = "ingest.shutterspool.com";
+        using var certificates = new CertificateFixture(_directory);
+        CameraIngressCertificate.ValidateCallback(certificates.BundlePath, certificates.RootPath, hostname);
+
+        using RSA key = RSA.Create(2048);
+        var request = new CertificateRequest("CN=Additional synthetic root", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        using X509Certificate2 additional = request.CreateSelfSigned(now.AddHours(-1), now.AddDays(1));
+        File.AppendAllText(certificates.RootPath, Environment.NewLine + additional.ExportCertificatePem());
+
+        CameraIngressCertificate.Validate(certificates.BundlePath, certificates.RootPath, hostname);
+        Assert.Throws<InvalidOperationException>(() =>
+            CameraIngressCertificate.ValidateCallback(certificates.BundlePath, certificates.RootPath, hostname));
+    }
+
+    [Fact]
     public void Validate_rejects_missing_intermediate_even_when_it_is_in_current_user_ca_store()
     {
         using var certificates = new CertificateFixture(_directory, includeIntermediateInBundle: false);

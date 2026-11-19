@@ -219,7 +219,7 @@ internal sealed class EfRetentionSettingsStore(ShutterSpoolDbContext database, I
             && database.CaptureAssets.Any(member => member.CaptureId == capture.Id)
             && !database.CaptureAssets.Any(member => member.CaptureId == capture.Id
                 && !database.Assets.Any(asset => asset.Id == member.AssetId && asset.State == "Spooled"
-                    && !database.AssetRemovalOperations.Any((AssetRemovalOperationEntity operation) => operation.AssetId == asset.Id)))
+                    && !Queryable.Any(database.AssetRemovalOperations, (AssetRemovalOperationEntity operation) => operation.AssetId == asset.Id)))
             && !database.PreservationHoldAssets.Any(member => database.CaptureAssets.Any(captureAsset =>
                 captureAsset.CaptureId == capture.Id && captureAsset.AssetId == member.AssetId)
                 && database.PreservationHolds.Any(hold => hold.Id == member.HoldId && hold.ResolvedAt == null))

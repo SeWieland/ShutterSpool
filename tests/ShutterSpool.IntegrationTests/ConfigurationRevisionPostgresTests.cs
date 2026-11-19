@@ -36,8 +36,8 @@ public sealed class ConfigurationRevisionPostgresTests
         {
             await using var context = new ShutterSpoolDbContext(options);
             return await new EfSourceConfigurationStore(context).UpdateConfigurationAsync(sourceId, 0,
-                $"camera-{index}", SourceCurationMode.Immediate, 3_600, SourceType.CameraFtpUpload,
-                SourceConnectionProfile.ModernFtps, CollectionName.BuiltInId, TestContext.Current.CancellationToken);
+                new($"camera-{index}", SourceCurationMode.Immediate, 3_600, SourceType.CameraFtpUpload,
+                    SourceConnectionProfile.ModernFtps, CollectionName.BuiltInId), TestContext.Current.CancellationToken);
         })];
         SourceConfigurationWrite[] sourceResults = await Task.WhenAll(sourceWrites);
         Assert.Single(sourceResults, result => result.Applied);

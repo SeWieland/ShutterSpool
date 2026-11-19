@@ -2,6 +2,7 @@ using ShutterSpool.Server.Security;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.AspNetCore.Mvc;
 using ShutterSpool.Application.Collections;
+using System.Net.Mime;
 using System.Text;
 
 namespace ShutterSpool.Server.Api.Collections;
@@ -34,9 +35,9 @@ public static class CollectionEndpoints
             .Produces<CollectionResponse>(201).ProducesValidationProblem().ProducesProblem(409);
         management.MapPut("/collections/{id:guid}", RenameAsync).RequireAuthorization(WorkspacePolicies.Administer).WithSummary("Rename a Collection")
             .Produces<CollectionResponse>().ProducesValidationProblem().ProducesProblem(404)
-            .Produces<CollectionConflictProblemDetails>(409, "application/problem+json");
+            .Produces<CollectionConflictProblemDetails>(409, MediaTypeNames.Application.ProblemJson);
         management.MapDelete("/collections/{id:guid}", DeleteAsync).RequireAuthorization(WorkspacePolicies.Administer).WithSummary("Delete an unreferenced Collection")
-            .ProducesProblem(404).Produces<CollectionConflictProblemDetails>(409, "application/problem+json");
+            .ProducesProblem(404).Produces<CollectionConflictProblemDetails>(409, MediaTypeNames.Application.ProblemJson);
         return management;
     }
 
@@ -75,7 +76,7 @@ public static class CollectionEndpoints
         {
             return Results.Json(new CollectionConflictProblemDetails
             { Status = 409, Title = exception.Message, ErrorCode = "COLLECTION_NAME_CONFLICT" },
-                statusCode: 409, contentType: "application/problem+json");
+                statusCode: 409, contentType: MediaTypeNames.Application.ProblemJson);
         }
     }
 
@@ -86,15 +87,15 @@ public static class CollectionEndpoints
         {
             CollectionWrite result = await collections.RenameAsync(id, request.ExpectedRevision, request.Name, token);
             if (result.Current is null) return Results.Problem(statusCode: 404, title: "Collection not found");
-            return result.Applied ? Results.Ok(CollectionResponse.From(result.Current))
-                : Conflict(result.Current, result.NameConflict ? "COLLECTION_NAME_CONFLICT" : "COLLECTION_REVISION_CONFLICT");
+            if (result.Applied) return Results.Ok(CollectionResponse.From(result.Current));
+            return Conflict(result.Current, result.NameConflict ? "COLLECTION_NAME_CONFLICT" : "COLLECTION_REVISION_CONFLICT");
         }
         catch (ArgumentException exception) { return Invalid("name", exception.Message); }
         catch (InvalidOperationException exception)
         {
             return Results.Json(new CollectionConflictProblemDetails
             { Status = 409, Title = exception.Message, ErrorCode = "COLLECTION_NAME_CONFLICT" },
-                statusCode: 409, contentType: "application/problem+json");
+                statusCode: 409, contentType: MediaTypeNames.Application.ProblemJson);
         }
     }
 
@@ -113,7 +114,7 @@ public static class CollectionEndpoints
     private static IResult Conflict(CollectionSummary current, string code, bool referenced = false) => Results.Json(
         new CollectionConflictProblemDetails { Status = 409, Title = "Collection could not be changed.",
             ErrorCode = code, Current = CollectionResponse.From(current), Referenced = referenced },
-        statusCode: 409, contentType: "application/problem+json");
+        statusCode: 409, contentType: MediaTypeNames.Application.ProblemJson);
 
     private static string SearchKey(string? query)
     {

@@ -26,6 +26,8 @@ public sealed class RetentionTelemetryTests
         Assert.Contains(measurements, item => item.Name == "shutterspool.retention.used.bytes" && item.Value == 900);
         Assert.Contains(measurements, item => item.Name == "shutterspool.retention.reserved.bytes" && item.Value == 200);
         Assert.Contains(measurements, item => item.Name == "shutterspool.retention.admission.blocked" && item.Value == 1);
+        Assert.Contains(measurements, item => item.Name == "shutterspool.retention.occupancy.bytes" && item.Value == 600
+            && item.Tags.SequenceEqual(new[] { new KeyValuePair<string, object?>("category", "active") }));
         Assert.All(measurements.SelectMany(item => item.Tags), tag => Assert.DoesNotContain("/private", tag.Value?.ToString() ?? ""));
     }
 }

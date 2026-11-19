@@ -230,7 +230,8 @@ jobs:
           else
             echo '::warning::Frontend coverage report missing. SonarQube coverage will be incomplete.'
           fi
-          # Sonar classifies shared Vitest fixtures as source. Keep them in static analysis and out of coverage.
+          # The scanner classifies shared Vitest fixtures and standalone Python test scripts as source.
+          # Keep them in static analysis and out of production coverage.
           # The PostgreSQL bootstrap script uses psql syntax outside Sonar's Oracle PL/SQL dialect.
           "$RUNNER_TEMP/sonar/dotnet-sonarscanner" begin \
             /k:"$SONAR_PROJECT_KEY" \
@@ -240,7 +241,7 @@ jobs:
             /d:sonar.projectBaseDir="$GITHUB_WORKSPACE" \
             /d:sonar.scanner.scanAll=true \
             /d:sonar.python.version=3.10,3.11,3.12 \
-            /d:sonar.coverage.exclusions="src/ShutterSpool.Web/tests/**" \
+            /d:sonar.coverage.exclusions="src/ShutterSpool.Web/tests/**,tests/**/*.py" \
             /d:sonar.exclusions="**/bin/**,**/obj/**,**/node_modules/**,**/.nuxt/**,**/.output/**,**/dist/**,.nuget/**,artifacts/**,**/TestResults/**,**/coverage/**,src/ShutterSpool.Web/app/api/**,src/ShutterSpool.Server/openapi/**,src/ShutterSpool.Server/wwwroot/**,deploy/package/workspace-databases.sql" \
             "${coverage_args[@]}"
       - name: Build for analysis

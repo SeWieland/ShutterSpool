@@ -42,6 +42,49 @@ public sealed partial class ConfigurationApiTests
     }
 
     [Fact]
+    public async Task Workspace_access_role_command_replays_only_the_same_request_and_reports_missing_targets()
+    {
+        await using var fixture = await ConfigurationApiFixture.CreateAsync();
+        CancellationToken token = TestContext.Current.CancellationToken;
+        Guid member = Guid.NewGuid();
+        await using (var database = new ShutterSpoolDbContext(fixture.Database.Options))
+        {
+            database.AuthorizationGrants.Add(new() { Id = member, Issuer = "https://issuer.test",
+                Subject = "synthetic-viewer", Role = WorkspaceRole.Viewer, IsActive = true });
+            await database.SaveChangesAsync(token);
+        }
+
+        Guid operationId = Guid.NewGuid();
+        string path = $"/management/members/{member}/role";
+        var request = new { operationId, expectedRevision = 0, role = "Curator" };
+        using HttpResponseMessage applied = await fixture.Client.PostAsJsonAsync(path, request, token);
+        using HttpResponseMessage replay = await fixture.Client.PostAsJsonAsync(path, request, token);
+        Assert.Equal(HttpStatusCode.OK, applied.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        string appliedBody = await applied.Content.ReadAsStringAsync(token);
+        Assert.Equal(appliedBody, await replay.Content.ReadAsStringAsync(token));
+        using JsonDocument result = JsonDocument.Parse(appliedBody);
+        Assert.Equal(operationId, result.RootElement.GetProperty("operationId").GetGuid());
+        Assert.Equal("applied", result.RootElement.GetProperty("status").GetString());
+        JsonElement current = result.RootElement.GetProperty("membership");
+        Assert.Equal(member, current.GetProperty("id").GetGuid());
+        Assert.Equal("Curator", current.GetProperty("role").GetString());
+        Assert.Equal(1, current.GetProperty("revision").GetInt64());
+
+        using HttpResponseMessage conflict = await fixture.Client.PostAsJsonAsync(path, request with { role = "Viewer" }, token);
+        Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
+        JsonElement conflictProblem = await conflict.Content.ReadFromJsonAsync<JsonElement>(token);
+        Assert.Equal("membership-conflict", conflictProblem.GetProperty("errorCode").GetString());
+        Assert.Equal(JsonValueKind.Null, conflictProblem.GetProperty("membership").ValueKind);
+
+        using HttpResponseMessage missing = await fixture.Client.PostAsJsonAsync($"/management/members/{Guid.NewGuid()}/role",
+            request with { operationId = Guid.NewGuid(), expectedRevision = 99 }, token);
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+        JsonElement missingProblem = await missing.Content.ReadFromJsonAsync<JsonElement>(token);
+        Assert.Equal("membership-not-found", missingProblem.GetProperty("errorCode").GetString());
+    }
+
+    [Fact]
     public async Task Viewer_scope_precedes_filters_tags_detail_collections_and_preview_even_with_admin_token_claim()
     {
         await using var fixture = await ConfigurationApiFixture.CreateAsync();
@@ -125,12 +168,19 @@ public sealed partial class ConfigurationApiTests
         Assert.Single(await verify.AuthorizationGrants.Where(item => item.IsActive && item.Role == WorkspaceRole.Owner).ToArrayAsync(token));
         AccessChange applied = changes[0].Status == "applied" ? left : right;
         var store = new EfAccessGrantStore(verify);
-        Assert.Equal("applied", (await store.ChangeAsync(applied, token)).Status);
-        Assert.Equal("conflict", (await store.ChangeAsync(applied with { ActorSubject = "different" }, token)).Status);
+        Assert.All(changes, item => Assert.False(item.IsReplay));
+        AccessChangeResult replay = await store.ChangeAsync(applied, token);
+        Assert.Equal("applied", replay.Status);
+        Assert.True(replay.IsReplay);
+        AccessChangeResult conflict = await store.ChangeAsync(applied with { ActorSubject = "different" }, token);
+        Assert.Equal("conflict", conflict.Status);
+        Assert.False(conflict.IsReplay);
         Assert.Equal(2, await verify.Set<WorkspaceAccessOperationEntity>().CountAsync(item => item.Kind != "operator-setup", token));
         WorkspaceAccessOperationEntity audit = await verify.Set<WorkspaceAccessOperationEntity>().SingleAsync(item => item.Id == applied.OperationId, token);
         using JsonDocument before = JsonDocument.Parse(audit.BeforeState!);
         using JsonDocument after = JsonDocument.Parse(audit.AfterState!);
+        using JsonDocument recordedResult = JsonDocument.Parse(audit.Result);
+        Assert.False(recordedResult.RootElement.TryGetProperty("IsReplay", out _));
         Assert.True(before.RootElement.GetProperty("Target").GetProperty("IsActive").GetBoolean());
         Assert.False(after.RootElement.GetProperty("Target").GetProperty("IsActive").GetBoolean());
     }

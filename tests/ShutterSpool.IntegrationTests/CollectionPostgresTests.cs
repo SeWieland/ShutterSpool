@@ -111,8 +111,8 @@ public sealed class CollectionPostgresTests
         await using (var update = new ShutterSpoolDbContext(options))
         {
             SourceConfigurationWrite result = await new EfSourceConfigurationStore(update).UpdateConfigurationAsync(
-                sourceId, 0, "camera", SourceCurationMode.Delay, 3_600, SourceType.CameraFtpUpload,
-                SourceConnectionProfile.ModernFtps, selected.Id, token);
+                sourceId, 0, new("camera", SourceCurationMode.Delay, 3_600, SourceType.CameraFtpUpload,
+                    SourceConnectionProfile.ModernFtps, selected.Id), token);
             Assert.True(result.Applied);
             Assert.Equal(selected.Id, result.Current!.CollectionId);
         }
@@ -199,8 +199,8 @@ public sealed class CollectionPostgresTests
         await using (var update = new ShutterSpoolDbContext(options))
         {
             SourceConfigurationWrite changed = await new EfSourceConfigurationStore(update).UpdateConfigurationAsync(
-                sourceId, 0, "camera", SourceCurationMode.Delay, 3_600, SourceType.CameraFtpUpload,
-                SourceConnectionProfile.ModernFtps, laterCollectionId, token);
+                sourceId, 0, new("camera", SourceCurationMode.Delay, 3_600, SourceType.CameraFtpUpload,
+                    SourceConnectionProfile.ModernFtps, laterCollectionId), token);
             Assert.True(changed.Applied);
         }
         await using (var group = new ShutterSpoolDbContext(options))
@@ -242,9 +242,9 @@ public sealed class CollectionPostgresTests
         Task<SourceConfigurationWrite> changeDefault = Task.Run(async () =>
         {
             await using var context = new ShutterSpoolDbContext(options);
-            return await new EfSourceConfigurationStore(context).UpdateConfigurationAsync(sourceId, 0, "camera",
-                SourceCurationMode.Delay, 3_600, SourceType.CameraFtpUpload, SourceConnectionProfile.ModernFtps,
-                updatedDefault, token);
+            return await new EfSourceConfigurationStore(context).UpdateConfigurationAsync(sourceId, 0,
+                new("camera", SourceCurationMode.Delay, 3_600, SourceType.CameraFtpUpload, SourceConnectionProfile.ModernFtps,
+                    updatedDefault), token);
         }, token);
         Task<bool> group = Task.Run(async () =>
         {
@@ -298,9 +298,9 @@ public sealed class CollectionPostgresTests
             Assert.Equal(CollectionMoveStatus.Applied, moved.Status);
         }
         await using (var update = new ShutterSpoolDbContext(options))
-            Assert.True((await new EfSourceConfigurationStore(update).UpdateConfigurationAsync(sourceId, 0, "camera",
-                SourceCurationMode.Delay, 3_600, SourceType.CameraFtpUpload, SourceConnectionProfile.ModernFtps,
-                CollectionName.BuiltInId, token)).Applied);
+            Assert.True((await new EfSourceConfigurationStore(update).UpdateConfigurationAsync(sourceId, 0,
+                new("camera", SourceCurationMode.Delay, 3_600, SourceType.CameraFtpUpload, SourceConnectionProfile.ModernFtps,
+                    CollectionName.BuiltInId), token)).Applied);
         await using (var rename = new ShutterSpoolDbContext(options))
             Assert.True((await new EfCollectionManagementStore(rename).RenameAsync(releasedCollection.Id,
                 releasedCollection.Revision, CollectionName.Parse("Events/Retitled"), token)).Applied);
@@ -433,8 +433,8 @@ public sealed class CollectionPostgresTests
             try
             {
                 await new EfSourceConfigurationStore(context).CreateAsync(new SourceProvisioning(Guid.NewGuid(),
-                    "camera", SourceCurationMode.Delay, 3_600, "race-user", "private/race", new byte[32],
-                    SourceType.CameraFtpUpload, SourceConnectionProfile.ModernFtps, collectionId), token);
+                    new("camera", SourceCurationMode.Delay, 3_600, SourceType.CameraFtpUpload, SourceConnectionProfile.ModernFtps,
+                        collectionId), "race-user", "private/race", new byte[32]), token);
                 return true;
             }
             catch (ArgumentException) { return false; }
@@ -464,9 +464,9 @@ public sealed class CollectionPostgresTests
                 try
                 {
                     SourceConfigurationWrite result = await new EfSourceConfigurationStore(context).UpdateConfigurationAsync(
-                        defaultSourceId, 0, "default-camera",
-                        SourceCurationMode.Delay, 3_600, SourceType.CameraFtpUpload, SourceConnectionProfile.ModernFtps,
-                        defaultTargetId, token);
+                        defaultSourceId, 0,
+                        new("default-camera", SourceCurationMode.Delay, 3_600, SourceType.CameraFtpUpload, SourceConnectionProfile.ModernFtps,
+                            defaultTargetId), token);
                     return result.Applied;
                 }
                 catch (ArgumentException) { return false; }

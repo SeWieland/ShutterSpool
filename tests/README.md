@@ -11,7 +11,7 @@ Docker scans the literal build-stage references in `deploy/Server.Dockerfile`, t
 GitHub-managed CodeQL scans Actions, C#, JavaScript/TypeScript and Python on supported pushes and pull requests and on its scheduled runs. Static analysis complements the checks below; it does not qualify camera or recovery behavior.
 The [CI workflow](../.github/workflows/ci.yml) runs SonarQube analysis on `main` pushes and same-repository pull requests targeting `main`. Fork and Dependabot changes are scanned after merge.
 On noncancelled runs, CI uploads available coverage even when tests fail. Eligible SonarQube analysis imports the .NET XML report and a single frontend `lcov.info` when available.
-Vitest maps coverage to the original TypeScript and Vue files. SonarQube excludes `src/ShutterSpool.Web/tests/` from coverage. Generated clients and build output are excluded.
+Vitest maps coverage to the original TypeScript and Vue files. SonarQube keeps Web test fixtures and standalone Python test scripts in static analysis and excludes them from production coverage. Generated clients and build output are excluded.
 SonarQube Cloud reports an advisory quality gate separately.
 
 Pushes to `main` and all pull requests run the .NET suites with PostgreSQL, frontend type/test/build checks, migration and generated-client consistency checks, camera-client security, edge certificate validation and release-builder checks.
@@ -83,7 +83,7 @@ Run checks from the repository root with Python 3.10+ unless noted. These use co
 | `python tests/verify-release-build.py` | Check Compose package construction and refusal paths with controlled fixtures. |
 | `python tests/verify-ftps-edge.py` | Exercise the pinned disposable edge's protocol behavior and controlled certificate replacement. Requires OpenSSL and a Docker setup that lets the container reach the fixture callback at `host.docker.internal`, as Docker Desktop does. Add `--legacy` for the separate RSA AES-CBC profile. |
 | `python tests/verify-keycloak-theme.py` | Check native enrollment defaults/verified-email mapper and theme preflight, selection and fallback; shell cases use the pinned Keycloak image and a controlled administrative-command stub. Requires Docker; this optional check does not prove email delivery or account enrollment. |
-| `python tests/verify-sftpgo-httpfs.py` | Characterize synchronous completion, same-name uploads, rejected append/resume and hook-failure cleanup with synthetic bytes on a disposable loopback FTP endpoint; requires Docker. |
+| `python tests/verify-sftpgo-httpfs.py` | Exercise verified HTTPS for auth, the synchronous hook and HTTPFs, including TLS and key refusal, replacement and rollback. The disposable FTP endpoint also checks same-name uploads, append/resume refusal and hook-failure cleanup. Requires Docker Desktop and OpenSSL. |
 
 `camera_ftp.py` is the reusable synthetic client, not a standalone acceptance run. It keeps the socket address separate from the TLS hostname and never falls back to plaintext after TLS failure.
 

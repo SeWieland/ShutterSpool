@@ -295,7 +295,7 @@ docker compose exec -T postgres sh -c 'exec pg_dump -U "$POSTGRES_USER" -Fc keyc
 docker compose exec -T postgres sh -c 'exec pg_dumpall -U "$POSTGRES_USER" --globals-only' > "$backup/roles.sql"
 mkdir "$backup/studio"
 docker cp -a "$server_id:/srv/shutterspool/studio/." "$backup/studio/"
-tar -czpf "$backup/configuration.tar.gz" .env config secrets certificates compose.yaml profiles components proxies package
+tar -czpf "$backup/configuration.tar.gz" .env config secrets certificates callback-certificates compose.yaml profiles components proxies package
 cp release-manifest.json "$backup/"
 docker compose exec -T postgres pg_restore --list < "$backup/control.dump" > "$backup/control.contents"
 docker compose exec -T postgres pg_restore --list < "$backup/studio.dump" > "$backup/studio.contents"
@@ -326,6 +326,7 @@ Label a failed capture incomplete. Inspect service states before deliberately re
 
 Use the same compatible package/image, a new directory/project name and empty volumes.
 Keep the original installation and backup intact. Restore configuration privately, preserving ownership, then change `COMPOSE_PROJECT_NAME` before any Compose command.
+Restore the callback identity and public trust file with the matching package and ownership. Check their current validity before starting Server or any camera edge.
 Before any Compose command, choose distinct free `BACKEND_SUBNET`, `PROXY_SUBNET` and `IDENTITY_PROXY_SUBNET` values: the stopped original installation still owns its networks.
 Supply isolated external databases where applicable; do not retain old explicit volume names or database targets.
 Keep proxy and camera edges stopped throughout validation.
@@ -395,12 +396,14 @@ Open traffic only after validation and deliberate operator cutover. Stop isolate
 
 Use only the release's explicitly named compatible predecessor.
 Drain, capture a verified recovery set, replace package/image/configuration and complete migrations/recovery before reopening traffic.
+If the selected compatible predecessor used HTTP callbacks, prepare the [dedicated HTTPS callback certificate and trust file](../certificates/README.md#required-files) before starting the new package.
 Use the explicit [workspace upgrade command](#upgrade-databases) with operator migration credentials; ordinary startup never migrates tenant databases.
 Keep the whole instance closed until all registered databases, storage identities, keys, allocation limits and recovery checks pass. A maintenance page alone does not stop writers.
 Never run old and new Servers concurrently against one database/spool.
 Failed initialization leaves the installation closed; preserve diagnostics and the pre-upgrade set.
 
 Rollback restores complete compatible pre-upgrade state into isolated storage; it is not a schema downgrade or image-tag change.
+To roll back a callback certificate replacement, drain the edges and restore the previous valid HTTPS identity and trust generation together using the [certificate replacement procedure](../certificates/README.md#controlled-replacement).
 The same erasure-history restrictions apply. Explain recovery-point loss and completed remote deliveries before cutover.
 
 ## Moving from an older pre-alpha installation

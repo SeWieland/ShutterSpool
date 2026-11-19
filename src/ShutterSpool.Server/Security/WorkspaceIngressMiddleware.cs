@@ -1,3 +1,4 @@
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -15,6 +16,8 @@ internal sealed class WorkspaceIngressMiddleware(RequestDelegate next)
         byte[] supplied = Encoding.UTF8.GetBytes(http.Request.Headers["X-API-KEY"].ToString());
         byte[] expected = Encoding.UTF8.GetBytes(settings.CallbackKey);
         if (!settings.Enabled || http.Connection.LocalPort != settings.InternalPort
+            || (settings.CallbackTransport == CameraCallbackTransport.MeshMtls
+                && (http.Connection.LocalIpAddress is not IPAddress localAddress || !IPAddress.IsLoopback(localAddress)))
             || !CryptographicOperations.FixedTimeEquals(supplied, expected)) { http.Response.StatusCode = 403; return; }
         try
         {

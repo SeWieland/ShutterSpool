@@ -13,11 +13,17 @@ namespace ShutterSpool.AppHost
     {
         private const string ServerAuthenticationOid = "1.3.6.1.5.5.7.3.1";
 
-        public static void Validate(string bundlePath, string rootPath, string hostname)
+        public static void Validate(string bundlePath, string rootPath, string hostname) =>
+            Validate(bundlePath, rootPath, hostname, requireSingleRoot: false);
+
+        public static void ValidateCallback(string bundlePath, string rootPath, string hostname) =>
+            Validate(bundlePath, rootPath, hostname, requireSingleRoot: true);
+
+        private static void Validate(string bundlePath, string rootPath, string hostname, bool requireSingleRoot)
         {
             try
             {
-                ValidateCertificate(bundlePath, rootPath, hostname);
+                ValidateCertificate(bundlePath, rootPath, hostname, requireSingleRoot);
             }
             catch (Exception exception) when (exception is IOException || exception is UnauthorizedAccessException
                 || exception is CryptographicException || exception is ArgumentException || exception is InvalidOperationException)
@@ -28,13 +34,17 @@ namespace ShutterSpool.AppHost
             }
         }
 
-        private static void ValidateCertificate(string bundlePath, string rootPath, string hostname)
+        private static void ValidateCertificate(string bundlePath, string rootPath, string hostname, bool requireSingleRoot)
         {
             if (string.IsNullOrWhiteSpace(hostname))
                 throw new ArgumentException("A certificate hostname is required.");
 
             string bundle = File.ReadAllText(bundlePath);
             string rootPem = File.ReadAllText(rootPath);
+            if (rootPem.Contains("PRIVATE KEY-----", StringComparison.Ordinal))
+                throw new CryptographicException("The trusted root file must contain public certificates only.");
+            if (requireSingleRoot && rootPem.AsSpan().Count("-----BEGIN CERTIFICATE-----".AsSpan()) != 1)
+                throw new CryptographicException("The callback trust file must contain exactly one public CA certificate.");
             var certificates = new X509Certificate2Collection();
             try
             {
