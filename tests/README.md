@@ -11,7 +11,7 @@ Docker scans the literal build-stage references in `deploy/Server.Dockerfile`, t
 GitHub-managed CodeQL scans Actions, C#, JavaScript/TypeScript and Python on supported pushes and pull requests and on its scheduled runs. Static analysis complements the checks below; it does not qualify camera or recovery behavior.
 The [CI workflow](../.github/workflows/ci.yml) runs SonarQube analysis on `main` pushes and same-repository pull requests targeting `main`. Fork and Dependabot changes are scanned after merge.
 On noncancelled runs, CI uploads available coverage even when tests fail. Eligible SonarQube analysis imports the .NET XML report and a single frontend `lcov.info` when available.
-The frontend report maps coverage to the original TypeScript and Vue files. Generated clients and build output are excluded.
+Vitest maps coverage to the original TypeScript and Vue files. SonarQube excludes `src/ShutterSpool.Web/tests/` from coverage. Generated clients and build output are excluded.
 SonarQube Cloud reports an advisory quality gate separately.
 
 Pushes to `main` and all pull requests run the .NET suites with PostgreSQL, frontend type/test/build checks, migration and generated-client consistency checks, camera-client security, edge certificate validation and release-builder checks.

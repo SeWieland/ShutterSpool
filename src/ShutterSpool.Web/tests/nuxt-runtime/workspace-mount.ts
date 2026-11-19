@@ -73,7 +73,13 @@ export function roleAccess(role: WorkspaceRole) {
     return { membershipId: 'member', role, revision: 1, viewerPolicy: { revision: 1, includeUnreleased: true },
         capabilities: { canCurate: role !== 'Viewer', canAdminister: role === 'Owner', canManageMembers: role === 'Owner', canManageOwners: role === 'Owner' } };
 }
-export let intersect: () => void;
+let notifyIntersection: (() => void) | undefined;
+
+export function intersect() {
+    if (!notifyIntersection) throw new Error('The workspace paging sentinel is not observed');
+    notifyIntersection();
+}
+
 beforeEach(() => {
     vi.clearAllMocks();
     for (const mock of Object.values(transport)) mock.mockReset();
@@ -94,12 +100,24 @@ beforeEach(() => {
     session.value = new User({ profile: { iss: 'https://synthetic.example.test', sub: 'operator', aud: 'test', exp: 2e9, iat: 0 }, access_token: '', token_type: 'Bearer' });
     localStorage.clear();
     vi.stubGlobal('IntersectionObserver', class {
-        constructor(callback: (entries: { isIntersecting: boolean }[]) => void) { intersect = () => callback([{ isIntersecting: true }]); }
-        observe() {} unobserve() {} disconnect() {}
+        private readonly notify: () => void;
+
+        constructor(callback: (entries: { isIntersecting: boolean }[]) => void) {
+            this.notify = () => callback([{ isIntersecting: true }]);
+        }
+
+        observe() { notifyIntersection = this.notify; }
+        unobserve() { this.disconnect(); }
+        disconnect() { if (notifyIntersection === this.notify) notifyIntersection = undefined; }
     });
     vi.stubGlobal('confirm', vi.fn(() => true));
 });
-afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => {
+    notifyIntersection = undefined;
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+});
 
 export function loseAccess() { session.value = null; clearPrivateAccess(); }
 export function buttonIn(root: ParentNode, label: string) {
