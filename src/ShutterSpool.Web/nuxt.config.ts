@@ -1,16 +1,20 @@
-import sftpgo from '../../artifacts/attribution/sftpgo.json'
+import sftpgo from '../../artifacts/attribution/sftpgo.json' with { type: 'json' }
 
 export default defineNuxtConfig({
-  $production: {
-    // Keep the production manifest location stable before and after typecheck.
-    buildDir: 'node_modules/.cache/nuxt/.nuxt',
-    typesDir: '.nuxt',
-  },
   ssr: false,
+  router: { options: { sensitive: false } },
   modules: ['@nuxt/ui'],
   css: ['~/assets/main.css', '~/assets/workspace.css'],
   colorMode: { preference: 'dark', fallback: 'dark' },
-  ui: { fonts: false },
+  ui: { fonts: false, experimental: { componentDetection: true } },
+  vite: {
+    environments: {
+      client: {
+        // Keep Rolldown's shared chunks instead of merging the initial graph into one large entry.
+        build: { rolldownOptions: { output: { codeSplitting: {} } } },
+      },
+    },
+  },
   icon: {
     provider: 'none',
     clientBundle: { scan: { globInclude: ['app/**/*.{vue,ts}'] } },
@@ -23,5 +27,5 @@ export default defineNuxtConfig({
     },
   },
   app: { head: { title: 'ShutterSpool', htmlAttrs: { lang: 'en', class: 'dark' }, link: [{ rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }] } },
-  nitro: { prerender: { routes: ['/'] } },
+  prerender: { routes: ['/'] },
 })

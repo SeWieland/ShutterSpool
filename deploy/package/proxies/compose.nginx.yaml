@@ -1,6 +1,6 @@
 services:
   proxy:
-    image: nginx:1.28.0@sha256:30f1c0d78e0ad60901648be663a710bdadf19e4c10ac6782c235200619158284
+    image: nginx:1.30.7-trixie@sha256:7fad6c0dff97965adbddf28027d934b111fc0221a554315dc274712f3fba24d3
     restart: unless-stopped
     stop_grace_period: 150s
     networks: [proxy, identity-proxy]

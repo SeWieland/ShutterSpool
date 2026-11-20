@@ -82,7 +82,7 @@ internal sealed class LocalDestinationConfigurationService(ShutterSpoolDbContext
         await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         // EF may reopen a broken connection here; fence the final write on the transaction's connection.
         await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(hashtextextended('shutterspool-routing', 0))", cancellationToken);
-        DestinationEntity? destination = await database.Destinations.FromSqlInterpolated($"SELECT * FROM destinations WHERE \"Id\" = {destinationId} AND \"Kind\" = {ProviderKind} AND NOT \"IsArchived\" FOR UPDATE")
+        DestinationEntity? destination = await database.Destinations.FromSql($"SELECT * FROM destinations WHERE \"Id\" = {destinationId} AND \"Kind\" = {ProviderKind} AND NOT \"IsArchived\" FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
         if (destination is null) return "LOCAL_DESTINATION_NOT_FOUND";
         if (destination.ConfigurationRevision != expectedRevision) return "CONFIGURATION_CONFLICT";

@@ -27,6 +27,8 @@ namespace ShutterSpool.Server.Composition;
 
 internal static class ServerComposition
 {
+    internal static bool IsGeneratingOpenApi => System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name == "GetDocument.Insider";
+
     public static async Task<int> RunWorkspaceOperatorAsync(string[] args, IConfiguration configuration)
     {
         try
@@ -54,7 +56,9 @@ internal static class ServerComposition
         if (shutdownTimeout <= TimeSpan.Zero) throw new InvalidOperationException("The Server shutdown timeout must be positive.");
         builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = shutdownTimeout);
         ConfigureForwardedHeaders(builder);
-        CameraIngressSettings cameraIngress = builder.Configuration.GetSection("ShutterSpool:CameraIngress").Get<CameraIngressSettings>() ?? new();
+        CameraIngressSettings cameraIngress = IsGeneratingOpenApi
+            ? new()
+            : builder.Configuration.GetSection("ShutterSpool:CameraIngress").Get<CameraIngressSettings>() ?? new();
         cameraIngress.Validate();
         builder.Services.AddSingleton(cameraIngress);
         string? configuredMinimum = builder.Configuration["ShutterSpool:CameraCredentials:MinimumPasswordLength"];
@@ -135,7 +139,7 @@ internal static class ServerComposition
 
     private static void AddHostedWorkers(WebApplicationBuilder builder)
     {
-        if (System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name == "GetDocument.Insider") return;
+        if (IsGeneratingOpenApi) return;
         builder.Services.AddHostedService(services => services.GetRequiredService<SourceAuthenticationObservationWorker>());
         builder.Services.AddHostedService<MetadataWorker>();
         builder.Services.AddHostedService<CaptureGroupingWorker>();

@@ -37,7 +37,7 @@ public static class PreviewEndpoint
         .ProducesValidationProblem()
         .AddOpenApiOperationTransformer((operation, _, _) =>
         {
-            foreach (OpenApiMediaType content in operation.Responses!["200"].Content!.Values)
+            foreach (OpenApiMediaType content in operation.Responses!["200"].Content!.Values.OfType<OpenApiMediaType>())
                 content.Schema = new OpenApiSchema { Type = JsonSchemaType.String, Format = "binary" };
             return Task.CompletedTask;
         });

@@ -720,7 +720,7 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
     }
 
     private Task<CaptureEntity?> LockCaptureAsync(Guid captureId, CancellationToken cancellationToken) =>
-        database.Captures.FromSqlInterpolated($"SELECT * FROM captures WHERE \"Id\" = {captureId} FOR UPDATE")
+        database.Captures.FromSql($"SELECT * FROM captures WHERE \"Id\" = {captureId} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
 
     private Task<int> LockRoutingAsync(CancellationToken cancellationToken) =>
@@ -728,7 +728,7 @@ internal sealed class EfRetentionRemovalStore(ShutterSpoolDbContext database, Ef
             cancellationToken);
 
     private Task<AssetRemovalOperationEntity?> LockOperationAsync(Guid operationId, CancellationToken cancellationToken) =>
-        database.AssetRemovalOperations.FromSqlInterpolated($"SELECT * FROM asset_removal_operations WHERE \"OperationId\" = {operationId} FOR UPDATE")
+        database.AssetRemovalOperations.FromSql($"SELECT * FROM asset_removal_operations WHERE \"OperationId\" = {operationId} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
 
     private static AuthorizedAssetRemoval ToContract(AssetRemovalOperationEntity operation) => new(

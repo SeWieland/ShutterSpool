@@ -1,0 +1,24 @@
+name: Set up the Dockerfile Node.js version
+description: Use the exact Node.js version from the Server Dockerfile's web stage.
+inputs:
+  cache:
+    description: Package manager cache type. An empty value disables caching.
+    default: npm
+runs:
+  using: composite
+  steps:
+    - name: Read Node.js version from the web image
+      id: version
+      shell: bash
+      run: |
+        image=$(awk '$1 == "FROM" && $3 == "AS" && $4 == "web" { print $2 }' "$GITHUB_WORKSPACE/deploy/Server.Dockerfile")
+        if [[ ! $image =~ ^node:([0-9]+\.[0-9]+\.[0-9]+)(-[a-z]+([0-9]+(\.[0-9]+)*)?(-[a-z0-9]+)*)?@sha256:[0-9a-f]{64}$ ]]; then
+          echo "::error::Expected the web stage to pin an exact Node.js image and digest."
+          exit 1
+        fi
+        printf 'node=%s\n' "${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: ${{ steps.version.outputs.node }}
+        cache: ${{ inputs.cache }}
+        cache-dependency-path: src/ShutterSpool.Web/package-lock.json

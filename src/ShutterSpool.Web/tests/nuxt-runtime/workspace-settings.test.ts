@@ -6,12 +6,17 @@ import { defaultPreferences } from '../../app/lib/workspace-preferences';
 import { buttonIn, loseAccess, mountWorkspace, photo, refresh, transport } from './workspace-mount';
 import RetentionSettings from '../../app/components/RetentionSettings.vue';
 import TrashWorkspace from '../../app/components/TrashWorkspace.vue';
-const key = 'shutterspool-appearance-https://synthetic.example.test-operator';
+const preferencePrefix = 'shutterspool-appearance-';
+const key = preferencePrefix + 'https://synthetic.example.test-operator';
 function storage(initial?: string) {
+    const browserStorage = localStorage;
     const records = new Map(initial === undefined ? [] : [[key, initial]]);
     const setItem = vi.fn((key: string, value: string) => { records.set(key, value); });
     const getItem = vi.fn((key: string) => records.get(key) ?? null);
-    vi.stubGlobal('localStorage', { getItem, setItem });
+    vi.stubGlobal('localStorage', {
+        getItem: (name: string) => name.startsWith(preferencePrefix) ? getItem(name) : browserStorage.getItem(name),
+        setItem: (name: string, value: string) => name.startsWith(preferencePrefix) ? setItem(name, value) : browserStorage.setItem(name, value),
+    });
     return { records, getItem, setItem };
 }
 type Workspace = Awaited<ReturnType<typeof mountWorkspace>>;

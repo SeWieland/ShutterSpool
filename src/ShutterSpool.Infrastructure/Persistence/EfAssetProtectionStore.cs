@@ -60,7 +60,7 @@ internal sealed class EfAssetProtectionStore(ShutterSpoolDbContext database) : I
         return await WithProtectionTransactionAsync<GalleryProtection>(originals, async token =>
         {
             GalleryProtectionEntity? protection = await database.GalleryProtections
-                .FromSqlInterpolated($"SELECT * FROM gallery_protections WHERE \"Id\" = {id} FOR UPDATE")
+                .FromSql($"SELECT * FROM gallery_protections WHERE \"Id\" = {id} FOR UPDATE")
                 .SingleOrDefaultAsync(token);
             if (protection is null) return new(ProtectionOperationStatus.NotFound, ErrorCode: "GALLERY_PROTECTION_NOT_FOUND");
             if (protection.Revision != expectedRevision)
@@ -87,7 +87,7 @@ internal sealed class EfAssetProtectionStore(ShutterSpoolDbContext database) : I
             database.GalleryProtectionAssets.Where(member => member.ProtectionId == id)
                 .Select(member => member.AssetId), cancellationToken);
         GalleryProtectionEntity? protection = await database.GalleryProtections
-            .FromSqlInterpolated($"SELECT * FROM gallery_protections WHERE \"Id\" = {id} FOR UPDATE")
+            .FromSql($"SELECT * FROM gallery_protections WHERE \"Id\" = {id} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
         if (protection is null) return await FinishAsync(transaction,
             new ProtectionOperation<GalleryProtection>(ProtectionOperationStatus.NotFound,
@@ -135,7 +135,7 @@ internal sealed class EfAssetProtectionStore(ShutterSpoolDbContext database) : I
             database.PreservationHoldAssets.Where(member => member.HoldId == id)
                 .Select(member => member.AssetId), cancellationToken);
         PreservationHoldEntity? hold = await database.PreservationHolds
-            .FromSqlInterpolated($"SELECT * FROM preservation_holds WHERE \"Id\" = {id} FOR UPDATE")
+            .FromSql($"SELECT * FROM preservation_holds WHERE \"Id\" = {id} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
         if (hold is null) return await FinishAsync(transaction,
             new ProtectionOperation<PreservationHold>(ProtectionOperationStatus.NotFound,
@@ -167,7 +167,7 @@ internal sealed class EfAssetProtectionStore(ShutterSpoolDbContext database) : I
         var lockedCaptures = new List<CaptureEntity>(captures.Length);
         foreach (Guid captureId in captures)
         {
-            CaptureEntity? capture = await database.Captures.FromSqlInterpolated(
+            CaptureEntity? capture = await database.Captures.FromSql(
                 $"SELECT * FROM captures WHERE \"Id\" = {captureId} FOR UPDATE")
                 .SingleOrDefaultAsync(cancellationToken);
             if (capture is null || capture.RetentionDisposition is not (nameof(RetentionDisposition.Active) or nameof(RetentionDisposition.Trash)))
@@ -271,7 +271,7 @@ internal sealed class EfAssetProtectionStore(ShutterSpoolDbContext database) : I
         var captures = new List<CaptureEntity>(captureIds.Length);
         foreach (Guid captureId in captureIds)
         {
-            CaptureEntity? capture = await database.Captures.FromSqlInterpolated(
+            CaptureEntity? capture = await database.Captures.FromSql(
                 $"SELECT * FROM captures WHERE \"Id\" = {captureId} FOR UPDATE")
                 .SingleOrDefaultAsync(cancellationToken);
             if (capture is not null) captures.Add(capture);

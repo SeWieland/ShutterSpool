@@ -1,12 +1,22 @@
 version: 2
 updates:
   - package-ecosystem: docker
-    directories: ['/deploy', '/deploy/images', '/deploy/package/components', '/deploy/package/proxies']
+    directory: /deploy
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+  - package-ecosystem: docker-compose
+    directories: ['/deploy/images', '/deploy/package/components', '/deploy/package/proxies']
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+  - package-ecosystem: dotnet-sdk
+    directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
   - package-ecosystem: github-actions
-    directory: /
+    directories: ['/', '/.github/actions/setup-node']
     schedule:
       interval: weekly
     open-pull-requests-limit: 1
@@ -31,8 +41,12 @@ updates:
       npm-security:
         applies-to: security-updates
         patterns: ['*']
+  - package-ecosystem: pip
+    directory: /tests
+    schedule:
+      interval: weekly
   - package-ecosystem: nuget
-    directories: ['/', '/src/*', '/tests/*']
+    directories: ['/', '/.github']
     schedule:
       interval: weekly
     open-pull-requests-limit: 3

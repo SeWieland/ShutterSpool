@@ -27,7 +27,7 @@ internal sealed partial class ShutterSpoolDbContext
             entity.HasKey(asset => asset.AssetId);
             entity.Property(asset => asset.SpoolKey).HasMaxLength(1_024);
             entity.Property(asset => asset.ExpectedSize).IsRequired();
-            entity.Property(asset => asset.KnownTransientKeys).HasColumnType("text[]").HasDefaultValue(Array.Empty<string>());
+            entity.PrimitiveCollection(asset => asset.KnownTransientKeys).HasColumnType("text[]").HasDefaultValue(Array.Empty<string>());
             entity.Property(asset => asset.StorageMarker).HasMaxLength(32);
             entity.Property(asset => asset.State).HasMaxLength(16);
             entity.Property(asset => asset.ErrorCode).HasMaxLength(64);
@@ -48,7 +48,7 @@ internal sealed partial class ShutterSpoolDbContext
             entity.HasKey(asset => new { asset.SnapshotId, asset.Ordinal });
             entity.Property(asset => asset.SpoolKey).HasMaxLength(1_024);
             entity.Property(asset => asset.ExpectedSize).IsRequired();
-            entity.Property(asset => asset.KnownTransientKeys).HasColumnType("text[]").HasDefaultValue(Array.Empty<string>());
+            entity.PrimitiveCollection(asset => asset.KnownTransientKeys).HasColumnType("text[]").HasDefaultValue(Array.Empty<string>());
             entity.Property(asset => asset.StorageMarker).HasMaxLength(32);
             entity.HasIndex(asset => new { asset.SnapshotId, asset.PageIndex, asset.Ordinal });
         });
@@ -64,7 +64,7 @@ internal sealed partial class ShutterSpoolDbContext
             entity.HasKey(asset => new { asset.SnapshotId, asset.Ordinal });
             entity.Property(asset => asset.SpoolKey).HasMaxLength(1_024);
             entity.Property(asset => asset.ExpectedSize).IsRequired();
-            entity.Property(asset => asset.KnownTransientKeys).HasColumnType("text[]").HasDefaultValue(Array.Empty<string>());
+            entity.PrimitiveCollection(asset => asset.KnownTransientKeys).HasColumnType("text[]").HasDefaultValue(Array.Empty<string>());
             entity.Property(asset => asset.StorageMarker).HasMaxLength(32);
             entity.HasIndex(asset => new { asset.SnapshotId, asset.PageIndex, asset.AssetId }).IsUnique();
         });

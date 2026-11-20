@@ -34,7 +34,7 @@ public sealed class CaptureRoutingPostgresTests
             [new("event", "Event", 0, true, [], "{collectionPath}", "{suppliedName}")]), token);
         await new DestinationRoutingAdminService(database).SetAsync(new(unmatchedId, true, []), token);
         await AddReleasedAssetAsync(database, sourceId, captureId, rawId, "frame.raw", collectionId, token);
-        await database.Database.ExecuteSqlInterpolatedAsync($"""
+        await database.Database.ExecuteSqlAsync($"""
             UPDATE collections SET "Name" = 'Renamed', "Path" = 'Events/Renamed', "Identity" = 'EVENTS/RENAMED', "Revision" = "Revision" + 1 WHERE "Id" = {collectionId}
             """, token);
         database.ChangeTracker.Clear();
@@ -43,11 +43,11 @@ public sealed class CaptureRoutingPostgresTests
         Assert.Equal("Events/Berlin/frame.raw", (await database.Deliveries.SingleAsync(item => item.Id == deliveryId, token)).TargetPath);
 
         // A move after release changes organization, while a complementary Asset uses the release snapshot.
-        await database.Database.ExecuteSqlInterpolatedAsync($"""
+        await database.Database.ExecuteSqlAsync($"""
             UPDATE captures SET "CollectionId" = {ShutterSpool.Domain.Collections.CollectionName.BuiltInId}, "Revision" = "Revision" + 1 WHERE "Id" = {captureId}
             """, token);
         await InsertAssetAsync(database, jpegId, sourceId, "frame.jpg", "JPEG", token);
-        await database.Database.ExecuteSqlInterpolatedAsync($"""
+        await database.Database.ExecuteSqlAsync($"""
             INSERT INTO capture_assets ("AssetId", "CaptureId", "Role", "IsPrimary", "GroupingReason") VALUES ({jpegId}, {captureId}, 'JPEG', true, 'paired_complement')
             """, token);
         database.ChangeTracker.Clear();
@@ -63,7 +63,7 @@ public sealed class CaptureRoutingPostgresTests
         var actions = new CaptureRoutingWorkService(database, TimeProvider.System);
         RoutingActionPreview movePreview = await actions.PreviewReevaluateAsync(rawId, destinationId, token);
         Assert.Equal("ShutterSpool/frame.raw", movePreview.ProposedTarget);
-        await database.Database.ExecuteSqlInterpolatedAsync($"""
+        await database.Database.ExecuteSqlAsync($"""
             UPDATE captures SET "CollectionId" = {collectionId}, "Revision" = "Revision" + 1 WHERE "Id" = {captureId}
             """, token);
         database.ChangeTracker.Clear();
@@ -71,7 +71,7 @@ public sealed class CaptureRoutingPostgresTests
             (await actions.ReevaluateAsync(rawId, destinationId, movePreview.ConfirmationToken, rawId, token)).Status);
         RoutingActionPreview renamePreview = await actions.PreviewReevaluateAsync(rawId, destinationId, token);
         Assert.Equal("Events/Renamed/frame.raw", renamePreview.ProposedTarget);
-        await database.Database.ExecuteSqlInterpolatedAsync($"""
+        await database.Database.ExecuteSqlAsync($"""
             UPDATE collections SET "Name" = 'Final', "Path" = 'Events/Final', "Identity" = 'EVENTS/FINAL', "Revision" = "Revision" + 1 WHERE "Id" = {collectionId}
             """, token);
         database.ChangeTracker.Clear();
@@ -88,7 +88,7 @@ public sealed class CaptureRoutingPostgresTests
         await new DestinationRoutingAdminService(database).SetAsync(new(destinationId, true,
             [new("fixed", "Fixed target", 0, true, [], "fixed", "{suppliedName}")]), token);
         RoutingActionPreview fixedPreview = await actions.PreviewReevaluateAsync(rawId, destinationId, token);
-        await database.Database.ExecuteSqlInterpolatedAsync($"""
+        await database.Database.ExecuteSqlAsync($"""
             UPDATE collections SET "Name" = 'Changed', "Path" = 'Events/Changed', "Identity" = 'EVENTS/CHANGED', "Revision" = "Revision" + 1 WHERE "Id" = {collectionId}
             """, token);
         database.ChangeTracker.Clear();
@@ -97,7 +97,7 @@ public sealed class CaptureRoutingPostgresTests
         Assert.Equal(RoutingActionStatus.StalePreview, changedContext.Status);
 
         // A recorded successful delivery may be repeated after organization changes without following them.
-        await database.Database.ExecuteSqlInterpolatedAsync($"UPDATE deliveries SET \"State\" = 'Delivered' WHERE \"Id\" = {deliveryId}", token);
+        await database.Database.ExecuteSqlAsync($"UPDATE deliveries SET \"State\" = 'Delivered' WHERE \"Id\" = {deliveryId}", token);
         database.ChangeTracker.Clear();
         RoutingActionPreview resendPreview = await actions.PreviewResendAsync(deliveryId, token);
         Assert.Equal(RoutingActionStatus.Queued,
@@ -126,7 +126,7 @@ public sealed class CaptureRoutingPostgresTests
         await new DestinationRoutingAdminService(database).SetAsync(new(destinationId, true,
             [new("legacy", "Legacy", 0, true, [], "original", "{suppliedName}")]), token);
         await AddReleasedAssetAsync(database, sourceId, captureId, rawId, "legacy.raw", token: token);
-        await database.Database.ExecuteSqlInterpolatedAsync($"""
+        await database.Database.ExecuteSqlAsync($"""
             UPDATE captures SET "ReleasedCollectionId" = NULL, "ReleasedCollectionName" = NULL, "ReleasedCollectionPath" = NULL WHERE "Id" = {captureId}
             """, token);
         database.ChangeTracker.Clear();
@@ -134,7 +134,7 @@ public sealed class CaptureRoutingPostgresTests
         await new DestinationRoutingAdminService(database).SetAsync(new(destinationId, true,
             [new("new", "New rules", 0, true, [], "{collectionPath}", "{suppliedName}")]), token);
         await InsertAssetAsync(database, jpegId, sourceId, "legacy.jpg", "JPEG", token);
-        await database.Database.ExecuteSqlInterpolatedAsync($"""
+        await database.Database.ExecuteSqlAsync($"""
             INSERT INTO capture_assets ("AssetId", "CaptureId", "Role", "IsPrimary", "GroupingReason") VALUES ({jpegId}, {captureId}, 'JPEG', true, 'paired_complement')
             """, token);
         database.ChangeTracker.Clear();
@@ -181,11 +181,11 @@ public sealed class CaptureRoutingPostgresTests
                 await database.Database.MigrateAsync(token);
                 await InsertAssetAsync(database, rawId, sourceId, "frame.CR3", "RAW", token);
                 DateTimeOffset anchor = DateTimeOffset.UtcNow;
-                await database.Database.ExecuteSqlInterpolatedAsync($"""
+                await database.Database.ExecuteSqlAsync($"""
                     INSERT INTO captures ("Id", "SourceId", "NormalizedStem", "LastPrimaryIngestedAt", "ReleasedRating", "ReleasedTags", "ReleasedLabel")
                     VALUES ({captureId}, {sourceId}, 'FRAME', {anchor}, 4, ARRAY['web']::text[], NULL)
                     """, token);
-                await database.Database.ExecuteSqlInterpolatedAsync($"""
+                await database.Database.ExecuteSqlAsync($"""
                     INSERT INTO capture_assets ("AssetId", "CaptureId", "Role", "IsPrimary", "GroupingReason")
                     VALUES ({rawId}, {captureId}, 'RAW', true, 'test')
                     """, token);
@@ -213,15 +213,15 @@ public sealed class CaptureRoutingPostgresTests
                 Assert.True(await new EfCaptureRoutingProcessor(database).ProcessOneAsync(DateTimeOffset.UtcNow, token));
                 Assert.Equal("COMPLETE", await TextAsync(database, "SELECT \"State\" FROM captures WHERE \"Id\" = @capture", captureId, token));
                 await InsertAssetAsync(database, jpegId, sourceId, "frame.jpg", "JPEG", token);
-                await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO capture_assets (\"AssetId\", \"CaptureId\", \"Role\", \"IsPrimary\", \"GroupingReason\") VALUES ({jpegId}, {captureId}, 'JPEG', true, 'paired_complement')", token);
+                await database.Database.ExecuteSqlAsync($"INSERT INTO capture_assets (\"AssetId\", \"CaptureId\", \"Role\", \"IsPrimary\", \"GroupingReason\") VALUES ({jpegId}, {captureId}, 'JPEG', true, 'paired_complement')", token);
                 Assert.True(await new EfCaptureRoutingProcessor(database).ProcessOneAsync(DateTimeOffset.UtcNow, token));
                 Assert.Equal("RELEASED", await TextAsync(database, "SELECT \"State\" FROM captures WHERE \"Id\" = @capture", captureId, token));
                 await InsertAssetAsync(database, replayId, sourceId, "frame.CR3", "RAW", token);
-                await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO capture_assets (\"AssetId\", \"CaptureId\", \"Role\", \"IsPrimary\", \"RelatedAssetId\", \"GroupingReason\") VALUES ({replayId}, {captureId}, 'RAW', false, {rawId}, 'recognized_replay')", token);
+                await database.Database.ExecuteSqlAsync($"INSERT INTO capture_assets (\"AssetId\", \"CaptureId\", \"Role\", \"IsPrimary\", \"RelatedAssetId\", \"GroupingReason\") VALUES ({replayId}, {captureId}, 'RAW', false, {rawId}, 'recognized_replay')", token);
                 Assert.False(await new EfCaptureRoutingProcessor(database).ProcessOneAsync(DateTimeOffset.UtcNow, token));
                 byte[] replayBytes = [1, 3, 3, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33];
                 string replayHash = Convert.ToHexString(SHA256.HashData(replayBytes)).ToLowerInvariant();
-                await database.Database.ExecuteSqlInterpolatedAsync($"UPDATE assets SET \"Size\" = {replayBytes.Length}, \"Sha256\" = {replayHash} WHERE \"Id\" IN ({rawId}, {replayId})", token);
+                await database.Database.ExecuteSqlAsync($"UPDATE assets SET \"Size\" = {replayBytes.Length}, \"Sha256\" = {replayHash} WHERE \"Id\" IN ({rawId}, {replayId})", token);
                 string spoolRoot = Path.Combine(Path.GetTempPath(), $"shutterspool-m106-{Guid.NewGuid():N}");
                 Directory.CreateDirectory(Path.Combine(spoolRoot, "spool"));
                 await File.WriteAllBytesAsync(Path.Combine(spoolRoot, "spool", replayId.ToString("N")), replayBytes, token);
@@ -240,7 +240,7 @@ public sealed class CaptureRoutingPostgresTests
                 Assert.Equal(RoutingActionStatus.AlreadyQueued, (await actions.ResendAsync(rawDeliveryId, secondPreview.ConfirmationToken, token)).Status);
                 RoutingActionPreview expiredPreview = await actions.PreviewResendAsync(rawDeliveryId, token);
                 Guid previewId = Guid.ParseExact(expiredPreview.ConfirmationToken!, "N");
-                await database.Database.ExecuteSqlInterpolatedAsync($"UPDATE routing_actions SET \"CreatedAt\" = {DateTimeOffset.UtcNow.AddMinutes(-16)} WHERE \"Id\" = {previewId}", token);
+                await database.Database.ExecuteSqlAsync($"UPDATE routing_actions SET \"CreatedAt\" = {DateTimeOffset.UtcNow.AddMinutes(-16)} WHERE \"Id\" = {previewId}", token);
                 database.ChangeTracker.Clear();
                 Assert.Equal(RoutingActionStatus.StalePreview, (await actions.ResendAsync(rawDeliveryId, expiredPreview.ConfirmationToken, token)).Status);
                 Assert.Equal(2, await ScalarAsync(database, "SELECT count(*) FROM deliveries WHERE \"AssetId\" = @asset", rawId, [("asset", rawId)], token));
@@ -251,14 +251,14 @@ public sealed class CaptureRoutingPostgresTests
                 Assert.Equal("COMPLETE", await TextAsync(database, "SELECT \"State\" FROM captures WHERE \"Id\" = @capture", captureId, token));
 
                 await InsertAssetAsync(database, otherId, sourceId, "other.bin", "OTHER", token);
-                await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO capture_assets (\"AssetId\", \"CaptureId\", \"Role\", \"IsPrimary\", \"GroupingReason\") VALUES ({otherId}, {captureId}, 'OTHER', true, 'late_other')", token);
+                await database.Database.ExecuteSqlAsync($"INSERT INTO capture_assets (\"AssetId\", \"CaptureId\", \"Role\", \"IsPrimary\", \"GroupingReason\") VALUES ({otherId}, {captureId}, 'OTHER', true, 'late_other')", token);
                 Assert.True(await new EfCaptureRoutingProcessor(database).ProcessOneAsync(DateTimeOffset.UtcNow, token));
                 Assert.Equal("COMPLETE", await TextAsync(database, "SELECT \"State\" FROM captures WHERE \"Id\" = @capture", captureId, token));
 
                 await InsertAssetAsync(database, zeroAssetId, sourceId, "unmatched.bin", "OTHER", token);
                 DateTimeOffset zeroAnchor = DateTimeOffset.UtcNow;
-                await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO captures (\"Id\", \"SourceId\", \"NormalizedStem\", \"LastPrimaryIngestedAt\") VALUES ({zeroCaptureId}, {sourceId}, 'UNMATCHED', {zeroAnchor})", token);
-                await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO capture_assets (\"AssetId\", \"CaptureId\", \"Role\", \"IsPrimary\", \"GroupingReason\") VALUES ({zeroAssetId}, {zeroCaptureId}, 'OTHER', true, 'test')", token);
+                await database.Database.ExecuteSqlAsync($"INSERT INTO captures (\"Id\", \"SourceId\", \"NormalizedStem\", \"LastPrimaryIngestedAt\") VALUES ({zeroCaptureId}, {sourceId}, 'UNMATCHED', {zeroAnchor})", token);
+                await database.Database.ExecuteSqlAsync($"INSERT INTO capture_assets (\"AssetId\", \"CaptureId\", \"Role\", \"IsPrimary\", \"GroupingReason\") VALUES ({zeroAssetId}, {zeroCaptureId}, 'OTHER', true, 'test')", token);
                 Assert.True((await new CaptureCurationService(new EfCaptureCurationStore(database, TimeProvider.System)).ReleaseNowAsync(zeroCaptureId, 0, token)).Succeeded);
                 Assert.True(await new EfCaptureRoutingProcessor(database).ProcessOneAsync(DateTimeOffset.UtcNow, token));
                 Assert.Equal("RELEASED", await TextAsync(database, "SELECT \"State\" FROM captures WHERE \"Id\" = @capture", zeroCaptureId, token));
@@ -362,7 +362,7 @@ public sealed class CaptureRoutingPostgresTests
         await new DestinationRoutingAdminService(database).SetAsync(new(destinationId, true,
             [new("initial", "Initial", 0, true, [], "first", "file.raw")]), token);
         await AddReleasedAssetAsync(database, sourceId, captureId, assetId, "file.raw", token: token);
-        await database.Database.ExecuteSqlInterpolatedAsync($"UPDATE assets SET \"Size\" = {original.Length}, \"Sha256\" = {originalHash} WHERE \"Id\" = {assetId}", token);
+        await database.Database.ExecuteSqlAsync($"UPDATE assets SET \"Size\" = {original.Length}, \"Sha256\" = {originalHash} WHERE \"Id\" = {assetId}", token);
         var processor = new EfCaptureRoutingProcessor(database);
         Assert.True(await processor.ProcessOneAsync(DateTimeOffset.UtcNow, token));
         Guid initialDeliveryId = await GuidScalarAsync(database, "SELECT \"Id\" FROM deliveries WHERE \"AssetId\" = @asset", assetId, [], token);
@@ -411,11 +411,11 @@ public sealed class CaptureRoutingPostgresTests
         Assert.Equal("Superseded", await TextAsync(database, "SELECT \"State\" FROM deliveries WHERE \"Id\" = @capture", supersededDeliveryId, token));
         Guid retryDeliveryId = await GuidScalarAsync(database, "SELECT \"Id\" FROM deliveries WHERE \"AssetId\" = @asset ORDER BY \"CreatedAt\" DESC LIMIT 1", assetId,
             [], token);
-        await database.Database.ExecuteSqlInterpolatedAsync($"UPDATE deliveries SET \"State\" = 'Failed' WHERE \"Id\" = {retryDeliveryId}", token);
+        await database.Database.ExecuteSqlAsync($"UPDATE deliveries SET \"State\" = 'Failed' WHERE \"Id\" = {retryDeliveryId}", token);
         database.ChangeTracker.Clear();
         Assert.Equal(RoutingActionStatus.Queued, (await work.RetryAsync(retryDeliveryId, token)).Status);
         Assert.Equal("Pending", await TextAsync(database, "SELECT \"State\" FROM deliveries WHERE \"Id\" = @capture", retryDeliveryId, token));
-        await database.Database.ExecuteSqlInterpolatedAsync($"UPDATE deliveries SET \"State\" = 'Ambiguous' WHERE \"Id\" = {retryDeliveryId}", token);
+        await database.Database.ExecuteSqlAsync($"UPDATE deliveries SET \"State\" = 'Ambiguous' WHERE \"Id\" = {retryDeliveryId}", token);
         database.ChangeTracker.Clear();
         RoutingActionPreview ambiguousPreview = await work.PreviewReevaluateAsync(assetId, destinationId, token);
         Assert.Equal(RoutingActionStatus.BlockedReconciliation, (await work.ReevaluateAsync(assetId, destinationId, ambiguousPreview.ConfirmationToken, token)).Status);
@@ -455,8 +455,8 @@ public sealed class CaptureRoutingPostgresTests
             await new DestinationRoutingAdminService(database).SetAsync(new(destinationId, true, before), token);
             await InsertAssetAsync(database, assetId, sourceId, "frame.CR3", "RAW", token);
             DateTimeOffset anchor = DateTimeOffset.UtcNow;
-            await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO captures (\"Id\", \"SourceId\", \"NormalizedStem\", \"LastPrimaryIngestedAt\") VALUES ({captureId}, {sourceId}, 'FRAME', {anchor})", token);
-            await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO capture_assets (\"AssetId\", \"CaptureId\", \"Role\", \"IsPrimary\", \"GroupingReason\") VALUES ({assetId}, {captureId}, 'RAW', true, 'test')", token);
+            await database.Database.ExecuteSqlAsync($"INSERT INTO captures (\"Id\", \"SourceId\", \"NormalizedStem\", \"LastPrimaryIngestedAt\") VALUES ({captureId}, {sourceId}, 'FRAME', {anchor})", token);
+            await database.Database.ExecuteSqlAsync($"INSERT INTO capture_assets (\"AssetId\", \"CaptureId\", \"Role\", \"IsPrimary\", \"GroupingReason\") VALUES ({assetId}, {captureId}, 'RAW', true, 'test')", token);
         }
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Task edit = Task.Run(async () =>
@@ -500,8 +500,8 @@ public sealed class CaptureRoutingPostgresTests
             [new("all", "All", 0, true, [], "folder", "{suppliedName}")]), token);
         await InsertAssetAsync(database, assetId, sourceId, "frame.raw", "RAW", token);
         DateTimeOffset anchor = DateTimeOffset.UtcNow;
-        await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO captures (\"Id\", \"SourceId\", \"NormalizedStem\", \"LastPrimaryIngestedAt\") VALUES ({captureId}, {sourceId}, 'FRAME', {anchor})", token);
-        await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO capture_assets (\"AssetId\", \"CaptureId\", \"Role\", \"IsPrimary\", \"GroupingReason\") VALUES ({assetId}, {captureId}, 'RAW', true, 'test')", token);
+        await database.Database.ExecuteSqlAsync($"INSERT INTO captures (\"Id\", \"SourceId\", \"NormalizedStem\", \"LastPrimaryIngestedAt\") VALUES ({captureId}, {sourceId}, 'FRAME', {anchor})", token);
+        await database.Database.ExecuteSqlAsync($"INSERT INTO capture_assets (\"AssetId\", \"CaptureId\", \"Role\", \"IsPrimary\", \"GroupingReason\") VALUES ({assetId}, {captureId}, 'RAW', true, 'test')", token);
         var work = CreateActions(database, new MemoryOriginalReader([1, 2, 3]));
         RoutingActionPreview preview = await work.PreviewReevaluateAsync(assetId, destinationId, token);
         Assert.Equal(RoutingActionStatus.BlockedNotReleased, preview.Status);
@@ -511,7 +511,7 @@ public sealed class CaptureRoutingPostgresTests
         Assert.Equal(0, await ScalarAsync(database, "SELECT count(*) FROM routing_actions WHERE \"AssetId\" = @asset", assetId, [("asset", assetId)], token));
     }
 
-    private static Task<int> InsertAssetAsync(ShutterSpoolDbContext database, Guid id, Guid sourceId, string name, string role, CancellationToken token) => database.Database.ExecuteSqlInterpolatedAsync($"""
+    private static Task<int> InsertAssetAsync(ShutterSpoolDbContext database, Guid id, Guid sourceId, string name, string role, CancellationToken token) => database.Database.ExecuteSqlAsync($"""
         INSERT INTO assets ("Id", "SourceId", "OriginalName", "SpoolKey", "Size", "Sha256", "IngestedAt", "RecoveryCorrelation", "State", "MetadataState", "MetadataRole", "DetectedMediaType")
         VALUES ({id}, {sourceId}, {name}, {"spool/" + id.ToString("N")}, 17, {new string('a', 64)}, {DateTimeOffset.UtcNow}, {Guid.NewGuid()}, 'Spooled', 'Complete', {role}, 'image/jpeg')
         """, token);
@@ -521,10 +521,10 @@ public sealed class CaptureRoutingPostgresTests
     {
         await InsertAssetAsync(database, assetId, sourceId, name, "RAW", token);
         DateTimeOffset anchor = DateTimeOffset.UtcNow;
-        await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO captures (\"Id\", \"SourceId\", \"NormalizedStem\", \"LastPrimaryIngestedAt\") VALUES ({captureId}, {sourceId}, {name.ToUpperInvariant()}, {anchor})", token);
+        await database.Database.ExecuteSqlAsync($"INSERT INTO captures (\"Id\", \"SourceId\", \"NormalizedStem\", \"LastPrimaryIngestedAt\") VALUES ({captureId}, {sourceId}, {name.ToUpperInvariant()}, {anchor})", token);
         if (collectionId is Guid collection)
-            await database.Database.ExecuteSqlInterpolatedAsync($"UPDATE captures SET \"CollectionId\" = {collection} WHERE \"Id\" = {captureId}", token);
-        await database.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO capture_assets (\"AssetId\", \"CaptureId\", \"Role\", \"IsPrimary\", \"GroupingReason\") VALUES ({assetId}, {captureId}, 'RAW', true, 'test')", token);
+            await database.Database.ExecuteSqlAsync($"UPDATE captures SET \"CollectionId\" = {collection} WHERE \"Id\" = {captureId}", token);
+        await database.Database.ExecuteSqlAsync($"INSERT INTO capture_assets (\"AssetId\", \"CaptureId\", \"Role\", \"IsPrimary\", \"GroupingReason\") VALUES ({assetId}, {captureId}, 'RAW', true, 'test')", token);
         Assert.True((await new CaptureCurationService(new EfCaptureCurationStore(database, TimeProvider.System)).ReleaseNowAsync(captureId, 0, token)).Succeeded);
     }
 

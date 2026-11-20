@@ -1,6 +1,6 @@
 services:
   keycloak:
-    image: quay.io/keycloak/keycloak:26.6.4@sha256:0aae0de7fca85525f727d3354df17896092de8bb26ae4c12d89c77e5df8cbce4
+    image: quay.io/keycloak/keycloak:26.8.2@sha256:7e66a96e4739239070aeaf72e4c5decf0f7f682cfc725b9f7ea2b336eaba38b3
     env_file: [./config/identity.env]
     environment:
       KC_PROXY_TRUSTED_ADDRESSES: ${IDENTITY_PROXY_SUBNET:?Set the trusted identity-proxy subnet}
@@ -15,7 +15,7 @@ services:
       - ./package/identity-entrypoint.sh:/opt/identity-entrypoint.sh:ro
     secrets: [postgres-password, keycloak-admin-password]
   keycloak-reconciler:
-    image: quay.io/keycloak/keycloak:26.6.4@sha256:0aae0de7fca85525f727d3354df17896092de8bb26ae4c12d89c77e5df8cbce4
+    image: quay.io/keycloak/keycloak:26.8.2@sha256:7e66a96e4739239070aeaf72e4c5decf0f7f682cfc725b9f7ea2b336eaba38b3
     env_file: [./config/identity.env]
     entrypoint: [/bin/sh, /opt/identity-entrypoint.sh]
     command: [reconcile]

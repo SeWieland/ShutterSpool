@@ -1,8 +1,10 @@
 {
   "name": "shutterspool-web",
   "private": true,
+  "type": "module",
   "engines": {
-    "node": "26.8.1"
+    "node": "26.x",
+    "npm": "12.2.3"
   },
   "scripts": {
     "prebuild": "node ../../tools/generate-attribution.mjs",
@@ -21,21 +23,19 @@
     "@vitest/coverage-v8": "5.1.1",
     "@vue/test-utils": "2.6.0",
     "happy-dom": "21.0.4",
-    "nuxt": "4.6.4",
-    "typescript": "5.9.3",
+    "nuxt": "npm:nuxt-nightly@5.0.0-2611192005-90d717d",
+    "typescript": "6.0.3",
     "vitest": "5.1.1",
     "vue-tsc": "3.3.14"
   },
-  "allowScripts": {
-    "esbuild@0.28.2": true,
-    "esbuild@0.27.2": true
-  },
   "dependencies": {
-    "@microsoft/kiota-bundle": "1.0.0-preview.111",
-    "@microsoft/signalr": "10.0.11",
-    "@nuxt/ui": "4.12.2",
+    "@microsoft/kiota-bundle": "1.0.0-preview.114",
+    "@microsoft/signalr": "11.0.0",
+    "@nuxt/ui": "4.13.0",
     "oidc-client-ts": "3.5.0",
-    "tailwindcss": "4.3.5"
+    "tailwindcss": "4.3.5",
+    "vue": "3.5.45",
+    "vue-router": "5.5.1"
   },
   "license": "MIT"
 }

@@ -45,7 +45,7 @@ internal sealed class EfCaptureRoutingProcessor(ShutterSpoolDbContext database) 
     }
 
     private static Task<CaptureEntity?> ClaimNextCaptureAsync(ShutterSpoolDbContext database, CancellationToken cancellationToken) =>
-        database.Captures.FromSqlInterpolated($"""
+        database.Captures.FromSql($"""
             SELECT * FROM captures capture
             WHERE capture."ReleasedAt" IS NOT NULL AND capture."RoutingSnapshotJson" IS NOT NULL
               AND capture."RetentionDisposition" = 'Active' AND NOT capture."RetentionPaused"

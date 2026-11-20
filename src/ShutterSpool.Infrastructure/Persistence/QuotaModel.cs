@@ -29,7 +29,7 @@ internal sealed partial class ShutterSpoolDbContext
                 table.HasCheckConstraint("ck_spool_quota_reservation_category", "\"Category\" IN ('Spool', 'DiskPreview')");
             });
             entity.HasKey(reservation => reservation.OperationId);
-            entity.Property(reservation => reservation.SpoolKeys).HasColumnType("text[]");
+            entity.PrimitiveCollection(reservation => reservation.SpoolKeys).HasColumnType("text[]");
             entity.Property(reservation => reservation.State).HasDefaultValue("Active");
             entity.Property(reservation => reservation.Category).HasDefaultValue("Spool");
             entity.HasIndex(reservation => reservation.CreatedAt);

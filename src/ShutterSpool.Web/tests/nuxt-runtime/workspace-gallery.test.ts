@@ -64,13 +64,18 @@ test('workspace departure protects unresolved edits and allows clean or confirme
     }
 });
 
-test('explicit Capture links retain the requested photo despite Curation membership', async () => {
+test('explicit Capture links retain the requested photo across path casing and Curation membership', async () => {
     for (const released of [false, true]) {
         transport.detail.mockImplementation(async id => photo(id, { curation: { revision: 1, rating: 0, releasedAt: released ? new Date() : null } }));
         const { view, full, dispose } = await mountWorkspace({ curation: true, captureId: 'requested' });
         expect(view.get('h1').text()).toBe('Gallery');
         expect(full()?.querySelector('authorized-preview-stub')?.getAttribute('captureid')).toBe('requested');
         expect(full()?.querySelector('authorized-preview-stub')?.getAttribute('name')).toBe('Photo requested');
+        const router = view.vm.$router;
+        await router.replace('/Captures/requested?view=photo');
+        expect(router.currentRoute.value.name).toBe('captures-id');
+        expect(router.currentRoute.value.path).toBe('/Captures/requested');
+        expect(full()?.querySelector('authorized-preview-stub')?.getAttribute('captureid')).toBe('requested');
         dispose();
     }
 });
@@ -188,15 +193,24 @@ test('closing inspection or losing access fences a late Gallery detail response'
 
 test('Gallery Fullscreen is explicit, uses active or first loaded Capture, and stays disabled when empty', async () => {
     const { view, inspect, full, click } = await mountWorkspace();
+    const router = view.vm.$router;
+    const route = router.currentRoute;
+    const replace = vi.spyOn(router, 'replace');
     expect(full()).toBeNull();
     await click('Fullscreen photographs');
+    await replace.mock.results.at(-1)?.value;
     expect(full()?.querySelector('authorized-preview-stub')?.getAttribute('captureid')).toBe('a');
+    expect(route.value.fullPath).toBe('/captures/a');
     await buttonIn(full()!, 'Close viewer').trigger('click');
     await flushPromises();
+    await replace.mock.results.at(-1)?.value;
+    expect(route.value.fullPath).toBe('/');
     await inspect('b');
     expect(full()).toBeNull();
     await click('Fullscreen photographs');
+    await replace.mock.results.at(-1)?.value;
     expect(full()?.querySelector('authorized-preview-stub')?.getAttribute('captureid')).toBe('b');
+    expect(route.value.fullPath).toBe('/captures/b');
     await buttonIn(full()!, 'Close viewer').trigger('click');
     transport.page.mockResolvedValue({ items: [] });
     await refresh();

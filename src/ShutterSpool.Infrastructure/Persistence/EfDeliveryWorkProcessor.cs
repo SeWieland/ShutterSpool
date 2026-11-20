@@ -22,7 +22,7 @@ internal sealed class EfDeliveryWorkProcessor(IDbContextFactory<ShutterSpoolDbCo
         string[] enabledKinds = [.. (capabilities ?? DestinationCapabilities.All).EnabledKinds];
         await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await LockRoutingAsync(database, cancellationToken);
-        DeliveryEntity? delivery = await database.Deliveries.FromSqlInterpolated($"""
+        DeliveryEntity? delivery = await database.Deliveries.FromSql($"""
             SELECT d.* FROM deliveries d
             JOIN destinations config ON config."Id" = d."DestinationId"
             WHERE ((d."State" IN ('Pending', 'RetryWait') AND (d."NextAttemptAt" IS NULL OR d."NextAttemptAt" <= {now})
@@ -292,7 +292,7 @@ internal sealed class EfDeliveryWorkProcessor(IDbContextFactory<ShutterSpoolDbCo
     {
         Guid captureId = await database.RoutingDecisions.Where(item => item.Id == delivery.DecisionId)
             .Select(item => item.CaptureId).SingleAsync(cancellationToken);
-        CaptureEntity capture = await database.Captures.FromSqlInterpolated($"SELECT * FROM captures WHERE \"Id\" = {captureId} FOR UPDATE")
+        CaptureEntity capture = await database.Captures.FromSql($"SELECT * FROM captures WHERE \"Id\" = {captureId} FOR UPDATE")
             .SingleAsync(cancellationToken);
         bool matched = await database.RoutingDecisions.AnyAsync(item => item.CaptureId == captureId && item.IsCurrent
             && item.Kind == RoutingDecisionKindValue.Matched, cancellationToken);

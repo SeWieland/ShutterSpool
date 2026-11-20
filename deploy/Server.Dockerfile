@@ -1,14 +1,15 @@
 FROM node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1 AS web
 WORKDIR /source/src/ShutterSpool.Web
 COPY src/ShutterSpool.Web/package*.json ./
-RUN npm ci --ignore-scripts
+RUN npm install --global --ignore-scripts "npm@$(node -p 'require("./package.json").engines.npm')" && \
+    npm ci --engine-strict --ignore-scripts
 COPY src/ShutterSpool.Web/ ./
 COPY tools/generate-attribution.mjs /source/tools/generate-attribution.mjs
 COPY deploy/images/compose.yaml /source/deploy/images/compose.yaml
 COPY THIRD-PARTY-NOTICES.md /source/THIRD-PARTY-NOTICES.md
 RUN npm run build
 
-FROM mcr.microsoft.com/dotnet/sdk:10.0.403@sha256:de4fe90a98845d75910b9769662465c84de1a934665c431279d1382b2bddc02b AS build
+FROM mcr.microsoft.com/dotnet/sdk:11.0.100-resolute@sha256:65f3c7c6a25a239ab3e6719f2896147e7b68242ff2d8818dd70498bde6ef8bea AS build
 WORKDIR /source
 COPY Directory.Build.props global.json ./
 COPY src/ShutterSpool.Domain/ src/ShutterSpool.Domain/
@@ -24,7 +25,7 @@ RUN test -n "$VERSION" && test -n "$COMMIT" && \
     dotnet publish src/ShutterSpool.Server --no-restore -c Release -o /out \
       -p:OpenApiGenerateDocuments=false -p:Version="$VERSION" -p:SourceRevisionId="$COMMIT"
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:cae5b962bfb786606def03d250c6a645cc98839095c89e806e4bd8978a68115b
+FROM mcr.microsoft.com/dotnet/aspnet:11.0.0-resolute-chiseled-extra@sha256:cea9d5494f358fe43082300c24d1cd9f651066b6b7de1e5735bca8d3ade68649
 WORKDIR /app
 COPY --from=build --chown=1654:1654 /out/ ./
 COPY LICENSE ./

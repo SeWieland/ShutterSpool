@@ -42,7 +42,7 @@ internal sealed class PrivacyErasureSuppressionPersistence(ShutterSpoolDbContext
     }
 
     private Task<int> CopyExportAssetsAsync(Guid snapshotId, CancellationToken cancellationToken) =>
-        database.Database.ExecuteSqlInterpolatedAsync($"""
+        database.Database.ExecuteSqlAsync($"""
             INSERT INTO privacy_erasure_export_assets
                 ("SnapshotId", "PageIndex", "Ordinal", "OperationId", "CaptureId", "AssetId",
                  "SpoolKey", "ExpectedSize", "KnownTransientKeys", "StorageMarker", "ErasedAt", "Completed")
@@ -97,7 +97,7 @@ internal sealed class PrivacyErasureSuppressionPersistence(ShutterSpoolDbContext
 
         await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         PrivacyErasureImportEntity? existing = await database.PrivacyErasureImports
-            .FromSqlInterpolated($"SELECT * FROM privacy_erasure_imports WHERE \"SnapshotId\" = {expectedSnapshotId} FOR UPDATE")
+            .FromSql($"SELECT * FROM privacy_erasure_imports WHERE \"SnapshotId\" = {expectedSnapshotId} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
         if (existing is not null)
         {
@@ -135,7 +135,7 @@ internal sealed class PrivacyErasureSuppressionPersistence(ShutterSpoolDbContext
     {
         await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         PrivacyErasureImportEntity? import = await database.PrivacyErasureImports
-            .FromSqlInterpolated($"SELECT * FROM privacy_erasure_imports WHERE \"SnapshotId\" = {page.SnapshotId} FOR UPDATE")
+            .FromSql($"SELECT * FROM privacy_erasure_imports WHERE \"SnapshotId\" = {page.SnapshotId} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
         if (import is null || page.PageIndex < 0 || page.PageIndex >= import.PageCount || import.CompletedAt is not null)
             return await FinishImportAsync(transaction, import, "SUPPRESSION_IMPORT_UNAVAILABLE", cancellationToken);
@@ -189,7 +189,7 @@ internal sealed class PrivacyErasureSuppressionPersistence(ShutterSpoolDbContext
     {
         await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         PrivacyErasureImportEntity? import = await database.PrivacyErasureImports
-            .FromSqlInterpolated($"SELECT * FROM privacy_erasure_imports WHERE \"SnapshotId\" = {snapshotId} FOR UPDATE")
+            .FromSql($"SELECT * FROM privacy_erasure_imports WHERE \"SnapshotId\" = {snapshotId} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
         if (import is null)
             return await FinishImportAsync(transaction, null, "SUPPRESSION_IMPORT_UNAVAILABLE", cancellationToken);

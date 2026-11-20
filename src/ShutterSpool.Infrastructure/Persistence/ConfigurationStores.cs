@@ -248,12 +248,12 @@ internal sealed class EfSourceConfigurationStore(ShutterSpoolDbContext database,
     }
 
     private Task<SourceCredentialEntity?> LockCredentialAsync(Guid id, CancellationToken cancellationToken) => database.Database.IsRelational()
-        ? database.SourceCredentials.FromSqlInterpolated($"SELECT * FROM source_credentials WHERE \"SourceId\" = {id} FOR UPDATE")
+        ? database.SourceCredentials.FromSql($"SELECT * FROM source_credentials WHERE \"SourceId\" = {id} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken)
         : database.SourceCredentials.SingleOrDefaultAsync(item => item.SourceId == id, cancellationToken);
 
     private Task<SourceEntity?> LockSourceAsync(Guid id, CancellationToken token) => database.Database.IsRelational()
-        ? database.Sources.FromSqlInterpolated($"SELECT * FROM sources WHERE \"Id\" = {id} FOR UPDATE").SingleOrDefaultAsync(token)
+        ? database.Sources.FromSql($"SELECT * FROM sources WHERE \"Id\" = {id} FOR UPDATE").SingleOrDefaultAsync(token)
         : database.Sources.SingleOrDefaultAsync(item => item.Id == id, token);
 
     private IQueryable<SourceManagementConfiguration> SourceQuery(Guid? id = null, string? afterName = null, Guid? afterId = null) =>
@@ -320,7 +320,7 @@ internal sealed class EfDestinationConfigurationStore(ShutterSpoolDbContext data
         CancellationToken cancellationToken)
     {
         await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
-        DestinationEntity? destination = await database.Destinations.FromSqlInterpolated($"SELECT * FROM destinations WHERE \"Id\" = {id} FOR UPDATE")
+        DestinationEntity? destination = await database.Destinations.FromSql($"SELECT * FROM destinations WHERE \"Id\" = {id} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
         if (destination is null) return new(false, null);
         if (destination.IsArchived || destination.ConfigurationRevision != expectedRevision)
@@ -341,7 +341,7 @@ internal sealed class EfDestinationConfigurationStore(ShutterSpoolDbContext data
     {
         await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(hashtextextended('shutterspool-routing', 0))", cancellationToken);
-        DestinationEntity? destination = await database.Destinations.FromSqlInterpolated($"SELECT * FROM destinations WHERE \"Id\" = {id} FOR UPDATE")
+        DestinationEntity? destination = await database.Destinations.FromSql($"SELECT * FROM destinations WHERE \"Id\" = {id} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
         if (destination is null) return new(false, false, null);
         if (destination.ConfigurationRevision != expectedRevision)
@@ -412,7 +412,7 @@ internal sealed class EfWebDavDestinationConfiguration(ShutterSpoolDbContext dat
             || password is not null && password.Length is 0 or > 4096) return "INVALID_CREDENTIALS";
         await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(hashtextextended('shutterspool-routing', 0))", cancellationToken);
-        DestinationEntity? destination = await database.Destinations.FromSqlInterpolated($"SELECT * FROM destinations WHERE \"Id\" = {destinationId} AND \"Kind\" = 'webdav' FOR UPDATE")
+        DestinationEntity? destination = await database.Destinations.FromSql($"SELECT * FROM destinations WHERE \"Id\" = {destinationId} AND \"Kind\" = 'webdav' FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
         if (destination is null) return "DESTINATION_NOT_FOUND";
         if (destination.IsArchived) return "DESTINATION_ARCHIVED";

@@ -66,12 +66,24 @@ class ReleasePackageTests(unittest.TestCase):
                 self.assertEqual(files, set(manifest["files"]))
                 required = {".env", ".env.example", "compose.yaml", "profiles/all-camera-edges.yaml",
                             "README.md", "package/edge-entrypoint.sh", "package/identity-entrypoint.sh",
-                            "package/postgres-init.sh", "package/workspace-databases.sql", "components/workspaces.yaml",
-                            "package/realms/shutterspool-enrollment-client.json", "components/keycloak.yaml",
+                            "package/postgres-init.sh", "package/workspace-databases.sql",
+                            "package/realms/shutterspool-enrollment-client.json",
                             "config/appsettings.json", "config/appsettings.Production.json",
                             "config/appsettings.Maintenance.json",
                             "certificates/README.md", "operations/README.md"}
                 self.assertEqual(set(), required - files)
+                overlay_sources = {
+                    "components/keycloak.yaml": "components/compose.keycloak.yaml",
+                    "components/postgres.yaml": "components/compose.postgres.yaml",
+                    "components/valkey.yaml": "components/compose.valkey.yaml",
+                    "components/workspaces.yaml": "components/workspaces.yaml",
+                    "proxies/existing.yaml": "proxies/existing.yaml",
+                    "proxies/nginx.yaml": "proxies/compose.nginx.yaml",
+                    "proxies/traefik.yaml": "proxies/compose.traefik.yaml",
+                }
+                self.assertEqual(set(overlay_sources), {name for name in files if name.startswith(("components/", "proxies/"))})
+                for packaged, tracked in overlay_sources.items():
+                    self.assertEqual((build_release.ROOT / "deploy/package" / tracked).read_bytes(), bundle.read(packaged))
                 for directory in ("config/", "package/realms/", "package/theme/", "package/traefik/", "components/", "proxies/"):
                     self.assertTrue(any(name.startswith(directory) for name in files), directory)
                 self.assertEqual((build_release.ROOT / "LICENSE").read_bytes(), bundle.read("LICENSE"))
@@ -104,10 +116,73 @@ class ReleasePackageTests(unittest.TestCase):
                 self.assertEqual(COMMIT, manifest["commit"])
                 self.assertEqual(DIGEST, manifest["serverImage"]["digest"])
                 self.assertIn(EDGE_IMAGE, manifest["upstreamImages"])
+                postgres_image, = build_release.image_refs(bundle.read("components/postgres.yaml").decode())
+                self.assertIn(postgres_image, manifest["upstreamImages"])
                 self.assertFalse(manifest["databaseCompatibility"]["historicalUpgradeSupported"])
                 self.assertEqual({"kind": "fresh-install-only", "publishedRelease": None}, manifest["upgradeBaseline"])
             self.assertEqual(f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n",
                              archive.with_suffix(".zip.sha256").read_text())
+
+    def test_colliding_compose_overlay_names_are_refused_before_archiving(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(build_release, "run", side_effect=self.generate_compose):
+            source = Path(temp) / "source"
+            for directory in ("deploy", "src/ShutterSpool.AppHost/Realms", "src/ShutterSpool.AppHost/Themes/shutterspool"):
+                shutil.copytree(build_release.ROOT / directory, source / directory)
+            shutil.copy2(build_release.ROOT / "LICENSE", source / "LICENSE")
+            components = source / "deploy/package/components"
+            for filename in ("compose.fixture.yaml", "fixture.yaml"):
+                (components / filename).write_text(f"services:\n  edge:\n    image: {EDGE_IMAGE}\n", encoding="utf-8")
+            output = Path(temp) / "release"
+            with patch.object(build_release, "ROOT", source), self.assertRaisesRegex(
+                build_release.BuildError, r"^Compose overlays map to the same package file: components/fixture\.yaml$"
+            ):
+                build_release.prepare(self.args(output))
+            self.assertFalse(list(output.glob("*.zip")))
+
+    def test_postgres_component_pins_image_and_mounts_versioned_data_parent(self):
+        if not shutil.which("docker"):
+            self.skipTest("Docker Compose CLI is unavailable; component interpretation check needs no daemon.")
+        compose = build_release.ROOT / "deploy/package/components/compose.postgres.yaml"
+        result = subprocess.run(["docker", "compose", "-f", str(compose), "config", "--no-consistency", "--no-path-resolution", "--format", "json"],
+                                env=dict(os.environ, COMPOSE_PROJECT_NAME="synthetic-postgres-component"),
+                                capture_output=True, text=True, check=True)
+        postgres = json.loads(result.stdout)["services"]["postgres"]
+        self.assertRegex(postgres["image"], r"^postgres:[^\s@]+@sha256:[0-9a-f]{64}$")
+        data_targets = [mount["target"] for mount in postgres["volumes"] if mount["source"] == "postgres-data"]
+        self.assertEqual(["/var/lib/postgresql"], data_targets)
+
+    def test_pinned_nginx_forwards_the_public_port(self):
+        if not shutil.which("docker") or not shutil.which("openssl"):
+            self.skipTest("Docker and OpenSSL are required for the pinned nginx test.")
+        config = (build_release.ROOT / "deploy/config/nginx.conf.example").read_text(encoding="utf-8")
+        overlay = (build_release.ROOT / "deploy/package/proxies/compose.nginx.yaml").read_text(encoding="utf-8")
+        image, = build_release.image_refs(overlay)
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = Path(temp)
+            # Observe the forwarded header at a disposable upstream without publishing any host ports.
+            upstream = 'http {\n    server { listen 127.0.0.1:8080; return 200 "$http_x_forwarded_port"; }'
+            (fixture / "nginx.conf").write_text(config.replace("http {", upstream, 1), encoding="utf-8")
+            subprocess.run(
+                ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+                 "-subj", "/CN=photographs.example.invalid", "-addext", "subjectAltName=DNS:photographs.example.invalid",
+                 "-out", str(fixture / "https-fullchain.pem"), "-keyout", str(fixture / "https-key.pem")],
+                check=True, capture_output=True, timeout=30)
+            result = subprocess.run(
+                ["docker", "run", "--rm", "--add-host", "server:127.0.0.1", "--add-host", "keycloak:127.0.0.1",
+                 "--mount", f"type=bind,source={fixture},target=/run/certificates,readonly",
+                 "--entrypoint", "sh", image, "-ec", r"""
+nginx -c /run/certificates/nginx.conf -t
+nginx -c /run/certificates/nginx.conf
+probe() {
+  curl -fsS --max-time 10 --noproxy '*' --cacert /run/certificates/https-fullchain.pem \
+    --resolve photographs.example.invalid:443:127.0.0.1 "$@" https://photographs.example.invalid/
+  printf '\n'
+}
+probe
+probe -H 'Host: photographs.example.invalid:18443'
+"""], capture_output=True, text=True, timeout=120)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(["443", "18443"], result.stdout.splitlines())
 
     def test_workspace_component_separates_secret_grants_and_uses_existing_canonical_settings(self):
         if not shutil.which("docker"):
@@ -161,7 +236,7 @@ class ReleasePackageTests(unittest.TestCase):
     def test_compose_rejects_unpinned_images_source_mounts_and_unknown_parameters(self):
         with tempfile.TemporaryDirectory() as temp:
             compose = Path(temp) / "compose.yaml"
-            for invalid in ("services:\n  db:\n    image: postgres:17\n",
+            for invalid in ("services:\n  db:\n    image: postgres:18\n",
                             'services:\n  app:\n    image:',
                             'services:\n  app:\n    image: # Image is missing\n',
                             'services:\n  app:\n    volumes: ["./src:/src"]\n',

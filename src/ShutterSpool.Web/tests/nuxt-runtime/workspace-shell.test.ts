@@ -56,8 +56,8 @@ const first = '2f2ed010-2a51-468a-a38a-a2372fba8211';
 const second = '6254ea93-b93b-4707-9b3d-b9b8e226b5d1';
 const memberships = [{ id: first, name: 'Studio' }];
 const discovery = { items: memberships, incomplete: false };
-const capture = '/captures/photo?tab=details#preview';
-const scopedCapture = `/captures/photo?tab=details&workspace=${first}#preview`;
+const capture = '/Captures/photo?tab=details#preview';
+const scopedCapture = `/Captures/photo?tab=details&workspace=${first}#preview`;
 let router: ReturnType<typeof useNuxtApp>['$router'];
 const restore: (() => void | Promise<unknown>)[] = [];
 let unmountShells!: () => void;
@@ -158,7 +158,7 @@ async function shell(
     };
 }
 
-test('sole-workspace entry binds the loaded page and preserves the capture URL before private access starts', async () => {
+test('sole-workspace entry preserves a mixed-case Capture link before private access and opens that Capture', async () => {
     const pending = Promise.withResolvers<typeof discovery>();
     const app = await shell(null, () => pending.promise, async () => {
         assert.equal(router.currentRoute.value.fullPath, scopedCapture);

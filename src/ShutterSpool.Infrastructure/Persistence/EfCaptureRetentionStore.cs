@@ -330,7 +330,7 @@ internal sealed class EfCaptureRetentionStore(ShutterSpoolDbContext database, Ti
     }
 
     private async Task<CaptureEntity?> LockCaptureAsync(Guid captureId, CancellationToken cancellationToken) =>
-        await database.Captures.FromSqlInterpolated($"SELECT * FROM captures WHERE \"Id\" = {captureId} FOR UPDATE")
+        await database.Captures.FromSql($"SELECT * FROM captures WHERE \"Id\" = {captureId} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
 
     private Task<int> LockRoutingAsync(CancellationToken cancellationToken) => database.Database.ExecuteSqlRawAsync(

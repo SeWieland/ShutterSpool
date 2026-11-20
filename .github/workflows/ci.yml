@@ -36,15 +36,6 @@ jobs:
     timeout-minutes: 15
     outputs:
       coverage-artifact-id: ${{ steps.coverage.outputs.artifact-id }}
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_PASSWORD: controlled-ci-password
-        ports: [5432:5432]
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s --health-timeout 5s --health-retries 12
     env:
       NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
       SHUTTERSPOOL_REQUIRE_POSTGRES_TESTS: "true"
@@ -54,6 +45,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Start the packaged PostgreSQL version
+        env:
+          POSTGRES_PASSWORD: controlled-ci-password
+        run: |
+          image=$(docker compose -p ci -f deploy/package/components/compose.postgres.yaml config --no-consistency --images postgres)
+          docker run --detach --name ci-postgres --publish 127.0.0.1:5432:5432 --env POSTGRES_PASSWORD "$image"
+          timeout 60 bash -c 'until docker exec ci-postgres pg_isready -h 127.0.0.1 -U postgres; do sleep 1; done'
       - name: Set up .NET
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
@@ -61,13 +59,11 @@ jobs:
           cache: true
           cache-dependency-path: '**/packages*.lock.json'
       - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: src/ShutterSpool.Web/package.json
-          cache: npm
-          cache-dependency-path: src/ShutterSpool.Web/package-lock.json
+        uses: ./.github/actions/setup-node
       - name: Install frontend dependencies
-        run: npm ci --ignore-scripts
+        run: |
+          npm install --global --ignore-scripts "npm@$(node -p 'require("./package.json").engines.npm')"
+          npm ci --engine-strict --ignore-scripts
         working-directory: src/ShutterSpool.Web
       - name: Check frontend types
         run: npm run typecheck
@@ -81,7 +77,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/ci-coverage"
           report="$RUNNER_TEMP/vitest-coverage/lcov.info"
           if [ -s "$report" ]; then
-            sed 's|^SF:app/|SF:src/ShutterSpool.Web/app/|' "$report" > "$RUNNER_TEMP/ci-coverage/lcov.info"
+            sed -E 's@^SF:(app|scripts)/@SF:src/ShutterSpool.Web/\1/@' "$report" > "$RUNNER_TEMP/ci-coverage/lcov.info"
           fi
           exit "$test_status"
         working-directory: src/ShutterSpool.Web
@@ -91,7 +87,17 @@ jobs:
       - name: Test camera FTP client security
         run: python tests/verify-camera-ftp-client.py
       - name: Test Compose packaging
-        run: python tests/verify-release-build.py
+        env:
+          COVERAGE_FILE: ${{ runner.temp }}/package-tests.coverage
+          PYTHONPATH: ${{ runner.temp }}/package-coverage
+        run: |
+          python -m pip install --target "$PYTHONPATH" -r tests/requirements.txt
+          test_status=0
+          python -m coverage run --include='tools/*.py' tests/verify-release-build.py || test_status=$?
+          if [ -s "$COVERAGE_FILE" ]; then
+            python -m coverage xml -o "$RUNNER_TEMP/ci-coverage/python.xml"
+          fi
+          exit "$test_status"
       - name: Test shared container image pins
         run: python tests/verify-image-pins.py
       - name: Test supplied camera certificate validation
@@ -107,7 +113,9 @@ jobs:
       - name: Build solution
         run: dotnet build --no-restore
       - name: Install .NET coverage collector
-        run: dotnet tool install dotnet-coverage --version 18.12.0 --allow-roll-forward --tool-path "$RUNNER_TEMP/coverage-tools"
+        run: |
+          version=$(jq -er '.tools["dotnet-coverage"].version' .github/.config/dotnet-tools.json)
+          dotnet tool install dotnet-coverage --version "$version" --allow-roll-forward --tool-path "$RUNNER_TEMP/coverage-tools"
       - name: Test solution
         id: tests
         shell: bash
@@ -152,6 +160,7 @@ jobs:
           path: |
             ${{ runner.temp }}/ci-coverage/dotnet.xml
             ${{ runner.temp }}/ci-coverage/lcov.info
+            ${{ runner.temp }}/ci-coverage/python.xml
           if-no-files-found: ignore
           overwrite: true
           retention-days: 7
@@ -192,19 +201,19 @@ jobs:
           cache: true
           cache-dependency-path: '**/packages*.lock.json'
       - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: src/ShutterSpool.Web/package.json
-          cache: npm
-          cache-dependency-path: src/ShutterSpool.Web/package-lock.json
+        uses: ./.github/actions/setup-node
       - name: Install frontend dependencies
-        run: npm ci --ignore-scripts
+        run: |
+          npm install --global --ignore-scripts "npm@$(node -p 'require("./package.json").engines.npm')"
+          npm ci --engine-strict --ignore-scripts
         working-directory: src/ShutterSpool.Web
       - name: Prepare frontend types
         run: npm run typecheck
         working-directory: src/ShutterSpool.Web
       - name: Install SonarScanner
-        run: dotnet tool install dotnet-sonarscanner --version 12.1.0 --tool-path "$RUNNER_TEMP/sonar"
+        run: |
+          version=$(jq -er '.tools["dotnet-sonarscanner"].version' .github/.config/dotnet-tools.json)
+          dotnet tool install dotnet-sonarscanner --version "$version" --tool-path "$RUNNER_TEMP/sonar"
       - name: Restore solution
         run: dotnet restore ShutterSpool.slnx --locked-mode
       - name: Download coverage reports
@@ -229,6 +238,12 @@ jobs:
             coverage_args+=("/d:sonar.javascript.lcov.reportPaths=$frontend_report")
           else
             echo '::warning::Frontend coverage report missing. SonarQube coverage will be incomplete.'
+          fi
+          python_report="$RUNNER_TEMP/ci-coverage/python.xml"
+          if [ -s "$python_report" ]; then
+            coverage_args+=("/d:sonar.python.coverage.reportPaths=$python_report")
+          else
+            echo '::warning::Python coverage report missing. SonarQube coverage will be incomplete.'
           fi
           # The scanner classifies shared Vitest fixtures and standalone Python test scripts as source.
           # Keep them in static analysis and out of production coverage.

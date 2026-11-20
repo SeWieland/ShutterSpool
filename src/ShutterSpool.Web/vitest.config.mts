@@ -11,8 +11,7 @@ async function nuxtProject() {
         license: 'https://example.test/license',
         notice: 'https://example.test/notice',
     };
-    const fixtureModule = `export default ${JSON.stringify(attribution)}`;
-    const fixture = `data:text/javascript,${encodeURIComponent(fixtureModule)}`;
+    const fixture = `data:application/json,${encodeURIComponent(JSON.stringify(attribution))}`;
     const hooks = registerHooks({
         resolve(specifier, context, nextResolve) {
             if (context.parentURL?.split('?')[0] === nuxtConfig && specifier === '../../artifacts/attribution/sftpgo.json') {
@@ -53,7 +52,7 @@ export default defineConfig(async () => ({
         ],
         coverage: {
             provider: 'v8',
-            include: ['app/**/*.{ts,vue}'],
+            include: ['app/**/*.{ts,vue}', 'scripts/check-bundle.mjs'],
             exclude: ['app/api/**', 'app/**/{tests,__tests__}/**', 'app/**/*.{test,spec}.{ts,vue}'],
             reporter: ['text-summary', 'lcovonly'],
             reportOnFailure: true,

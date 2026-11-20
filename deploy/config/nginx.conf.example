@@ -3,7 +3,7 @@ http {
     # Preserve the public port when Docker maps it to the internal TLS listener.
     map $http_host $public_https_port {
         default 443;
-        ~:(?<request_port>[0-9]+)$ $request_port;
+        ~:(?<shutterspool_request_port>[0-9]+)$ $shutterspool_request_port;
     }
     access_log off;
     error_log /dev/stderr crit;

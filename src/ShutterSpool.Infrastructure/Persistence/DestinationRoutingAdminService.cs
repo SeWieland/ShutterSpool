@@ -32,7 +32,7 @@ internal sealed class DestinationRoutingAdminService(ShutterSpoolDbContext datab
     {
         await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await database.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(hashtextextended('shutterspool-routing', 0))", cancellationToken);
-        DestinationEntity destination = await database.Destinations.FromSqlInterpolated($"SELECT * FROM destinations WHERE \"Id\" = {routing.DestinationId} FOR UPDATE")
+        DestinationEntity destination = await database.Destinations.FromSql($"SELECT * FROM destinations WHERE \"Id\" = {routing.DestinationId} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken) ?? throw new InvalidOperationException("Destination does not exist.");
         if (routing.Enabled) (capabilities ?? DestinationCapabilities.All).EnsureEnabled(destination.Kind);
         if (destination.IsArchived || destination.ConfigurationRevision != expectedRevision)

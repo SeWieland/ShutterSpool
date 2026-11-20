@@ -126,10 +126,10 @@ internal sealed partial class ShutterSpoolDbContext(DbContextOptions<ShutterSpoo
                 .HasDatabaseName("IX_captures_retention_attention")
                 .HasFilter("\"RetentionDisposition\" = 'Active' AND NOT \"RetentionFactsDirty\"");
             entity.Property(capture => capture.LastPrimaryIngestedAt).HasDefaultValue(DateTimeOffset.UnixEpoch);
-            entity.Property(capture => capture.Tags).HasColumnType("text[]").HasDefaultValue(Array.Empty<string>());
+            entity.PrimitiveCollection(capture => capture.Tags).HasColumnType("text[]").HasDefaultValue(Array.Empty<string>());
             entity.Property(capture => capture.ReleasedLabel).HasMaxLength(16);
             entity.Property(capture => capture.FirstAcceptedAt).HasDefaultValue(DateTimeOffset.UnixEpoch);
-            entity.Property(capture => capture.ReleasedTags).HasColumnType("text[]").HasDefaultValue(Array.Empty<string>());
+            entity.PrimitiveCollection(capture => capture.ReleasedTags).HasColumnType("text[]").HasDefaultValue(Array.Empty<string>());
             entity.Property(capture => capture.RoutingSnapshotJson).HasColumnType("jsonb");
             entity.HasIndex(capture => capture.SourceId);
             entity.HasIndex(capture => new { capture.Held, capture.ReleaseDueAt });
@@ -250,7 +250,7 @@ internal sealed partial class ShutterSpoolDbContext(DbContextOptions<ShutterSpoo
             entity.Property(operation => operation.CaptureId).HasDefaultValue(Guid.Empty).ValueGeneratedNever();
             entity.Property(operation => operation.ExpectedSize).HasDefaultValue(0L).ValueGeneratedNever();
             entity.Property(operation => operation.StorageMarker).HasMaxLength(32).HasDefaultValue("").ValueGeneratedNever();
-            entity.Property(operation => operation.KnownTransientKeys).HasColumnType("text[]").HasDefaultValue(Array.Empty<string>()).ValueGeneratedNever();
+            entity.PrimitiveCollection(operation => operation.KnownTransientKeys).HasColumnType("text[]").HasDefaultValue(Array.Empty<string>()).ValueGeneratedNever();
             entity.Property(operation => operation.Scope).HasMaxLength(24);
             entity.Property(operation => operation.Reason).HasMaxLength(32);
             entity.Property(operation => operation.State).HasMaxLength(16);
@@ -274,7 +274,7 @@ internal sealed partial class ShutterSpoolDbContext(DbContextOptions<ShutterSpoo
             entity.HasKey(item => item.EventId);
             entity.Property(item => item.Kind).HasMaxLength(32);
             entity.Property(item => item.State).HasMaxLength(24);
-            entity.Property(item => item.Blockers).HasColumnType("text[]");
+            entity.PrimitiveCollection(item => item.Blockers).HasColumnType("text[]");
             entity.HasIndex(item => new { item.CommittedAt, item.EventId });
             entity.HasIndex(item => new { item.EpisodeId, item.Revision }).IsUnique();
         });

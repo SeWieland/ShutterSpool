@@ -90,7 +90,7 @@ public sealed partial class ConfigurationApiTests
         await using var gate = new ShutterSpoolDbContext(fixture.Database.Options);
         var store = new EfAccessGrantStore(gate);
         WorkspaceInvitation offer = await CreateInvitationAsync(store, "clock-wait", token);
-        await gate.Database.ExecuteSqlInterpolatedAsync($"UPDATE workspace_invitations SET \"ExpiresAt\"=clock_timestamp() + interval '1 second' WHERE \"Id\"={offer.Id}", token);
+        await gate.Database.ExecuteSqlAsync($"UPDATE workspace_invitations SET \"ExpiresAt\"=clock_timestamp() + interval '1 second' WHERE \"Id\"={offer.Id}", token);
         await using var transaction = await gate.Database.BeginTransactionAsync(token);
         await gate.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(hashtextextended('shutterspool-workspace-access', 0))", token);
         await using var waiter = new ShutterSpoolDbContext(fixture.Database.Options);
@@ -151,11 +151,11 @@ public sealed partial class ConfigurationApiTests
             int process = ((NpgsqlConnection)waiter.Database.GetDbConnection()).ProcessID;
             Task<WorkspaceInvitationResult> pending = new EfAccessGrantStore(waiter).ChangeInvitationAsync(new WorkspaceInvitationAccept(Guid.NewGuid(), "https://issuer.test", "member-" + kind, offer.Id, offer.Revision, EmailVerified: true), token);
             await WaitForAccessLockAsync(gate, process, token);
-            if (kind == "role") await gate.Database.ExecuteSqlInterpolatedAsync($"UPDATE authorization_grants SET \"Role\"='Curator', \"Revision\"=1 WHERE \"Subject\"={"member-" + kind}", token);
+            if (kind == "role") await gate.Database.ExecuteSqlAsync($"UPDATE authorization_grants SET \"Role\"='Curator', \"Revision\"=1 WHERE \"Subject\"={"member-" + kind}", token);
             else
             {
-                await gate.Database.ExecuteSqlInterpolatedAsync($"UPDATE authorization_grants SET \"IsActive\"=false, \"Revision\"=1 WHERE \"Subject\"={"member-" + kind}", token);
-                await gate.Database.ExecuteSqlInterpolatedAsync($"UPDATE workspace_invitations SET \"Status\"='invalidated', \"Revision\"=\"Revision\"+1 WHERE \"Id\"={offer.Id}", token);
+                await gate.Database.ExecuteSqlAsync($"UPDATE authorization_grants SET \"IsActive\"=false, \"Revision\"=1 WHERE \"Subject\"={"member-" + kind}", token);
+                await gate.Database.ExecuteSqlAsync($"UPDATE workspace_invitations SET \"Status\"='invalidated', \"Revision\"=\"Revision\"+1 WHERE \"Id\"={offer.Id}", token);
             }
             await transaction.CommitAsync(token);
             WorkspaceInvitationResult result = await pending;
@@ -230,7 +230,7 @@ public sealed partial class ConfigurationApiTests
         Assert.Equal(2, sends);
         WorkspaceInvitation offer = first.Offer!;
         if (action == "expire")
-            await database.Database.ExecuteSqlInterpolatedAsync($"UPDATE workspace_invitations SET \"ExpiresAt\"=clock_timestamp()-interval '1 second' WHERE \"Id\"={offer.Id}", token);
+            await database.Database.ExecuteSqlAsync($"UPDATE workspace_invitations SET \"ExpiresAt\"=clock_timestamp()-interval '1 second' WHERE \"Id\"={offer.Id}", token);
         else
             Assert.Equal("applied", (await store.ChangeInvitationAsync(AdminChange(action, offer), token)).Status);
         WorkspaceInvitationResult stale = await service.CreateAsync(operation, "https://issuer.test", "admitted-admin", "setup@example.test", WorkspaceRole.Viewer, token);
@@ -284,7 +284,7 @@ public sealed partial class ConfigurationApiTests
         await using var database = new ShutterSpoolDbContext(fixture.Database.Options);
         var store = new EfAccessGrantStore(database);
         WorkspaceInvitation offer = await CreateInvitationAsync(store, "expiry-boundary", token);
-        await database.Database.ExecuteSqlInterpolatedAsync($"UPDATE workspace_invitations SET \"ExpiresAt\"=clock_timestamp()+{remainingMicroseconds}*interval '1 microsecond' WHERE \"Id\"={offer.Id}", token);
+        await database.Database.ExecuteSqlAsync($"UPDATE workspace_invitations SET \"ExpiresAt\"=clock_timestamp()+{remainingMicroseconds}*interval '1 microsecond' WHERE \"Id\"={offer.Id}", token);
         WorkspaceInvitationResult result = await store.ChangeInvitationAsync(new WorkspaceInvitationAccept(Guid.NewGuid(), "https://issuer.test", "expiry-boundary", offer.Id, offer.Revision, EmailVerified: true), token);
         Assert.Equal(allowed ? "applied" : "expired", result.Status);
         Assert.Equal(allowed, (await store.GetAsync("https://issuer.test", "expiry-boundary", token))?.IsActive == true);

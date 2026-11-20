@@ -31,6 +31,11 @@ class ImagePinTests(unittest.TestCase):
     def test_rejects_unpinned_image(self):
         self.assert_invalid('services:\n  camera-edge:\n    image: drakkan/sftpgo:v2.7.5\n  imaginary:\n    image: h2non/imaginary:1.2.4@sha256:' + 'a' * 64 + '\n')
 
+    def test_rejects_registry_port_without_image_tag(self):
+        reference = 'registry.example:5000/cameras/sftpgo@sha256:' + 'a' * 64
+        imaginary = 'h2non/imaginary:1.2.4@sha256:' + 'b' * 64
+        self.assert_invalid(f'services:\n  camera-edge:\n    image: {reference}\n  imaginary:\n    image: {imaginary}\n')
+
     def test_rejects_duplicate_service_image(self):
         pin = 'drakkan/sftpgo:v2.7.5@sha256:' + 'a' * 64
         self.assert_invalid(f'services:\n  camera-edge:\n    image: {pin}\n  camera-edge:\n    image: {pin}\n  imaginary:\n    image: h2non/imaginary:1.2.4@sha256:' + 'b' * 64 + '\n')

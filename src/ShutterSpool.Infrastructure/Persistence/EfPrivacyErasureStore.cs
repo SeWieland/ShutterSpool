@@ -37,7 +37,7 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
         await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await LockRoutingAndCollectionAssignmentsAsync(cancellationToken);
         PrivacyErasureOperationEntity? existing = await database.PrivacyErasureOperations
-            .FromSqlInterpolated($"SELECT * FROM privacy_erasures WHERE \"Id\" = {request.OperationId} FOR UPDATE")
+            .FromSql($"SELECT * FROM privacy_erasures WHERE \"Id\" = {request.OperationId} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
         if (existing is not null)
         {
@@ -105,7 +105,7 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
         await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await LockRoutingAndCollectionAssignmentsAsync(cancellationToken);
         PrivacyErasureOperationEntity? operation = await database.PrivacyErasureOperations
-            .FromSqlInterpolated($"SELECT * FROM privacy_erasures WHERE \"Id\" = {operationId} FOR UPDATE")
+            .FromSql($"SELECT * FROM privacy_erasures WHERE \"Id\" = {operationId} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
         if (operation is null || operation.State == CompletedOperationState)
         {
@@ -143,7 +143,7 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
         await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await LockRoutingAndCollectionAssignmentsAsync(cancellationToken);
         PrivacyErasureAssetEntity? item = await database.PrivacyErasureAssets
-            .FromSqlInterpolated($"SELECT * FROM privacy_erasure_assets WHERE \"OperationId\" = {operationId} AND \"AssetId\" = {assetId} FOR UPDATE")
+            .FromSql($"SELECT * FROM privacy_erasure_assets WHERE \"OperationId\" = {operationId} AND \"AssetId\" = {assetId} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
         if (item is null || item.State == CompletedMemberState)
         {
@@ -643,7 +643,7 @@ internal sealed class EfPrivacyErasureStore(ShutterSpoolDbContext database, Time
     }
 
     private Task<CaptureEntity?> LockCaptureAsync(Guid captureId, CancellationToken cancellationToken) =>
-        database.Captures.FromSqlInterpolated($"SELECT * FROM captures WHERE \"Id\" = {captureId} FOR UPDATE")
+        database.Captures.FromSql($"SELECT * FROM captures WHERE \"Id\" = {captureId} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
 
     private Task<int> LockRoutingAndCollectionAssignmentsAsync(CancellationToken cancellationToken) =>

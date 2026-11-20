@@ -39,7 +39,7 @@ internal sealed class EfCaptureCurationStore(ShutterSpoolDbContext database, Tim
         await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await LockRoutingAsync(cancellationToken);
         await LockCollectionAssignmentsAsync(cancellationToken);
-        CaptureEntity? capture = await database.Captures.FromSqlInterpolated($"""
+        CaptureEntity? capture = await database.Captures.FromSql($"""
             SELECT * FROM captures
             WHERE "RetentionDisposition" = 'Active' AND NOT "RetentionPaused"
               AND NOT EXISTS (
@@ -79,7 +79,7 @@ internal sealed class EfCaptureCurationStore(ShutterSpoolDbContext database, Tim
         await using IDbContextTransaction transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         await LockRoutingAsync(cancellationToken);
         if (lockRoutingForRelease) await LockCollectionAssignmentsAsync(cancellationToken);
-        CaptureEntity? capture = await database.Captures.FromSqlInterpolated($"SELECT * FROM captures WHERE \"Id\" = {captureId} FOR UPDATE")
+        CaptureEntity? capture = await database.Captures.FromSql($"SELECT * FROM captures WHERE \"Id\" = {captureId} FOR UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
         if (capture is null)
         {
