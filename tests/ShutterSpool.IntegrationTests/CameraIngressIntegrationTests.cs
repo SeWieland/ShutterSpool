@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using ShutterSpool.Application.Ingest;
 using ShutterSpool.Application.Ingress;
+using ShutterSpool.Application.Retention;
 using ShutterSpool.Application.Sources;
 using ShutterSpool.Domain.Collections;
 using ShutterSpool.Domain.Sources;
@@ -248,6 +249,69 @@ public sealed partial class CameraIngressIntegrationTests
         string retainedPath = Assert.Single(EnumeratePayloads(fixture.SpoolRoot));
         Assert.Equal(bytes, await File.ReadAllBytesAsync(retainedPath, Token));
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Empty_camera_receive_keeps_quota_consistent_through_completion_and_recovery(bool recover)
+    {
+        await using var fixture = await CameraIngressFixture.CreateAsync();
+        foreach (string directory in new[] { "spool", "incoming", "quarantine" })
+            Directory.CreateDirectory(Path.Combine(fixture.SpoolRoot, directory));
+
+        var accounting = new FileSystemSpoolAccounting(fixture.SpoolRoot, Path.Combine(fixture.SpoolRoot, "previews"),
+            reserveBytes: 0, reservePercent: null, TimeProvider.System);
+        var quota = new EfSpoolQuotaStore(fixture.Database, accounting, TimeProvider.System);
+        SpoolQuotaSnapshot initial = await quota.GetSnapshotAsync(Token);
+        Assert.NotNull(await quota.UpdateSettingsAsync(initial.Settings.Revision,
+            new(initial.Settings.Revision, true, 1_048_576, 80, 50), Token));
+
+        Guid sourceId = await fixture.CreateSourceAsync("empty-quota", "camera-secret");
+        var journal = new EfIngestJournal(fixture.Database, quota);
+        CameraIngressService ingress = fixture.CreateIngress(fixture.Database,
+            new IngestService(recover ? new FailingCommitJournal(journal) : journal, fixture.Spool, TimeProvider.System, quota));
+        CameraLogin login = Assert.IsType<CameraLogin>(await ingress.AuthenticateAsync(
+            "cam_empty-quota", "camera-secret", cancellationToken: Token));
+        const string path = "/empty.JPG";
+        const string session = "FTP_empty-quota";
+        long admittedAt = CurrentTimestamp(), completedAt = admittedAt + 1_000;
+        await ingress.AdmitAsync(new(login.Id, login.Username, session, path, admittedAt), new(1_024, 2, 600), Token);
+        await ingress.ReceiveAsync(login.Id, path, Stream.Null, 1_024, Token);
+        Assert.Empty(await fixture.Database.Assets.AsNoTracking().ToListAsync(Token));
+
+        IngestResult? accepted = null;
+        if (recover)
+        {
+            IOException failure = await Assert.ThrowsAsync<IOException>(() => ingress.CompleteAsync(
+                login.Id, login.Username, session, path, completedAt, 0, Token));
+            Assert.Equal("Injected Asset commit failure.", failure.Message);
+            CameraUploadAdmission ready = Assert.Single(await fixture.Store.GetRecoverableAsync(Token));
+            Assert.Equal(completedAt, ready.CompletionTimestamp);
+            Assert.Empty(await fixture.Database.Assets.AsNoTracking().ToListAsync(Token));
+        }
+        else
+        {
+            accepted = await ingress.CompleteAsync(login.Id, login.Username, session, path, completedAt, 0, Token);
+        }
+
+        await using var restarted = new ShutterSpoolDbContext(fixture.DatabaseOptions);
+        var restartedQuota = new EfSpoolQuotaStore(restarted, accounting, TimeProvider.System);
+        CameraIngressService replay = fixture.CreateIngress(restarted,
+            new IngestService(new EfIngestJournal(restarted, restartedQuota), fixture.Spool, TimeProvider.System, restartedQuota));
+        if (recover) await replay.RecoverAsync(600, Token);
+        Assert.Equal(CameraTransferState.Completed, Assert.Single(await replay.GetStatusAsync(sourceId, Token)).State);
+        AssetEntity asset = Assert.Single(await restarted.Assets.AsNoTracking().ToListAsync(Token));
+        IngestResult repeated = await replay.CompleteAsync(login.Id, login.Username, session, path, completedAt, 0, Token);
+        Assert.Equal(asset.Id, repeated.Asset.Id);
+        if (accepted is not null) Assert.Equal(asset.Id, accepted.Asset.Id);
+        Assert.Equal(0, asset.Size);
+        Assert.Equal("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", asset.Sha256);
+        Assert.Empty(await File.ReadAllBytesAsync(fixture.FinalPath(repeated), Token));
+        SpoolQuotaSnapshot final = await restartedQuota.GetSnapshotAsync(Token);
+        Assert.True(final.IsKnown);
+        Assert.Equal(0, final.ReservedBytes);
+    }
+
 
     [Fact]
     public async Task Recovery_commits_received_bytes_when_the_completion_marker_precedes_a_failed_asset_commit()
