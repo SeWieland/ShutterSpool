@@ -52,7 +52,7 @@ export default defineConfig(async () => ({
         ],
         coverage: {
             provider: 'v8',
-            include: ['app/**/*.{ts,vue}'],
+            include: ['app/**/*.{ts,vue}', 'scripts/check-bundle.mjs'],
             exclude: ['app/api/**', 'app/**/{tests,__tests__}/**', 'app/**/*.{test,spec}.{ts,vue}'],
             reporter: ['text-summary', 'lcovonly'],
             reportOnFailure: true,

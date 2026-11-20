@@ -83,7 +83,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/ci-coverage"
           report="$RUNNER_TEMP/vitest-coverage/lcov.info"
           if [ -s "$report" ]; then
-            sed 's|^SF:app/|SF:src/ShutterSpool.Web/app/|' "$report" > "$RUNNER_TEMP/ci-coverage/lcov.info"
+            sed -E 's@^SF:(app|scripts)/@SF:src/ShutterSpool.Web/\1/@' "$report" > "$RUNNER_TEMP/ci-coverage/lcov.info"
           fi
           exit "$test_status"
         working-directory: src/ShutterSpool.Web
