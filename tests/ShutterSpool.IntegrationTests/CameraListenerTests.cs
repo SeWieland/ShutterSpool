@@ -12,6 +12,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using ShutterSpool.Application.Workspaces;
+using ShutterSpool.AppHost;
 using ShutterSpool.Server.Composition;
 using ShutterSpool.Server.Hosting;
 using ShutterSpool.Server.Security;
@@ -21,7 +22,7 @@ namespace ShutterSpool.IntegrationTests;
 public sealed class CameraListenerTests : IDisposable
 {
     private const string CallbackKey = "synthetic-camera-callback-listener-key";
-    private readonly string _callbackCertificatePath = Path.Combine(Path.GetTempPath(), $"shutterspool-callback-{Guid.NewGuid():N}.pem");
+    private readonly string _callbackDirectory = Path.Combine(Path.GetTempPath(), $"shutterspool-callback-{Guid.NewGuid():N}");
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     [Theory]
@@ -45,12 +46,10 @@ public sealed class CameraListenerTests : IDisposable
         using RSA key = RSA.Create(2048);
         using X509Certificate2 generated = CreateCertificate(key, "Application listener test");
         using X509Certificate2 certificate = X509CertificateLoader.LoadPkcs12(generated.Export(X509ContentType.Pkcs12), null);
-        using RSA callbackKey = RSA.Create(2048);
-        using X509Certificate2 callbackCertificate = CreateCertificate(callbackKey, "Camera listener test");
-        await File.WriteAllTextAsync(_callbackCertificatePath,
-            callbackCertificate.ExportCertificatePem() + "\n" + callbackKey.ExportPkcs8PrivateKeyPem(), Token);
+        var (bundlePath, rootPath) = DevelopmentCallbackCertificate.Resolve(_callbackDirectory, "127.0.0.1", "");
+        using var callbackRoot = X509Certificate2.CreateFromPem(await File.ReadAllTextAsync(rootPath, Token));
         var builder = CreateBuilder(urls, callbackPort);
-        builder.Configuration["ShutterSpool:CameraIngress:CallbackCertificatePath"] = _callbackCertificatePath;
+        builder.Configuration["ShutterSpool:CameraIngress:CallbackCertificatePath"] = bundlePath;
         builder.Configuration["ShutterSpool:CameraIngress:InternalListenOnAllInterfaces"] = listenOnAllInterfaces.ToString();
         builder.WebHost.ConfigureKestrel(server => server.ConfigureHttpsDefaults(https => https.ServerCertificate = certificate));
         builder.AddShutterSpoolServer();
@@ -66,7 +65,7 @@ public sealed class CameraListenerTests : IDisposable
         Assert.Contains(app.Urls, address => address == $"http://[::]:{wildcardPort}" || address == $"http://0.0.0.0:{wildcardPort}");
         string callbackAddress = listenOnAllInterfaces ? "0.0.0.0" : "localhost";
         Assert.Contains($"https://{callbackAddress}:{callbackPort}", app.Urls);
-        using HttpClient client = CreateClient(certificate, callbackCertificate);
+        using HttpClient client = CreateClient(certificate, callbackRoot);
         foreach (string origin in new[] { $"http://localhost:{loopbackPort}", $"https://127.0.0.1:{httpsPort}",
             $"http://127.0.0.1:{anyIpv4Port}", $"http://127.0.0.1:{wildcardPort}" })
         {
@@ -295,5 +294,8 @@ public sealed class CameraListenerTests : IDisposable
         public Task RegisterIngressAsync(string handle, Guid sourceId, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
-    public void Dispose() => File.Delete(_callbackCertificatePath);
+    public void Dispose()
+    {
+        if (Directory.Exists(_callbackDirectory)) Directory.Delete(_callbackDirectory, recursive: true);
+    }
 }
