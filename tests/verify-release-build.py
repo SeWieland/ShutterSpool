@@ -66,8 +66,8 @@ class ReleasePackageTests(unittest.TestCase):
                 self.assertEqual(files, set(manifest["files"]))
                 required = {".env", ".env.example", "compose.yaml", "profiles/all-camera-edges.yaml",
                             "README.md", "package/edge-entrypoint.sh", "package/identity-entrypoint.sh",
-                            "package/postgres-init.sh", "package/workspace-databases.sql", "components/workspaces.yaml",
-                            "package/realms/shutterspool-enrollment-client.json", "components/keycloak.yaml", "components/postgres.yaml",
+                            "package/postgres-init.sh", "package/workspace-databases.sql",
+                            "package/realms/shutterspool-enrollment-client.json",
                             "config/appsettings.json", "config/appsettings.Production.json",
                             "config/appsettings.Maintenance.json",
                             "certificates/README.md", "operations/README.md"}
@@ -122,6 +122,22 @@ class ReleasePackageTests(unittest.TestCase):
                 self.assertEqual({"kind": "fresh-install-only", "publishedRelease": None}, manifest["upgradeBaseline"])
             self.assertEqual(f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n",
                              archive.with_suffix(".zip.sha256").read_text())
+
+    def test_colliding_compose_overlay_names_are_refused_before_archiving(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(build_release, "run", side_effect=self.generate_compose):
+            source = Path(temp) / "source"
+            for directory in ("deploy", "src/ShutterSpool.AppHost/Realms", "src/ShutterSpool.AppHost/Themes/shutterspool"):
+                shutil.copytree(build_release.ROOT / directory, source / directory)
+            shutil.copy2(build_release.ROOT / "LICENSE", source / "LICENSE")
+            components = source / "deploy/package/components"
+            for filename in ("compose.fixture.yaml", "fixture.yaml"):
+                (components / filename).write_text(f"services:\n  edge:\n    image: {EDGE_IMAGE}\n", encoding="utf-8")
+            output = Path(temp) / "release"
+            with patch.object(build_release, "ROOT", source), self.assertRaisesRegex(
+                build_release.BuildError, r"^Compose overlays map to the same package file: components/fixture\.yaml$"
+            ):
+                build_release.prepare(self.args(output))
+            self.assertFalse(list(output.glob("*.zip")))
 
     def test_postgres_component_pins_image_and_mounts_versioned_data_parent(self):
         if not shutil.which("docker"):

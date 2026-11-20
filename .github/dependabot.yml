@@ -41,6 +41,10 @@ updates:
       npm-security:
         applies-to: security-updates
         patterns: ['*']
+  - package-ecosystem: pip
+    directory: /tests
+    schedule:
+      interval: weekly
   - package-ecosystem: nuget
     directories: ['/', '/.github']
     schedule:

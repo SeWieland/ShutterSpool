@@ -87,7 +87,17 @@ jobs:
       - name: Test camera FTP client security
         run: python tests/verify-camera-ftp-client.py
       - name: Test Compose packaging
-        run: python tests/verify-release-build.py
+        env:
+          COVERAGE_FILE: ${{ runner.temp }}/package-tests.coverage
+          PYTHONPATH: ${{ runner.temp }}/package-coverage
+        run: |
+          python -m pip install --target "$PYTHONPATH" -r tests/requirements.txt
+          test_status=0
+          python -m coverage run --include='tools/*.py' tests/verify-release-build.py || test_status=$?
+          if [ -s "$COVERAGE_FILE" ]; then
+            python -m coverage xml -o "$RUNNER_TEMP/ci-coverage/python.xml"
+          fi
+          exit "$test_status"
       - name: Test shared container image pins
         run: python tests/verify-image-pins.py
       - name: Test supplied camera certificate validation
@@ -150,6 +160,7 @@ jobs:
           path: |
             ${{ runner.temp }}/ci-coverage/dotnet.xml
             ${{ runner.temp }}/ci-coverage/lcov.info
+            ${{ runner.temp }}/ci-coverage/python.xml
           if-no-files-found: ignore
           overwrite: true
           retention-days: 7
@@ -227,6 +238,12 @@ jobs:
             coverage_args+=("/d:sonar.javascript.lcov.reportPaths=$frontend_report")
           else
             echo '::warning::Frontend coverage report missing. SonarQube coverage will be incomplete.'
+          fi
+          python_report="$RUNNER_TEMP/ci-coverage/python.xml"
+          if [ -s "$python_report" ]; then
+            coverage_args+=("/d:sonar.python.coverage.reportPaths=$python_report")
+          else
+            echo '::warning::Python coverage report missing. SonarQube coverage will be incomplete.'
           fi
           # The scanner classifies shared Vitest fixtures and standalone Python test scripts as source.
           # Keep them in static analysis and out of production coverage.
