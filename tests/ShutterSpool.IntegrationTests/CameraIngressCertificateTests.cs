@@ -8,6 +8,69 @@ public sealed class CameraIngressCertificateTests : IDisposable
 {
     private readonly string _directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
 
+    [Theory]
+    [InlineData("aspire.dev.internal")]
+    [InlineData("127.0.0.1")]
+    public void Development_callback_creates_and_reuses_a_private_server_certificate(string hostname)
+    {
+        var (bundlePath, rootPath) = DevelopmentCallbackCertificate.Resolve(_directory, hostname, "");
+        using var bundle = X509Certificate2.CreateFromPemFile(bundlePath, bundlePath);
+        using var root = X509Certificate2.CreateFromPem(File.ReadAllText(rootPath));
+        Assert.True(bundle.HasPrivateKey);
+        Assert.True(bundle.MatchesHostname(hostname, allowWildcards: false, allowCommonName: false));
+        Assert.NotEqual(root.Thumbprint, bundle.Thumbprint);
+        Assert.DoesNotContain("PRIVATE KEY", File.ReadAllText(rootPath));
+        if (!OperatingSystem.IsWindows())
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(bundlePath));
+
+        Assert.Equal((bundlePath, rootPath), DevelopmentCallbackCertificate.Resolve(_directory, hostname, ""));
+        Assert.Throws<InvalidOperationException>(() => DevelopmentCallbackCertificate.Resolve(_directory, "different.example", ""));
+        using var reused = X509Certificate2.CreateFromPemFile(bundlePath, bundlePath);
+        using var reusedRoot = X509Certificate2.CreateFromPem(File.ReadAllText(rootPath));
+        Assert.Equal(bundle.Thumbprint, reused.Thumbprint);
+        Assert.Equal(root.Thumbprint, reusedRoot.Thumbprint);
+    }
+
+    [Fact]
+    public async Task Concurrent_first_starts_publish_one_callback_pair()
+    {
+        var starts = Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
+            DevelopmentCallbackCertificate.Resolve(_directory, "aspire.dev.internal", ""), TestContext.Current.CancellationToken));
+        var pairs = await Task.WhenAll(starts);
+        Assert.Single(pairs.Distinct());
+        Assert.Single(Directory.GetFileSystemEntries(_directory));
+    }
+
+    [Fact]
+    public void Correcting_an_invalid_tunnel_hostname_recovers_first_start()
+    {
+        Assert.Throws<InvalidOperationException>(() => DevelopmentCallbackCertificate.Resolve(_directory, "localhost:8080", ""));
+        Assert.Empty(Directory.GetFileSystemEntries(_directory));
+        DevelopmentCallbackCertificate.Resolve(_directory, "aspire.dev.internal", "");
+    }
+
+    [Fact]
+    public void Supplied_callback_pair_is_used_in_place()
+    {
+        using var supplied = new CertificateFixture(_directory);
+        Assert.Equal((supplied.BundlePath, supplied.RootPath),
+            DevelopmentCallbackCertificate.Resolve(_directory, "ingest.shutterspool.com", ""));
+        Assert.Empty(Directory.GetDirectories(_directory));
+    }
+
+    [Theory]
+    [InlineData("server.pem")]
+    [InlineData("root.pem")]
+    public void Development_callback_refuses_to_replace_a_partial_pair(string remainingFile)
+    {
+        Directory.CreateDirectory(_directory);
+        string path = Path.Combine(_directory, remainingFile);
+        File.WriteAllText(path, "existing");
+        Assert.Throws<InvalidOperationException>(() => DevelopmentCallbackCertificate.Resolve(_directory, "aspire.dev.internal", ""));
+        Assert.Equal(path, Assert.Single(Directory.GetFiles(_directory)));
+        Assert.Equal("existing", File.ReadAllText(path));
+    }
+
     [Fact]
     public void Validate_accepts_server_chain_and_matching_private_key()
     {

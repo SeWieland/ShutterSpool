@@ -91,18 +91,8 @@ internal sealed class CameraIngressConfiguration
     {
         if (!configuration.GetValue("ASPIRE_ENABLE_CONTAINER_TUNNEL", true))
             throw new InvalidOperationException("Camera ingress requires the Aspire container tunnel for private HTTPS callbacks.");
-        string? callbackDirectory = section["CallbackCertificateDirectory"];
-        if (string.IsNullOrWhiteSpace(callbackDirectory))
-            throw new InvalidOperationException("Camera ingress requires ShutterSpool:CameraIngress:CallbackCertificateDirectory containing its dedicated server.pem and root.pem.");
-        callbackDirectory = Path.GetFullPath(callbackDirectory);
-        var certificatePath = Path.Combine(callbackDirectory, "server.pem");
-        var trustPath = Path.Combine(callbackDirectory, "root.pem");
-        if (cameraCertificateDirectory.Length > 0 && string.Equals(certificatePath, Path.Combine(cameraCertificateDirectory, "server.pem"),
-            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
-            throw new InvalidOperationException("Camera-facing FTPS and private HTTPS callbacks require separate certificate directories.");
         string callbackHostname = configuration["AppHost:ContainerHostname"] ?? KnownHostNames.DefaultContainerTunnelHostName;
-        CameraIngressCertificate.ValidateCallback(certificatePath, trustPath, callbackHostname);
-        return (certificatePath, trustPath);
+        return DevelopmentCallbackCertificate.Resolve(section["CallbackCertificateDirectory"], callbackHostname, cameraCertificateDirectory);
     }
 
     private static bool IsIpv4(string value) =>
