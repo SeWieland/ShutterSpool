@@ -8,6 +8,19 @@ public sealed class CameraIngressCertificateTests : IDisposable
 {
     private readonly string _directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
 
+    [Fact]
+    public void Default_callback_directory_cannot_also_hold_camera_facing_certificates()
+    {
+        string localData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData,
+            Environment.SpecialFolderOption.Create);
+        string cameraDirectory = Path.Combine(localData, "ShutterSpool", "callback-certificates");
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            DevelopmentCallbackCertificate.Resolve(null, "aspire.dev.internal", cameraDirectory));
+
+        Assert.Contains("require separate certificate directories", error.Message);
+    }
+
     [Theory]
     [InlineData("aspire.dev.internal")]
     [InlineData("127.0.0.1")]
