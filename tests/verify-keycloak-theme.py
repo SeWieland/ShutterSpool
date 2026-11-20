@@ -11,7 +11,7 @@ from image_pins import load_image_pins
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / 'src/ShutterSpool.AppHost/Realms/select-login-theme.sh'
-KEYCLOAK_IMAGES = load_image_pins(ROOT / 'deploy/package/components/keycloak.yaml',
+KEYCLOAK_IMAGES = load_image_pins(ROOT / 'deploy/package/components/compose.keycloak.yaml',
                                   required=('keycloak', 'keycloak-reconciler'))
 RESOURCES = ['theme.properties', 'resources/css/shutterspool.v1.css',
              'resources/img/aperture.svg', 'resources/img/shutter-color.png', 'resources/img/favicon.ico',

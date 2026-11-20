@@ -29,20 +29,21 @@ var previewPrewarmMode = builder.AddParameter("preview-prewarm-mode", "GridOnly"
 var imaginaryConcurrency = builder.AddParameter("imaginary-concurrency", "20");
 var imaginaryCpus = builder.AddParameter("imaginary-cpus", "2");
 var imaginaryHttpTimeout = builder.AddParameter("imaginary-http-timeout-seconds", "120");
-var postgresPin = new ImagePin("library/postgres", "18.7-trixie", "e754b839f447639b7004895f4d8a4bfcb4e9dbe3a1bc035f27f646562a16fd61");
+var postgresPin = imagePins["postgres"];
 var postgres = builder.AddPostgres("postgres", password: postgresPassword)
     .WithImage(postgresPin.Image, postgresPin.Tag)
     .WithImageSHA256(postgresPin.Sha256)
     .WithHostPort(builder.Configuration.GetValue("ShutterSpool:Development:DatabasePort", 54329))
     .WithDataVolume("shutterspool-postgres");
 postgres.AddDatabase("keycloak-data", "keycloak");
+var valkeyPin = imagePins["valkey"];
 var valkey = builder.AddValkey("valkey")
-    .WithImage("valkey/valkey", "9.2.0-trixie")
-    .WithImageSHA256("1c2b25b09f354c66fe994733acdf12fcfd4bdf6f3bd92b88a93a70378d884056")
+    .WithImage(valkeyPin.Image, valkeyPin.Tag)
+    .WithImageSHA256(valkeyPin.Sha256)
     .WithDataVolume("shutterspool-valkey");
 var postgresEndpoint = postgres.GetEndpoint("tcp");
 int identityPort = builder.Configuration.GetValue("ShutterSpool:Development:IdentityPort", 8082);
-var keycloakPin = new ImagePin("quay.io/keycloak/keycloak", "26.8.2", "7e66a96e4739239070aeaf72e4c5decf0f7f682cfc725b9f7ea2b336eaba38b3");
+var keycloakPin = imagePins["keycloak"];
 var keycloak = builder.AddContainer("keycloak", keycloakPin.Image, keycloakPin.Tag)
     .WithImageSHA256(keycloakPin.Sha256)
     .WithHttpEndpoint(port: identityPort, targetPort: 8080)

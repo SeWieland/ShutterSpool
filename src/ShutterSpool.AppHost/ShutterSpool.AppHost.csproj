@@ -18,5 +18,6 @@
 
   <ItemGroup>
     <Content Include="..\..\deploy\images\compose.yaml" Link="deploy\images\compose.yaml" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\deploy\package\components\compose.*.yaml" Link="deploy\package\components\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

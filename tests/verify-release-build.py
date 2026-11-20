@@ -72,6 +72,18 @@ class ReleasePackageTests(unittest.TestCase):
                             "config/appsettings.Maintenance.json",
                             "certificates/README.md", "operations/README.md"}
                 self.assertEqual(set(), required - files)
+                overlay_sources = {
+                    "components/keycloak.yaml": "components/compose.keycloak.yaml",
+                    "components/postgres.yaml": "components/compose.postgres.yaml",
+                    "components/valkey.yaml": "components/compose.valkey.yaml",
+                    "components/workspaces.yaml": "components/workspaces.yaml",
+                    "proxies/existing.yaml": "proxies/existing.yaml",
+                    "proxies/nginx.yaml": "proxies/compose.nginx.yaml",
+                    "proxies/traefik.yaml": "proxies/compose.traefik.yaml",
+                }
+                self.assertEqual(set(overlay_sources), {name for name in files if name.startswith(("components/", "proxies/"))})
+                for packaged, tracked in overlay_sources.items():
+                    self.assertEqual((build_release.ROOT / "deploy/package" / tracked).read_bytes(), bundle.read(packaged))
                 for directory in ("config/", "package/realms/", "package/theme/", "package/traefik/", "components/", "proxies/"):
                     self.assertTrue(any(name.startswith(directory) for name in files), directory)
                 self.assertEqual((build_release.ROOT / "LICENSE").read_bytes(), bundle.read("LICENSE"))
@@ -111,17 +123,15 @@ class ReleasePackageTests(unittest.TestCase):
             self.assertEqual(f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n",
                              archive.with_suffix(".zip.sha256").read_text())
 
-    def test_postgres_component_matches_ci_image_and_mounts_versioned_data_parent(self):
+    def test_postgres_component_pins_image_and_mounts_versioned_data_parent(self):
         if not shutil.which("docker"):
             self.skipTest("Docker Compose CLI is unavailable; component interpretation check needs no daemon.")
-        compose = build_release.ROOT / "deploy/package/components/postgres.yaml"
+        compose = build_release.ROOT / "deploy/package/components/compose.postgres.yaml"
         result = subprocess.run(["docker", "compose", "-f", str(compose), "config", "--no-consistency", "--no-path-resolution", "--format", "json"],
                                 env=dict(os.environ, COMPOSE_PROJECT_NAME="synthetic-postgres-component"),
                                 capture_output=True, text=True, check=True)
         postgres = json.loads(result.stdout)["services"]["postgres"]
-        workflow = (build_release.ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        ci_postgres = [image for image in build_release.image_refs(workflow) if image.startswith("postgres:")]
-        self.assertEqual([postgres["image"]], ci_postgres)
+        self.assertRegex(postgres["image"], r"^postgres:[^\s@]+@sha256:[0-9a-f]{64}$")
         data_targets = [mount["target"] for mount in postgres["volumes"] if mount["source"] == "postgres-data"]
         self.assertEqual(["/var/lib/postgresql"], data_targets)
 
@@ -129,7 +139,7 @@ class ReleasePackageTests(unittest.TestCase):
         if not shutil.which("docker") or not shutil.which("openssl"):
             self.skipTest("Docker and OpenSSL are required for the pinned nginx test.")
         config = (build_release.ROOT / "deploy/config/nginx.conf.example").read_text(encoding="utf-8")
-        overlay = (build_release.ROOT / "deploy/package/proxies/nginx.yaml").read_text(encoding="utf-8")
+        overlay = (build_release.ROOT / "deploy/package/proxies/compose.nginx.yaml").read_text(encoding="utf-8")
         image, = build_release.image_refs(overlay)
         with tempfile.TemporaryDirectory() as temp:
             fixture = Path(temp)

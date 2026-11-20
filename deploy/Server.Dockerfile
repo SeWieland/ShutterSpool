@@ -2,7 +2,7 @@ FROM node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a
 WORKDIR /source/src/ShutterSpool.Web
 COPY src/ShutterSpool.Web/package*.json ./
 RUN npm install --global --ignore-scripts "npm@$(node -p 'require("./package.json").engines.npm')" && \
-    npm ci --ignore-scripts
+    npm ci --engine-strict --ignore-scripts
 COPY src/ShutterSpool.Web/ ./
 COPY tools/generate-attribution.mjs /source/tools/generate-attribution.mjs
 COPY deploy/images/compose.yaml /source/deploy/images/compose.yaml

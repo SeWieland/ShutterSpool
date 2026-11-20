@@ -176,9 +176,14 @@ def prepare(args: argparse.Namespace) -> Path:
             (stage / docs).mkdir()
             shutil.copy2(ROOT / "deploy" / docs / "README.md", stage / docs / "README.md")
         for relative in ("components", "proxies"):
-            shutil.copytree(ROOT / "deploy/package" / relative, stage / relative)
-        for overlay in sorted([*stage.glob("components/*.yaml"), *stage.glob("proxies/*.yaml")]):
-            upstream_images.update(ref for ref in validate_compose(overlay) if "${" not in ref)
+            destination = stage / relative
+            destination.mkdir()
+            for overlay in sorted((ROOT / "deploy/package" / relative).glob("*.yaml")):
+                target = destination / overlay.name.removeprefix("compose.")
+                if target.exists():
+                    raise BuildError(f"Compose overlays map to the same package file: {relative}/{target.name}")
+                upstream_images.update(ref for ref in validate_compose(overlay) if "${" not in ref)
+                shutil.copy2(overlay, target)
         (stage / "config").mkdir()
         for example in sorted((ROOT / "deploy/config").glob("*.example")):
             shutil.copy2(example, stage / "config" / example.name)

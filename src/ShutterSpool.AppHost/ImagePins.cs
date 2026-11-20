@@ -1,28 +1,29 @@
-using System.Text.RegularExpressions;
 using YamlDotNet.RepresentationModel;
 
 namespace ShutterSpool.AppHost;
 
-internal sealed record ImagePin(string Image, string Tag, string Sha256);
-
-internal static partial class ImagePins
+internal static class ImagePins
 {
-    private static readonly Regex PinnedImage = PinnedImagePattern();
-
     public static IReadOnlyDictionary<string, ImagePin> Load()
     {
-        string path = Path.Combine(AppContext.BaseDirectory, "deploy", "images", "compose.yaml");
+        string deployPath = Path.Combine(AppContext.BaseDirectory, "deploy");
+        var pins = new Dictionary<string, ImagePin>();
+        AddPins(pins, Path.Combine(deployPath, "images", "compose.yaml"), "camera-edge", "imaginary");
+        foreach (string name in new[] { "postgres", "valkey", "keycloak" })
+            AddPins(pins, Path.Combine(deployPath, "package", "components", $"compose.{name}.yaml"), name);
+        return pins;
+    }
+
+    private static void AddPins(Dictionary<string, ImagePin> pins, string path, params string[] serviceNames)
+    {
         using var reader = File.OpenText(path);
         var yaml = new YamlStream();
         yaml.Load(reader);
 
         var root = (YamlMappingNode)yaml.Documents[0].RootNode;
         var services = (YamlMappingNode)root.Children[new YamlScalarNode("services")];
-        return new Dictionary<string, ImagePin>
-        {
-            ["camera-edge"] = Read(services, "camera-edge", path),
-            ["imaginary"] = Read(services, "imaginary", path),
-        };
+        foreach (string name in serviceNames)
+            pins.Add(name, Read(services, name, path));
     }
 
     private static ImagePin Read(YamlMappingNode services, string serviceName, string path)
@@ -30,15 +31,9 @@ internal static partial class ImagePins
         if (!services.Children.TryGetValue(new YamlScalarNode(serviceName), out var serviceNode)
             || serviceNode is not YamlMappingNode service
             || !service.Children.TryGetValue(new YamlScalarNode("image"), out var imageNode)
-            || imageNode is not YamlScalarNode image
-            || !PinnedImage.IsMatch(image.Value ?? ""))
+            || imageNode is not YamlScalarNode { Value: string image }
+            || ImagePin.ParseOrNull(image) is not ImagePin pin)
             throw new InvalidDataException($"{path} must define a tag and sha256-pinned image for service '{serviceName}'.");
-        string reference = image.Value!;
-        int digestSeparator = reference.LastIndexOf("@sha256:", StringComparison.Ordinal);
-        int tagSeparator = reference.LastIndexOf(':', digestSeparator);
-        return new ImagePin(reference[..tagSeparator], reference[(tagSeparator + 1)..digestSeparator], reference[(digestSeparator + 8)..]);
+        return pin;
     }
-
-    [GeneratedRegex("^[^\\s@]+:[^\\s@]+@sha256:[a-f0-9]{64}$", RegexOptions.CultureInvariant)]
-    private static partial Regex PinnedImagePattern();
 }

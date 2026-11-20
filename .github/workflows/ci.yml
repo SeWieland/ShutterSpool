@@ -36,15 +36,6 @@ jobs:
     timeout-minutes: 15
     outputs:
       coverage-artifact-id: ${{ steps.coverage.outputs.artifact-id }}
-    services:
-      postgres:
-        image: postgres:18.7-trixie@sha256:e754b839f447639b7004895f4d8a4bfcb4e9dbe3a1bc035f27f646562a16fd61
-        env:
-          POSTGRES_PASSWORD: controlled-ci-password
-        ports: [5432:5432]
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s --health-timeout 5s --health-retries 12
     env:
       NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
       SHUTTERSPOOL_REQUIRE_POSTGRES_TESTS: "true"
@@ -54,6 +45,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Start the packaged PostgreSQL version
+        env:
+          POSTGRES_PASSWORD: controlled-ci-password
+        run: |
+          image=$(docker compose -p ci -f deploy/package/components/compose.postgres.yaml config --no-consistency --images postgres)
+          docker run --detach --name ci-postgres --publish 127.0.0.1:5432:5432 --env POSTGRES_PASSWORD "$image"
+          timeout 60 bash -c 'until docker exec ci-postgres pg_isready -h 127.0.0.1 -U postgres; do sleep 1; done'
       - name: Set up .NET
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
@@ -61,15 +59,11 @@ jobs:
           cache: true
           cache-dependency-path: '**/packages*.lock.json'
       - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: src/ShutterSpool.Web/package.json
-          cache: npm
-          cache-dependency-path: src/ShutterSpool.Web/package-lock.json
+        uses: ./.github/actions/setup-node
       - name: Install frontend dependencies
         run: |
           npm install --global --ignore-scripts "npm@$(node -p 'require("./package.json").engines.npm')"
-          npm ci --ignore-scripts
+          npm ci --engine-strict --ignore-scripts
         working-directory: src/ShutterSpool.Web
       - name: Check frontend types
         run: npm run typecheck
@@ -109,7 +103,9 @@ jobs:
       - name: Build solution
         run: dotnet build --no-restore
       - name: Install .NET coverage collector
-        run: dotnet tool install dotnet-coverage --version 18.12.0 --allow-roll-forward --tool-path "$RUNNER_TEMP/coverage-tools"
+        run: |
+          version=$(jq -er '.tools["dotnet-coverage"].version' .github/.config/dotnet-tools.json)
+          dotnet tool install dotnet-coverage --version "$version" --allow-roll-forward --tool-path "$RUNNER_TEMP/coverage-tools"
       - name: Test solution
         id: tests
         shell: bash
@@ -194,21 +190,19 @@ jobs:
           cache: true
           cache-dependency-path: '**/packages*.lock.json'
       - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: src/ShutterSpool.Web/package.json
-          cache: npm
-          cache-dependency-path: src/ShutterSpool.Web/package-lock.json
+        uses: ./.github/actions/setup-node
       - name: Install frontend dependencies
         run: |
           npm install --global --ignore-scripts "npm@$(node -p 'require("./package.json").engines.npm')"
-          npm ci --ignore-scripts
+          npm ci --engine-strict --ignore-scripts
         working-directory: src/ShutterSpool.Web
       - name: Prepare frontend types
         run: npm run typecheck
         working-directory: src/ShutterSpool.Web
       - name: Install SonarScanner
-        run: dotnet tool install dotnet-sonarscanner --version 12.1.0 --tool-path "$RUNNER_TEMP/sonar"
+        run: |
+          version=$(jq -er '.tools["dotnet-sonarscanner"].version' .github/.config/dotnet-tools.json)
+          dotnet tool install dotnet-sonarscanner --version "$version" --tool-path "$RUNNER_TEMP/sonar"
       - name: Restore solution
         run: dotnet restore ShutterSpool.slnx --locked-mode
       - name: Download coverage reports
