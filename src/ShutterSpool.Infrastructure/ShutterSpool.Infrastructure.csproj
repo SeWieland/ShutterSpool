@@ -5,8 +5,8 @@
   <ItemGroup>
     <InternalsVisibleTo Include="ShutterSpool.IntegrationTests" />
     <InternalsVisibleTo Include="ShutterSpool.ArchitectureTests" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="11.0.0-rc.3.26522.148" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="11.0.0-rc.3.26522.148" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="11.0.0" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="11.0.0" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="11.0.0" />
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="11.0.0" />
     <PackageReference Include="StackExchange.Redis" Version="3.4.35" />
