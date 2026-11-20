@@ -282,7 +282,9 @@ public sealed class IngestService(IIngestJournal journal, ISpool spool, TimeProv
         long reservedBytes, long writtenBytes, long filesystemReservedBytes, CancellationToken cancellationToken)
     {
         if (quotaStore is null || !(await quotaStore.GetSettingsAsync(cancellationToken)).IsActive) return;
-        if (!await quotaStore.UpdateReservationAsync(operationId, assetId, keys, reservedBytes, writtenBytes,
+        // Keep a valid reservation until commit, even when the received original is empty.
+        long reservationBytes = reservedBytes == 0 ? 1 : reservedBytes;
+        if (!await quotaStore.UpdateReservationAsync(operationId, assetId, keys, reservationBytes, writtenBytes,
             filesystemReservedBytes, cancellationToken))
             throw new IOException("The admitted spool reservation could not be reconciled.");
     }
