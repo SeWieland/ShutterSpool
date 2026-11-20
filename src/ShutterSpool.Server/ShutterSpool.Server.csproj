@@ -4,7 +4,7 @@
     <TargetFramework>net11.0</TargetFramework>
     <OpenApiDocumentsDirectory>$(MSBuildProjectDirectory)\openapi</OpenApiDocumentsDirectory>
     <OpenApiGenerateDocuments>true</OpenApiGenerateDocuments>
-    <OpenApiGenerateDocumentsOptions>--file-name ShutterSpool_Server --openapi-version OpenApi3_1</OpenApiGenerateDocumentsOptions>
+    <OpenApiGenerateDocumentsOptions>--file-name ShutterSpool_Server</OpenApiGenerateDocumentsOptions>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>

@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Options;
@@ -17,8 +18,12 @@ public sealed class FoundationTests(WorkspaceWebApplicationFactory factory)
     public async Task OpenApi_describes_preview_bytes_and_live_stream_content()
     {
         using HttpClient client = factory.CreateWorkspaceClient();
-        using JsonDocument document = JsonDocument.Parse(await client.GetStringAsync("/openapi/v1.json", TestContext.Current.CancellationToken));
-        Assert.StartsWith("3.1.", document.RootElement.GetProperty("openapi").GetString());
+        CancellationToken token = TestContext.Current.CancellationToken;
+        using JsonDocument document = JsonDocument.Parse(await client.GetStringAsync("/openapi/v1.json", token));
+        string contentRoot = factory.Services.GetRequiredService<IWebHostEnvironment>().ContentRootPath;
+        await using var generatedFile = File.OpenRead(Path.Combine(contentRoot, "openapi", "ShutterSpool_Server.json"));
+        using JsonDocument generated = await JsonDocument.ParseAsync(generatedFile, cancellationToken: token);
+        Assert.Equal(generated.RootElement.GetProperty("openapi").GetString(), document.RootElement.GetProperty("openapi").GetString());
         JsonElement paths = document.RootElement.GetProperty("paths");
         foreach (string route in new[] { "/media/previews/{id}", "/media/previews/{id}/{profile}" })
         {
@@ -29,8 +34,9 @@ public sealed class FoundationTests(WorkspaceWebApplicationFactory factory)
             Assert.True(responses.TryGetProperty("304", out _));
             Assert.True(responses.TryGetProperty("404", out _));
         }
-        Assert.True(paths.GetProperty("/live/status").GetProperty("get").GetProperty("responses")
-            .GetProperty("200").GetProperty("content").GetProperty("text/event-stream").TryGetProperty("schema", out _));
+        JsonElement stream = paths.GetProperty("/live/status").GetProperty("get").GetProperty("responses")
+            .GetProperty("200").GetProperty("content").GetProperty("text/event-stream").GetProperty("schema");
+        Assert.Equal("string", stream.GetProperty("type").GetString());
     }
 
     [Fact]

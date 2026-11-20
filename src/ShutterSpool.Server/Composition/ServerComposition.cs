@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Options;
-using Microsoft.OpenApi;
 using ShutterSpool.Application.Workspaces;
 using ShutterSpool.Server.Api.Workspaces;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -76,7 +75,7 @@ internal static class ServerComposition
         builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
         if (cameraIngress.Enabled) ConfigureCameraListener(builder, cameraIngress);
         builder.AddServiceDefaults();
-        builder.Services.AddOpenApi(options => options.OpenApiVersion = OpenApiSpecVersion.OpenApi3_1);
+        builder.Services.AddOpenApi();
         builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
         {
             context.ProblemDetails.Extensions.TryAdd("errorCode", context.ProblemDetails.Status switch
