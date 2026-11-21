@@ -91,7 +91,7 @@ jobs:
           COVERAGE_FILE: ${{ runner.temp }}/package-tests.coverage
           PYTHONPATH: ${{ runner.temp }}/package-coverage
         run: |
-          python -m pip install --target "$PYTHONPATH" -r tests/requirements.txt
+          python -m pip install --only-binary :all: --require-hashes --target "$PYTHONPATH" -r tests/requirements.txt
           test_status=0
           python -m coverage run --include='tools/*.py' tests/verify-release-build.py || test_status=$?
           if [ -s "$COVERAGE_FILE" ]; then

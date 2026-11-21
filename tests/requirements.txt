@@ -1,1 +1,4 @@
-coverage==7.17.3
+# SHA-256 pins for the Ubuntu CI wheel and the universal fallback wheel, in that order.
+coverage==7.17.3 \
+    --hash=sha256:0860a5f27ceccd53ee4070acc182588ed4f15b7401cdcca09d8c0cece9c2ad7d \
+    --hash=sha256:21745c08f2835b847a16887b748d3084dddeb0571ae2a0d62e33644413568b99
