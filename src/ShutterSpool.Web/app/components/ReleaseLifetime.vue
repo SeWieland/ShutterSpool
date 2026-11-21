@@ -8,7 +8,14 @@ const state = computed(() => curationTiming(props.curation, now.value));
 </script>
 
 <template>
-    <div v-if="state.fraction != null" class="release-lifetime" :class="{ urgent: state.urgent }" role="progressbar" aria-label="Time remaining until release" :aria-valuenow="Math.round(state.fraction * 100)" :aria-valuemin="0" :aria-valuemax="100" :aria-valuetext="state.title" :title="state.title">
-        <span :style="{ transform: `scaleX(${state.fraction})` }" />
+    <div v-if="state.fraction != null" class="release-lifetime" :class="{ urgent: state.urgent }" :title="state.title">
+        <progress
+            class="sr-only"
+            max="100"
+            :value="Math.round(state.fraction * 100)"
+            aria-label="Time remaining until release"
+            :title="state.title"
+        />
+        <span aria-hidden="true" :style="{ transform: `scaleX(${state.fraction})` }" />
     </div>
 </template>

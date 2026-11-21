@@ -257,7 +257,7 @@ public sealed partial class ConfigurationApiTests
         using var problem = JsonDocument.Parse(unchangedBody);
         JsonProperty error = Assert.Single(problem.RootElement.GetProperty("errors").EnumerateObject());
         Assert.Equal("password", error.Name);
-        Assert.Equal(new ArgumentException("Choose a different username or password.", error.Name).Message,
+        Assert.Equal("Choose a different username or password.",
             Assert.Single(error.Value.EnumerateArray()).GetString());
 
         using HttpResponseMessage replaced = await fixture.Client.PostAsJsonAsync($"/management/sources/{source.Id}/regenerate-secret",
