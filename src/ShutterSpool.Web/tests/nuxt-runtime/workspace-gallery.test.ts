@@ -3,6 +3,7 @@ import { expect, test, vi } from 'vitest';
 import { buttonIn, live, loseAccess, mountWorkspace, photo, refresh, sessionCreated, transport } from './workspace-mount';
 import ApertureBackground from '../../app/components/ApertureBackground.vue';
 import CurationControls from '../../app/components/CurationControls.vue';
+import { workspaceAccess } from '../../app/lib/workspace-access';
 
 test('aperture receives the selected view after accepted workspace changes', async () => {
     const { view, nav } = await mountWorkspace();
@@ -152,6 +153,49 @@ test('targeted reconciliation fences late success and failure after view, query,
         if (change !== 'dispose') expect(view.text()).not.toContain('stale detail');
         dispose();
     }
+});
+
+test('targeted reconciliation removes a missing capture before the next row finishes', async () => {
+    const { tiles } = await mountWorkspace();
+    const missing = Promise.withResolvers<unknown>();
+    const next = Promise.withResolvers<unknown>();
+    transport.detail.mockClear()
+        .mockReturnValueOnce(missing.promise)
+        .mockReturnValueOnce(next.promise);
+    transport.page.mockResolvedValueOnce({ items: [photo('b')] });
+
+    const active = refresh(['a', 'b']);
+    await flushPromises();
+    expect(transport.detail.mock.calls.map(([id]) => id)).toEqual(['a']);
+    missing.reject({ responseStatusCode: 404 });
+    await flushPromises();
+    expect(transport.detail.mock.calls.map(([id]) => id)).toEqual(['a', 'b']);
+    expect(tiles()).toEqual(['b']);
+    next.resolve(photo('b'));
+    await active;
+    expect(tiles()).toEqual(['b']);
+});
+
+test('Viewer reconciliation closes access at its deadline and discards a late page', async () => {
+    const { tiles } = await mountWorkspace({ role: 'Viewer' });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const pending = Promise.withResolvers<unknown>();
+    transport.page.mockReturnValueOnce(pending.promise);
+
+    const active = refresh();
+    await flushPromises();
+    const signal = transport.page.mock.lastCall![0].options[0].signal;
+    await vi.advanceTimersByTimeAsync(7_999);
+    expect(signal.aborted).toBe(false);
+    expect(workspaceAccess.value?.role).toBe('Viewer');
+    expect(tiles()).toEqual(['a', 'b']);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(signal.aborted).toBe(true);
+    expect(workspaceAccess.value).toBeUndefined();
+    expect(tiles()).toEqual([]);
+    pending.resolve({ items: [photo('late')] });
+    await active;
+    expect(tiles()).toEqual([]);
 });
 
 test('Gallery reconciliation restores its visible scroll anchor and keeps the selected photograph', async () => {

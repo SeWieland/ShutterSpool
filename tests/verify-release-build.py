@@ -17,6 +17,7 @@ SPEC.loader.exec_module(build_release)
 COMMIT = "a" * 40
 DIGEST = "sha256:" + "b" * 64
 ARCHIVE_NAME = "shutterspool-compose.zip"
+COMPOSE_FILENAME = "compose.yaml"
 EDGE_IMAGE = "drakkan/sftpgo:v9.8.7@sha256:" + "c" * 64
 ATTRIBUTION = {"image": EDGE_IMAGE, "version": "v9.8.7", "revision": "d" * 40,
                "source": "https://github.com/drakkan/sftpgo/tree/" + "d" * 40}
@@ -64,7 +65,7 @@ class ReleasePackageTests(unittest.TestCase):
                 files = set(bundle.namelist())
                 manifest = json.loads(bundle.read("release-manifest.json"))
                 self.assertEqual(files, set(manifest["files"]))
-                required = {".env", ".env.example", "compose.yaml", "profiles/all-camera-edges.yaml",
+                required = {".env", ".env.example", COMPOSE_FILENAME, "profiles/all-camera-edges.yaml",
                             "README.md", "package/edge-entrypoint.sh", "package/identity-entrypoint.sh",
                             "package/postgres-init.sh", "package/workspace-databases.sql",
                             "package/realms/shutterspool-enrollment-client.json",
@@ -108,7 +109,7 @@ class ReleasePackageTests(unittest.TestCase):
                 self.assertIn(f"SERVER_IMAGE=ghcr.io/sewieland/shutterspool:0.1.0@{DIGEST}", env)
                 self.assertIn("SHUTTERSPOOL_VERSION=0.1.0", env)
                 self.assertNotIn("REPLACE_WITH_IMAGE_DIGEST", env)
-                core = bundle.read("compose.yaml").decode()
+                core = bundle.read(COMPOSE_FILENAME).decode()
                 all_edges = bundle.read("profiles/all-camera-edges.yaml").decode()
                 self.assertNotIn("camera-edge-plain:", core)
                 self.assertIn("camera-edge-plain:", all_edges)
@@ -133,10 +134,12 @@ class ReleasePackageTests(unittest.TestCase):
             for filename in ("compose.fixture.yaml", "fixture.yaml"):
                 (components / filename).write_text(f"services:\n  edge:\n    image: {EDGE_IMAGE}\n", encoding="utf-8")
             output = Path(temp) / "release"
-            with patch.object(build_release, "ROOT", source), self.assertRaisesRegex(
-                build_release.BuildError, r"^Compose overlays map to the same package file: components/fixture\.yaml$"
-            ):
-                build_release.prepare(self.args(output))
+            with patch.object(build_release, "ROOT", source):
+                args = self.args(output)
+                with self.assertRaisesRegex(
+                    build_release.BuildError, r"^Compose overlays map to the same package file: components/fixture\.yaml$"
+                ):
+                    build_release.prepare(args)
             self.assertFalse(list(output.glob("*.zip")))
 
     def test_postgres_component_pins_image_and_mounts_versioned_data_parent(self):
@@ -235,7 +238,7 @@ probe -H 'Host: photographs.example.invalid:18443'
 
     def test_compose_rejects_unpinned_images_source_mounts_and_unknown_parameters(self):
         with tempfile.TemporaryDirectory() as temp:
-            compose = Path(temp) / "compose.yaml"
+            compose = Path(temp) / COMPOSE_FILENAME
             for invalid in ("services:\n  db:\n    image: postgres:18\n",
                             'services:\n  app:\n    image:',
                             'services:\n  app:\n    image: # Image is missing\n',
@@ -249,7 +252,7 @@ probe -H 'Host: photographs.example.invalid:18443'
     def test_compose_image_refs_keep_required_value_text_and_skip_comments(self):
         placeholder = "${SERVER_IMAGE:?Select the qualified Server image}"
         with tempfile.TemporaryDirectory() as temp:
-            compose = Path(temp) / "compose.yaml"
+            compose = Path(temp) / COMPOSE_FILENAME
             compose.write_text(f"services:\n  server:\n    image: '{placeholder}' # Server image\n"
                                f"  camera-edge:\n    image: {EDGE_IMAGE} # Pinned camera edge", encoding="utf-8")
             self.assertEqual([placeholder, EDGE_IMAGE], build_release.validate_compose(compose))
@@ -279,7 +282,7 @@ probe -H 'Host: photographs.example.invalid:18443'
         modern = f"  camera-edge:\n      restart: always\n      image: '{EDGE_IMAGE}'"
         plain = f"  camera-edge-plain:\n    image: {EDGE_IMAGE}"
         with tempfile.TemporaryDirectory() as temp:
-            compose = Path(temp) / "compose.yaml"
+            compose = Path(temp) / COMPOSE_FILENAME
             compose.write_text(f"services:\n{modern}\n{plain}", encoding="utf-8")
             build_release.validate_attribution(compose, ATTRIBUTION)
             for services, missing in ((f"  camera-edge:\n{plain}", "camera-edge"),

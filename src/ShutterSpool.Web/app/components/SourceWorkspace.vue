@@ -725,6 +725,19 @@ function canRunCommand(action: SourceCommand) {
     if ((action === 'create' || action === 'secret') && !validatePasswordInput()) return false;
     return (action !== 'save' && action !== 'create') || canAssignProfile.value;
 }
+async function createSourceForEditor(hasAccess: () => boolean, isCurrentOwner: () => boolean,
+    applyResult: (value?: SourceConfigurationResponse | null, returnedSecret?: string | null) => void) {
+    const result = await api.management.sources.post({ ...sourceSettings(), ...credentialOptions() });
+    if (!hasAccess()) return;
+    if (!isCurrentOwner()) {
+        emit('refresh');
+        return;
+    }
+    const returnedSecret = result?.secret;
+    const read = result?.id ? await readCreatedSource(String(result.id)) : { saved: undefined };
+    if (!read || !hasAccess() || !isCurrentOwner()) return;
+    applyResult(read.saved, returnedSecret);
+}
 async function command(action: SourceCommand) {
     if (!canRunCommand(action)) return;
     const generation = accessGeneration();
@@ -745,16 +758,7 @@ async function command(action: SourceCommand) {
     credentialDialog.value?.close();
     try {
         if (action === 'create') {
-            const result = await api.management.sources.post({ ...sourceSettings(), ...credentialOptions() });
-            if (!hasAccess()) return;
-            if (!isCurrentOwner()) {
-                emit('refresh');
-                return;
-            }
-            const returnedSecret = result?.secret;
-            const read = result?.id ? await readCreatedSource(String(result.id)) : { saved: undefined };
-            if (!read || !hasAccess() || !isCurrentOwner()) return;
-            applyResult(read.saved, returnedSecret);
+            await createSourceForEditor(hasAccess, isCurrentOwner, applyResult);
             return;
         }
         const endpoint = api.management.sources.byId(owner);

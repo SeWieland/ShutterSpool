@@ -605,17 +605,19 @@ async function refreshWaitingForCuration(isCurrent: () => boolean, signal: Abort
         if (isCurrent()) handleFailure(failure);
     }
 }
+function applyTargetedCapture(id: string, value: CaptureDetailResponse) {
+    const index = rows.value.findIndex(row => String(row.id) === id);
+    if (index < 0) return;
+    rows.value[index] = { ...rows.value[index], ...value };
+    if (value.curation) curationVisit.sync(id, value.curation);
+}
 async function refreshTargetedRows(ids: Set<string>, isCurrent: () => boolean, signal: AbortSignal) {
     for (const id of ids) {
         if (!rows.value.some(row => String(row.id) === id)) continue;
         try {
             const value = await api.management.captures.byId(id).get({ options: [cancellable(signal)] });
             if (!isCurrent()) return;
-            if (!value) continue;
-            const index = rows.value.findIndex(row => String(row.id) === id);
-            if (index < 0) continue;
-            rows.value[index] = { ...rows.value[index], ...value };
-            if (value.curation) curationVisit.sync(id, value.curation);
+            if (value) applyTargetedCapture(id, value);
         } catch (failure) {
             if (!isCurrent()) return;
             if (handleFailure(failure) === 404) await forgetUnavailableCapture(id);
@@ -644,6 +646,34 @@ function invalidatePreviews(previews: PreviewInvalidation, fullRefresh: boolean)
     for (const id of ids)
         if (id) previewVersions.value[id] = (previewVersions.value[id] ?? 0) + 1;
 }
+function finishWorkspaceRefresh(previews: PreviewInvalidation | undefined, scopes: Set<RefreshScope>, isCurrent: () => boolean) {
+    if (scopes.has('previews') && previews) invalidatePreviews(previews, scopes.size === allRefreshScopes.length);
+    if (!isCurrent()) return;
+    const ready = !pageError.value && !detailError.value;
+    if (!mayCurate.value && !ready) {
+        closeWorkspaceAccess();
+        return;
+    }
+    slideshowReady.value = ready;
+}
+async function refreshWorkspaceContent(ids: Set<string> | undefined, previews: PreviewInvalidation | undefined,
+    scopes: Set<RefreshScope>, isCurrent: () => boolean, signal: AbortSignal) {
+    const captureActive = (view.value === 'Gallery' || view.value === 'Curation') && retentionSurface.value === 'photos';
+    const refreshCaptures = captureActive && scopes.has('capture');
+    updateScopeState(scopes, captureActive);
+    if (mayCurate.value && refreshCaptures) {
+        await refreshWaitingForCuration(isCurrent, signal);
+        if (!isCurrent()) return;
+    }
+    hasCuration.value = mayCurate.value && (policyStale.value || sources.value.some(s => s.curationMode !== 'Immediate') || waitingForCuration.value);
+    if (scopes.has('capture') && (scopes.has('delivery') || scopes.has('storage') || scopes.has('erasure'))) evidenceGeneration.value++;
+
+    if (refreshCaptures) {
+        await refreshCapturePage(ids, isCurrent, signal);
+        if (!isCurrent()) return;
+    }
+    finishWorkspaceRefresh(previews, scopes, isCurrent);
+}
 async function refreshData(ids?: Set<string>, previews?: PreviewInvalidation, scopes = new Set(allRefreshScopes)) {
     const previousAccess = accessGeneration();
     if (!await refreshWorkspaceAccess() || previousAccess !== accessGeneration() || !workspaceActive) return;
@@ -665,29 +695,7 @@ async function refreshData(ids?: Set<string>, previews?: PreviewInvalidation, sc
         if (mayAdminister.value && scopes.has('sources'))
             await refreshSources(owner, isCurrent, signal);
         if (!session.value || !isCurrent()) return;
-
-        const captureActive = (view.value === 'Gallery' || view.value === 'Curation') && retentionSurface.value === 'photos';
-        const refreshCaptures = captureActive && scopes.has('capture');
-        updateScopeState(scopes, captureActive);
-        if (mayCurate.value && refreshCaptures) {
-            await refreshWaitingForCuration(isCurrent, signal);
-            if (!isCurrent()) return;
-        }
-        hasCuration.value = mayCurate.value && (policyStale.value || sources.value.some(s => s.curationMode !== 'Immediate') || waitingForCuration.value);
-        if (scopes.has('capture') && (scopes.has('delivery') || scopes.has('storage') || scopes.has('erasure'))) evidenceGeneration.value++;
-
-        if (refreshCaptures) {
-            await refreshCapturePage(ids, isCurrent, signal);
-            if (!isCurrent()) return;
-        }
-        if (scopes.has('previews') && previews) invalidatePreviews(previews, scopes.size === allRefreshScopes.length);
-        if (!isCurrent()) return;
-        const ready = !pageError.value && !detailError.value;
-        if (!mayCurate.value && !ready) {
-            closeWorkspaceAccess();
-            return;
-        }
-        slideshowReady.value = ready;
+        await refreshWorkspaceContent(ids, previews, scopes, isCurrent, signal);
     } finally {
         clearTimeout(viewerDeadline);
         if (refreshController === controller && activeRefreshScopes === scopes)
