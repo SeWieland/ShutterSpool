@@ -152,7 +152,9 @@ Source creation and revision-guarded `POST /management/sources/{id}/regenerate-s
 `passwordMode` (`Generated` or `Custom`) and `password`. Omission preserves generated provisioning;
 custom mode requires a supplied valid password. A supplied username uses 1–64 ASCII letters/digits/underscore/hyphen,
 beginning with a letter or digit, and is unique with exact case across retained Sources, including archived Sources.
-Replacement retains the username when omitted and atomically advances configuration revision and credential generation.
+For an unarchived Source at the current configuration revision, a valid custom replacement using the current username
+and password returns HTTP `400` with a `password` validation error. Choose a different username or password.
+Successful replacement retains the username when omitted and atomically advances configuration revision and credential generation.
 It affects every sharing device and blocks new work from stale sessions; previously admitted transfers retain completion guarantees.
 The Source identity, root, connection profile, media and history remain intact.
 

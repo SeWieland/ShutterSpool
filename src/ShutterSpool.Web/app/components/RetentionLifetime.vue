@@ -7,5 +7,14 @@ const timing = computed(() => retentionTiming(props.evidence, now.value, props.d
 </script>
 
 <template>
-    <div v-if="timing.visible && timing.fraction != null" class="release-lifetime retention-lifetime" :class="[timing.tone, { stale: timing.stale }]" role="progressbar" :aria-label="evidence?.timeline?.meaning ?? 'Retention time remaining'" :aria-valuenow="Math.round(timing.fraction * 100)" :aria-valuemin="0" :aria-valuemax="100" :aria-valuetext="timing.title" :title="timing.title"><span :style="{ transform: `scaleX(${timing.fraction})` }" /></div>
+    <div v-if="timing.visible && timing.fraction != null" class="release-lifetime retention-lifetime" :class="[timing.tone, { stale: timing.stale }]" :title="timing.title">
+        <progress
+            class="sr-only"
+            max="100"
+            :value="Math.round(timing.fraction * 100)"
+            :aria-label="evidence?.timeline?.meaning ?? 'Retention time remaining'"
+            :title="timing.title"
+        />
+        <span aria-hidden="true" :style="{ transform: `scaleX(${timing.fraction})` }" />
+    </div>
 </template>

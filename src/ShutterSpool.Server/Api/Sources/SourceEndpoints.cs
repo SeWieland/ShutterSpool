@@ -152,7 +152,10 @@ public static class SourceEndpoints
         SourceSecretWrite result;
         try { result = await sources.RegenerateAsync(id, request.ExpectedRevision, request.Username, request.PasswordMode, request.Password, token); }
         catch (ArgumentException exception) { return Invalid(exception); }
-        catch (UnchangedSourceCredentialException) { return Invalid(new ArgumentException("Choose a different username or password.", "password")); }
+        catch (UnchangedSourceCredentialException exception)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]> { ["password"] = [exception.Message] });
+        }
         catch (SourceUsernameConflictException) { return UsernameConflict(); }
         if (result.Current is null) return Missing();
         if (!result.Applied) return Conflict(result.Current);
