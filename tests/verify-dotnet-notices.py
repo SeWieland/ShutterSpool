@@ -19,6 +19,7 @@ class DotnetNoticeTests(unittest.TestCase):
         self.packages = self.root / "packages"
         self.fallbacks = self.root / "fallbacks"
         self.output = self.root / "licenses"
+        self.index_path = self.output / "INDEX.txt"
         self.fallbacks.mkdir()
         (self.fallbacks / "manifest.json").write_text("[]", encoding="utf-8")
 
@@ -55,10 +56,11 @@ class DotnetNoticeTests(unittest.TestCase):
         ], capture_output=True, text=True, timeout=90, env={**os.environ, "DOTNET_CLI_TELEMETRY_OPTOUT": "1"})
 
     def test_collects_exact_embedded_and_fallback_texts_for_runtime_packages(self):
+        fallback_identity = "Fallback/2.0.0"
         self.deps_manifest({
             "Embedded/1.0.0": {"runtime": {"lib/net11.0/Embedded.dll": {}},
                                "dependencies": {"Fallback": "2.0.0"}},
-            "Fallback/2.0.0": {"runtime": {"lib/net11.0/Fallback.dll": {}}},
+            fallback_identity: {"runtime": {"lib/net11.0/Fallback.dll": {}}},
             "BuildOnly/1.0.0": {},
             "Placeholder/1.0.0": {"runtime": {"lib/net11.0/_._": {}}},
         })
@@ -67,15 +69,15 @@ class DotnetNoticeTests(unittest.TestCase):
             "THIRD PARTY NOTICE.txt": b"Third-party copyright\n",
         })
         self.package("Fallback", "2.0.0", '<license type="expression">MIT</license>', {})
-        self.upstream_license("Fallback/2.0.0")
+        self.upstream_license(fallback_identity)
 
         result = self.collect()
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        index = (self.output / "INDEX.txt").read_text(encoding="utf-8")
+        index = self.index_path.read_text(encoding="utf-8")
         self.assertIn("Embedded/1.0.0", index)
         self.assertIn("NuGet Embedded/1.0.0:THIRD PARTY NOTICE.txt", index)
-        self.assertIn("Fallback/2.0.0", index)
+        self.assertIn(fallback_identity, index)
         self.assertIn("https://example.invalid/LICENSE", index)
         self.assertNotIn("BuildOnly", index)
         self.assertNotIn("Placeholder", index)
@@ -97,7 +99,7 @@ class DotnetNoticeTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Missing/1.2.3", result.stderr)
         self.assertIn("No license text was found", result.stderr)
-        self.assertFalse((self.output / "INDEX.txt").exists())
+        self.assertFalse(self.index_path.exists())
 
     def test_rejects_a_license_file_with_only_a_bom_and_whitespace(self):
         self.deps_manifest({"Empty/1.0.0": {"runtime": {"lib/net11.0/Empty.dll": {}}}})
@@ -108,7 +110,7 @@ class DotnetNoticeTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Empty/1.0.0", result.stderr)
         self.assertIn("Invalid license or notice document 'LICENSE'", result.stderr)
-        self.assertFalse((self.output / "INDEX.txt").exists())
+        self.assertFalse(self.index_path.exists())
 
 
 if __name__ == "__main__":

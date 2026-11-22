@@ -18,6 +18,7 @@ describe('browser dependency notices', () => {
         writeFileSync(join(root, 'package.json'), JSON.stringify(data))
         writeFileSync(join(root, 'LICENSE'), license)
         writeFileSync(join(root, 'src', 'CopyrightNotice.txt'), 'Required nested copyright notice')
+        writeFileSync(join(root, 'src', 'third_party_licences.txt'), 'Embedded third-party licence')
         const bundle = {
             'chunk.js': {
                 type: 'chunk',
@@ -47,6 +48,8 @@ describe('browser dependency notices', () => {
             source: expect.stringMatching(/fixture-package[\s\S]*Upstream license terms[\s\S]*Required nested copyright notice[\s\S]*rolldown[\s\S]*VoidZero/),
         }))
         const [{ source }] = emitFile.mock.calls[0]
+        const fixtureNotice = source.split('\n## ').find(section => section.startsWith('fixture-package - '))
+        expect(fixtureNotice).toContain('Embedded third-party licence')
         expect(source).toContain('# Vite core license')
         expect(source).not.toContain('# Licenses of bundled dependencies')
     })

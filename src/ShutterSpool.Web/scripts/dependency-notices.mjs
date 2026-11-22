@@ -23,7 +23,16 @@ const embeddedNotices = new Map([
 ])
 
 const licenseFile = /^(?:licen[cs]es?|copying)(?:[_. -]|$)/i
-const noticeFile = /^(?:notices?|copyright(?:[_. -]?notices?)?|third[_. -]?party[_. -]?(?:licen[cs]es?|notices?))(?:[_. -]|$)/i
+const noticeFiles = [
+    /^notices?(?:[_. -]|$)/i,
+    /^copyright(?:[_. -]?notices?)?(?:[_. -]|$)/i,
+    /^third[_. -]?party[_. -]?(?:licen[cs]es?|notices?)(?:[_. -]|$)/i,
+]
+
+function compareOrdinal(left, right) {
+    if (left === right) return 0
+    return left < right ? -1 : 1
+}
 
 function bundledPackageRoots(bundle) {
     const builder = createRequire(import.meta.resolve('@nuxt/vite-builder/package.json'))
@@ -45,7 +54,7 @@ function bundledPackageRoots(bundle) {
 
 function packageNoticeFiles(root) {
     return readdirSync(root, { recursive: true, withFileTypes: true })
-        .filter(file => file.isFile() && (licenseFile.test(file.name) || noticeFile.test(file.name)))
+        .filter(file => file.isFile() && (licenseFile.test(file.name) || noticeFiles.some(pattern => pattern.test(file.name))))
         .filter(file => !relative(root, file.parentPath).split(sep).includes('node_modules'))
         .map(file => join(file.parentPath, file.name))
 }
@@ -54,7 +63,7 @@ function formatPackageNotice(entry, paths) {
     const { name, version, identifier, text } = entry
     const texts = new Set()
     let hasLicense = false
-    for (const path of [...paths].sort()) {
+    for (const path of [...paths].sort(compareOrdinal)) {
         const source = readFileSync(path, 'utf8').replaceAll('\r\n', '\n').trim()
         if (!source) continue
         const isLicense = licenseFile.test(basename(path))
@@ -71,7 +80,8 @@ function formatPackageNotice(entry, paths) {
     }
     const embedded = embeddedNotices.get(name)
     if (embedded) texts.add(readFileSync(embedded, 'utf8').replaceAll('\r\n', '\n').trim())
-    const heading = `## ${name} - ${version}${identifier ? ` (${identifier})` : ''}`
+    const licenseSuffix = identifier ? ` (${identifier})` : ''
+    const heading = `## ${name} - ${version}${licenseSuffix}`
     return [heading, ...texts].join('\n\n')
 }
 
@@ -100,7 +110,7 @@ export function dependencyNotices() {
                 }
 
                 const sections = ['# Web dependency notices', 'The following package code or assets are included in ShutterSpool’s browser build.']
-                for (const key of [...entries.keys()].sort()) {
+                for (const key of [...entries.keys()].sort(compareOrdinal)) {
                     const files = notices.get(key)
                     assert(files, `Could not locate the installed files for ${key}`)
                     sections.push(formatPackageNotice(entries.get(key), files))
