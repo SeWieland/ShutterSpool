@@ -6,7 +6,7 @@ using ShutterSpool.Application.Spool;
 
 namespace ShutterSpool.Infrastructure.Spool;
 
-internal sealed class PostgresProtectionAdmissionLock(string connectionString, ISpool spool) : IProtectionAdmissionLock
+internal sealed class PostgresProtectionAdmissionLock(NpgsqlDataSource dataSource, ISpool spool) : IProtectionAdmissionLock
 {
     private readonly ICommittedOriginalReader _spool = spool as ICommittedOriginalReader
         ?? throw new InvalidOperationException("The configured spool cannot read committed originals.");
@@ -18,7 +18,7 @@ internal sealed class PostgresProtectionAdmissionLock(string connectionString, I
             || originals.Select(item => item.AssetId).Distinct().Count() != originals.Count)
             throw new ArgumentException("A bounded distinct original set is required.", nameof(originals));
         ProtectionOriginal[] ordered = [.. originals.OrderBy(item => item.AssetId)];
-        var connection = new NpgsqlConnection(connectionString);
+        var connection = dataSource.CreateConnection();
         var acquired = new List<string>(ordered.Length);
         try
         {

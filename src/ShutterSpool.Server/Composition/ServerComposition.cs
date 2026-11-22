@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using Npgsql;
 using ShutterSpool.Application.Workspaces;
 using ShutterSpool.Server.Api.Workspaces;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -113,7 +114,10 @@ internal static class ServerComposition
         builder.Services.AddShutterSpoolInfrastructure(builder.Configuration);
         string? databaseConnection = builder.Configuration.GetConnectionString("shutterspool-control");
         if (!string.IsNullOrWhiteSpace(databaseConnection))
-            builder.Services.AddHealthChecks().AddCheck("postgres", new PostgresReadinessCheck(databaseConnection), tags: ["ready"]);
+        {
+            builder.Services.AddSingleton(_ => new PostgresReadinessCheck(NpgsqlDataSource.Create(databaseConnection)));
+            builder.Services.AddHealthChecks().AddCheck<PostgresReadinessCheck>("postgres", tags: ["ready"]);
+        }
         builder.Services.AddHybridCache(options =>
         {
             options.MaximumPayloadBytes = 4_096;

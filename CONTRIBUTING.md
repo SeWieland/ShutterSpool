@@ -18,6 +18,8 @@ dotnet restore ShutterSpool.slnx --locked-mode
 dotnet build ShutterSpool.slnx --no-restore
 ```
 
+Update direct NuGet package versions in [Directory.Packages.props](Directory.Packages.props) and commit the affected lock files.
+
 Restore, typecheck, test and build the frontend from `src/ShutterSpool.Web` using the [Web instructions](src/ShutterSpool.Web/README.md#build-and-check).
 There is no root `package.json`.
 Follow [AppHost setup](src/ShutterSpool.AppHost/README.md#start-the-development-environment) to supply persistent development secrets, prepare application data and start the full environment.

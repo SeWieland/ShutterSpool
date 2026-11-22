@@ -45,7 +45,8 @@ public sealed partial class ConfigurationApiTests
         Assert.Empty(await verify.GalleryProtectionAssets.ToArrayAsync(token));
 
         var spool = new FileSystemSpool(new FileSystemSpoolOptions { RootPath = fixture.Database.SpoolRoot, ReservedBytes = 0 });
-        var admission = new PostgresProtectionAdmissionLock(verify.Database.GetConnectionString()!, spool);
+        await using var lockSource = NpgsqlDataSource.Create(verify.Database.GetConnectionString()!);
+        var admission = new PostgresProtectionAdmissionLock(lockSource, spool);
         await using IProtectionAdmissionLease lease = await admission.AcquireSharedAsync([original], token);
         Assert.False(await lease.AreAvailableAsync(token));
     }
@@ -106,8 +107,9 @@ public sealed partial class ConfigurationApiTests
         await using var connectionDatabase = new ShutterSpoolDbContext(fixture.Database.Options);
         string connectionString = connectionDatabase.Database.GetConnectionString()!;
         var spool = new FileSystemSpool(new FileSystemSpoolOptions { RootPath = fixture.Database.SpoolRoot, ReservedBytes = 0 });
-        var admission = new PostgresProtectionAdmissionLock(connectionString, spool);
-        var removalLocks = new PostgresOriginalAssetLock(connectionString);
+        await using var lockSource = NpgsqlDataSource.Create(connectionString);
+        var admission = new PostgresProtectionAdmissionLock(lockSource, spool);
+        var removalLocks = new PostgresOriginalAssetLock(lockSource);
         await using IProtectionAdmissionLease shared = await admission.AcquireSharedAsync([original], token);
         Task<IOriginalAssetLockLease>? queuedRemoval = null;
         try
