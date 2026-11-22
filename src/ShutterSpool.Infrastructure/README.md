@@ -22,6 +22,7 @@ Registration itself does not select a workspace or recover media.
 The registry resolves ready workspaces and camera routes from the control database; it never selects a tenant database implicitly.
 Fresh control contexts also keep a failed registry write from leaving tracked entities in the next operation.
 Requests and worker iterations bind their workspace before resolving tenant services. The tenant factory then uses that workspace's runtime connection; resolving it before binding fails.
+EF and advisory-lock adapters reuse a process-owned data source for each tenant runtime connection, sharing its connection limit. Each advisory lease retains its own PostgreSQL session through release.
 The [authorization guide](../../docs/architecture/authentication-and-authorization.md#workspace-selection) explains the request order.
 
 Startup reads and validates the complete ready-workspace inventory, freezes those mappings, then acquires all storage writer leases.

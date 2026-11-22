@@ -1050,13 +1050,16 @@ public sealed partial class ConfigurationApiTests
                 using var connectionContext = new ShutterSpoolDbContext(database.Options);
                 string testConnectionString = connectionContext.Database.GetConnectionString()!;
                 services.RemoveAll<PostgresOriginalAssetLock>();
-                services.AddSingleton(new PostgresOriginalAssetLock(testConnectionString));
+                services.AddSingleton(provider => new PostgresOriginalAssetLock(
+                    provider.GetRequiredService<WorkspaceDataSources>().Get(testConnectionString)));
                 services.RemoveAll<ShutterSpool.Application.Retention.IRetentionControllerLock>();
-                services.AddSingleton<ShutterSpool.Application.Retention.IRetentionControllerLock>(
-                    new PostgresRetentionControllerLock(testConnectionString));
+                services.AddSingleton<ShutterSpool.Application.Retention.IRetentionControllerLock>(provider =>
+                    new PostgresRetentionControllerLock(
+                        provider.GetRequiredService<WorkspaceDataSources>().Get(testConnectionString)));
                 services.RemoveAll<IProtectionAdmissionLock>();
                 services.AddScoped<IProtectionAdmissionLock>(provider => new PostgresProtectionAdmissionLock(
-                    testConnectionString, provider.GetRequiredService<ShutterSpool.Application.Ingest.ISpool>()));
+                    provider.GetRequiredService<WorkspaceDataSources>().Get(testConnectionString),
+                    provider.GetRequiredService<ShutterSpool.Application.Ingest.ISpool>()));
                 services.AddSingleton(Microsoft.Extensions.Options.Options.Create(new CredentialProtectionOptions
                 { EncryptionKey = invalidEncryptionKey ? "synthetic-invalid-base64" : storage.Configuration["ShutterSpool:Security:EncryptionKey"]! }));
                 if (minimumPasswordLength is not null)

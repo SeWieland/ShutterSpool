@@ -3,7 +3,7 @@ using ShutterSpool.Application.Spool;
 
 namespace ShutterSpool.Infrastructure.Spool;
 
-internal sealed class PostgresOriginalAssetLock(string connectionString) : IOriginalAssetLock
+internal sealed class PostgresOriginalAssetLock(NpgsqlDataSource dataSource) : IOriginalAssetLock
 {
     public Task<IOriginalAssetLockLease> AcquireSharedAsync(Guid assetId, string storageKey, CancellationToken cancellationToken) =>
         AcquireAsync(assetId, storageKey, shared: true, cancellationToken);
@@ -43,7 +43,7 @@ internal sealed class PostgresOriginalAssetLock(string connectionString) : IOrig
         if (storageKey.Length > 1_024) throw new ArgumentOutOfRangeException(nameof(storageKey));
 
         string lockKey = $"shutterspool-original:{assetId:N}:{storageKey}";
-        var connection = new NpgsqlConnection(connectionString);
+        var connection = dataSource.CreateConnection();
         try
         {
             await connection.OpenAsync(cancellationToken);

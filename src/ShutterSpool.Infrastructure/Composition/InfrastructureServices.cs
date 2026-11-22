@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Npgsql;
 using ShutterSpool.Application.CaptureGrouping;
 using ShutterSpool.Application.Captures;
 using ShutterSpool.Application.Curation;
@@ -55,6 +56,10 @@ public static class InfrastructureServices
     private static IConfiguration TenantConfiguration(IServiceProvider provider) =>
         provider.GetRequiredService<WorkspaceConfiguration>().Value;
 
+    private static NpgsqlDataSource TenantDataSource(IServiceProvider provider) =>
+        provider.GetRequiredService<WorkspaceDataSources>().Get(
+            TenantConfiguration(provider).GetConnectionString(TenantConnectionName)!);
+
     private static void AddWorkspacePersistence(IServiceCollection services, IConfiguration configuration)
     {
         // Freeze resolved secrets and manifest values for this process; retargeting requires a restart.
@@ -62,13 +67,14 @@ public static class InfrastructureServices
         services.AddScoped(_ => new WorkspaceContext());
         services.AddScoped(provider => new WorkspaceConfiguration(WorkspaceRuntime.Configure(Deployment(provider), provider.GetRequiredService<WorkspaceContext>())));
         services.AddSingleton<WorkspaceSpoolResources>();
+        services.AddSingleton<WorkspaceDataSources>();
         services.AddSingleton<WorkspaceWriterLease>();
         services.AddSingleton<WorkspaceInventory>();
         services.AddDbContextFactory<WorkspaceControlDbContext>((provider, options) =>
             options.UseNpgsql(WorkspaceControlDbContext.RuntimeConnection(Deployment(provider))));
         services.AddScoped<IWorkspaceRegistry, EfWorkspaceRegistry>();
         services.AddDbContextFactory<ShutterSpoolDbContext>((provider, options) =>
-            options.UseNpgsql(TenantConfiguration(provider).GetConnectionString(TenantConnectionName)), ServiceLifetime.Scoped);
+            options.UseNpgsql(TenantDataSource(provider)), ServiceLifetime.Scoped);
         services.TryAddSingleton(TimeProvider.System);
         services.AddScoped<DatabaseInitializer>();
     }
@@ -120,7 +126,7 @@ public static class InfrastructureServices
             ReservedBytes = long.TryParse(TenantConfiguration(provider)["ShutterSpool:Spool:ReservedBytes"], out long bytes) ? bytes : null,
             ReservedPercent = double.TryParse(TenantConfiguration(provider)["ShutterSpool:Spool:ReservedPercent"], out double percent) ? percent : null,
         }));
-        services.AddScoped(provider => new PostgresOriginalAssetLock(TenantConfiguration(provider).GetConnectionString(TenantConnectionName) ?? ""));
+        services.AddScoped<PostgresOriginalAssetLock>(provider => new(TenantDataSource(provider)));
         services.AddScoped<IOriginalAssetLock>(provider => provider.GetRequiredService<PostgresOriginalAssetLock>());
         services.AddScoped<IExactOriginalRemoval>(provider => new FileSystemExactOriginalRemoval(TenantConfiguration(provider)));
         services.AddScoped<ICommittedOriginalReader>(provider => new PostgresCommittedOriginalReader(
@@ -172,12 +178,12 @@ public static class InfrastructureServices
         services.AddScoped<RetentionCapacityReadService>();
         services.AddScoped<IAssetProtectionStore, EfAssetProtectionStore>();
         services.AddScoped<IProtectionAdmissionLock>(provider =>
-            new PostgresProtectionAdmissionLock(TenantConfiguration(provider).GetConnectionString(TenantConnectionName) ?? "",
+            new PostgresProtectionAdmissionLock(TenantDataSource(provider),
                 provider.GetRequiredService<ISpool>()));
         services.AddScoped<AssetProtectionService>();
         services.AddScoped<IRetentionRemovalStore, EfRetentionRemovalStore>();
         services.AddScoped<IRetentionControllerLock>(provider =>
-            new PostgresRetentionControllerLock(TenantConfiguration(provider).GetConnectionString(TenantConnectionName) ?? ""));
+            new PostgresRetentionControllerLock(TenantDataSource(provider)));
         services.AddScoped<RetentionRemovalService>();
         services.AddScoped<PrivacyErasureSuppressionPersistence>();
         services.AddScoped<IPrivacyErasureStore, EfPrivacyErasureStore>();

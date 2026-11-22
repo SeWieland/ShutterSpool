@@ -5,6 +5,7 @@ using ShutterSpool.Infrastructure.Workspaces;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
 using ShutterSpool.Infrastructure.Composition;
 using ShutterSpool.Infrastructure.Persistence;
 
@@ -12,6 +13,53 @@ namespace ShutterSpool.IntegrationTests;
 
 public sealed class WorkspaceScopeTests
 {
+    [Fact]
+    public async Task Tenant_data_sources_outlive_scopes_and_separate_database_roles()
+    {
+        const string tenant = "Host=localhost;Database=studio;Username=studio_writer";
+        WorkspaceDataSources sources;
+        await using (var provider = new ServiceCollection().AddLogging()
+            .AddShutterSpoolInfrastructure(new ConfigurationBuilder().Build()).BuildServiceProvider())
+        {
+            sources = provider.GetRequiredService<WorkspaceDataSources>();
+            var source = sources.Get(tenant);
+            using (IServiceScope scope = provider.CreateScope())
+                Assert.Same(source, scope.ServiceProvider.GetRequiredService<WorkspaceDataSources>().Get(tenant));
+            Assert.Same(source, sources.Get(tenant));
+            Assert.NotSame(source, sources.Get("Host=localhost;Database=studio;Username=studio_operator"));
+            Assert.NotSame(source, sources.Get("Host=localhost;Database=other;Username=studio_writer"));
+        }
+        Assert.Throws<ObjectDisposedException>(() => sources.Get(tenant));
+    }
+
+    [Fact]
+    public async Task Tenant_EF_and_advisory_connections_reuse_the_same_bounded_pool()
+    {
+        CancellationToken token = TestContext.Current.CancellationToken;
+        await using var fixture = await ArchitectureTestDatabase.CreateAsync();
+        await using var setup = new ShutterSpoolDbContext(fixture.Options);
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ConnectionStrings:Workspaces:studio:Runtime"] = setup.Database.GetConnectionString(),
+        }).Build();
+        await using var provider = new ServiceCollection().AddLogging()
+            .AddShutterSpoolInfrastructure(configuration).BuildServiceProvider();
+        await using AsyncServiceScope scope = provider.CreateAsyncScope();
+        IServiceProvider tenant = scope.ServiceProvider;
+        tenant.GetRequiredService<WorkspaceContext>().Bind(
+            new WorkspaceDefinition(Guid.NewGuid(), "studio", "volume-a", fixture.SpoolRoot, 100));
+        string connectionString = tenant.GetRequiredService<WorkspaceConfiguration>().Value.GetConnectionString("shutterspool")!;
+
+        int advisorySession;
+        var source = tenant.GetRequiredService<WorkspaceDataSources>().Get(connectionString);
+        await using (NpgsqlConnection connection = await source.OpenConnectionAsync(token))
+            advisorySession = connection.ProcessID;
+
+        var database = tenant.GetRequiredService<ShutterSpoolDbContext>();
+        await database.Database.OpenConnectionAsync(token);
+        Assert.Equal(advisorySession, ((NpgsqlConnection)database.Database.GetDbConnection()).ProcessID);
+    }
+
     [Fact]
     public async Task Registry_is_available_before_selection_and_tenant_database_requires_its_bound_workspace()
     {

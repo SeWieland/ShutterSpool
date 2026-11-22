@@ -22,10 +22,10 @@ public sealed class OriginalStorageLockPostgresTests
         await using var database = new ShutterSpoolDbContext(fixture.Options);
         await database.Database.MigrateAsync(token);
         (Guid assetId, string spoolKey, FileSystemSpool spool) = await AddSpooledAssetAsync(database, fixture.SpoolRoot, token);
-        string connectionString = LockConnectionString(database);
+        await using var lockSource = NpgsqlDataSource.Create(LockConnectionString(database));
         var reader = new PostgresCommittedOriginalReader(spool, new PooledDbContextFactory<ShutterSpoolDbContext>(fixture.Options),
-            new PostgresOriginalAssetLock(connectionString));
-        var removalLocks = new PostgresOriginalAssetLock(connectionString);
+            new PostgresOriginalAssetLock(lockSource));
+        var removalLocks = new PostgresOriginalAssetLock(lockSource);
 
         await using Stream original = await reader.OpenReadAsync(spoolKey, token);
         byte[] sample = new byte[1];
@@ -55,9 +55,9 @@ public sealed class OriginalStorageLockPostgresTests
         await using var database = new ShutterSpoolDbContext(fixture.Options);
         await database.Database.MigrateAsync(token);
         (Guid assetId, string spoolKey, FileSystemSpool spool) = await AddSpooledAssetAsync(database, fixture.SpoolRoot, token);
-        string connectionString = LockConnectionString(database);
-        var firstLocks = new PostgresOriginalAssetLock(connectionString);
-        var secondLocks = new PostgresOriginalAssetLock(connectionString);
+        await using var lockSource = NpgsqlDataSource.Create(LockConnectionString(database));
+        var firstLocks = new PostgresOriginalAssetLock(lockSource);
+        var secondLocks = new PostgresOriginalAssetLock(lockSource);
         var reader = new PostgresCommittedOriginalReader(spool, new PooledDbContextFactory<ShutterSpoolDbContext>(fixture.Options), firstLocks);
 
         await using IOriginalAssetLockLease previewUse = await firstLocks.AcquireSharedAsync(assetId, spoolKey, token);
@@ -86,10 +86,10 @@ public sealed class OriginalStorageLockPostgresTests
         await using var database = new ShutterSpoolDbContext(fixture.Options);
         await database.Database.MigrateAsync(token);
         (Guid assetId, string spoolKey, FileSystemSpool spool) = await AddSpooledAssetAsync(database, fixture.SpoolRoot, token);
-        string connectionString = LockConnectionString(database);
-        var locks = new PostgresOriginalAssetLock(connectionString);
+        await using var lockSource = NpgsqlDataSource.Create(LockConnectionString(database));
+        var locks = new PostgresOriginalAssetLock(lockSource);
         var reader = new PostgresCommittedOriginalReader(spool, new PooledDbContextFactory<ShutterSpoolDbContext>(fixture.Options),
-            new PostgresOriginalAssetLock(connectionString));
+            new PostgresOriginalAssetLock(lockSource));
 
         await using (IOriginalAssetLockLease exclusive = await locks.AcquireExclusiveAsync(assetId, spoolKey, token))
         using (var shortWait = new CancellationTokenSource(TimeSpan.FromMilliseconds(200)))

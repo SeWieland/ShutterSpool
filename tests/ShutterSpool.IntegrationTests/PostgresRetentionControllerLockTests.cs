@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using ShutterSpool.Infrastructure.Persistence;
 using ShutterSpool.Infrastructure.Spool;
 
@@ -15,8 +16,10 @@ public sealed class PostgresRetentionControllerLockTests
         await using var fixture = await ArchitectureTestDatabase.CreateAsync();
         await using var database = new ShutterSpoolDbContext(fixture.Options);
         string connectionString = database.Database.GetDbConnection().ConnectionString;
-        var first = new PostgresRetentionControllerLock(connectionString);
-        var second = new PostgresRetentionControllerLock(connectionString);
+        await using var firstSource = NpgsqlDataSource.Create(connectionString);
+        await using var secondSource = NpgsqlDataSource.Create(connectionString);
+        var first = new PostgresRetentionControllerLock(firstSource);
+        var second = new PostgresRetentionControllerLock(secondSource);
 
         await using (IAsyncDisposable firstLease = await first.TryAcquireAsync(token)
             ?? throw new InvalidOperationException("The first controller should acquire the pass lease."))

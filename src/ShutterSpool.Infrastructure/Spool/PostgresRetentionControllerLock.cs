@@ -3,13 +3,13 @@ using ShutterSpool.Application.Retention;
 
 namespace ShutterSpool.Infrastructure.Spool;
 
-internal sealed class PostgresRetentionControllerLock(string connectionString) : IRetentionControllerLock
+internal sealed class PostgresRetentionControllerLock(NpgsqlDataSource dataSource) : IRetentionControllerLock
 {
     private const string LockKey = "shutterspool-retention-controller";
 
     public async ValueTask<IAsyncDisposable?> TryAcquireAsync(CancellationToken cancellationToken)
     {
-        var connection = new NpgsqlConnection(connectionString);
+        var connection = dataSource.CreateConnection();
         try
         {
             await connection.OpenAsync(cancellationToken);
