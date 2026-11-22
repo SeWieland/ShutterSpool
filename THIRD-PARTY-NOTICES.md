@@ -5,6 +5,12 @@ Third-party material retains its own license; the project license does not repla
 The source repository's package manifests and lockfiles identify dependencies fetched during a build.
 Redistributing a built application or container requires preserving the notices and source obligations for the components actually included.
 
+## Application dependencies
+
+The Server image includes the notices for its bundled NuGet packages in `/app/licenses/dotnet/`
+and notices for dependencies compiled into the web output at `/app/wwwroot/WEB-DEPENDENCY-NOTICES.md`.
+The Compose ZIP carries the notices for its own assets, including the sign-in theme font below.
+
 ## Manrope font
 
 Copyright 2018 The Manrope Project Authors.

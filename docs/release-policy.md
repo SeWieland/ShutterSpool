@@ -40,6 +40,9 @@ The [`release.yml` workflow](../.github/workflows/release.yml) runs for `vX.Y.Z`
 
 The Compose configuration pins the image by digest. The Compose-only `tools/build-release.py` command takes version, revision and image digest inputs and does not build or export an image. No local image archive, private package, ORAS transfer, moving alias or candidate promotion is used.
 
+The Server image build collects notices for published NuGet packages and browser bundles. Review changes to upstream license, copyright and NOTICE text when updating dependencies. If a bundled dependency omits required text, add the upstream text with its exact version and source before building a release. See the [NuGet notice manifest](../tools/dotnet-notices/manifest.json) and [web notice configuration](../src/ShutterSpool.Web/scripts/dependency-notices.mjs).
+The Compose ZIP carries the deployment assets and their notices.
+
 SFTPGo attribution is generated at build time from the image selected in `deploy/images/compose.yaml`. The generator reads the Linux amd64 image metadata, then produces the app metadata and packaged notices with matching source and terms links. The package builder uses Node.js to run the same generator and checks every camera-edge profile against the resulting image digest. Builds need Docker Hub access; the running app makes no registry request for attribution.
 Image updates require no manual version/source-link edits. Missing metadata or mismatched images fail the build; upstream LICENSE/NOTICE changes remain part of dependency review, without a separate hash-approval mechanism. Independently replacing an operator's SFTPGo image requires rebuilding matching attribution.
 

@@ -1,0 +1,197 @@
+[
+  {
+    "packages": [
+      "MetadataExtractor/2.9.3"
+    ],
+    "documents": [
+      {
+        "file": "metadata-extractor-LICENSE.txt",
+        "source": "https://github.com/drewnoakes/metadata-extractor-dotnet/blob/15be36f1f918e6cdba0bfa8feb7af7f8ac13b69f/LICENSE",
+        "license": true
+      }
+    ]
+  },
+  {
+    "packages": [
+      "Microsoft.AspNetCore.Authentication.JwtBearer/11.0.0",
+      "Microsoft.AspNetCore.OpenApi/11.0.0"
+    ],
+    "documents": [
+      {
+        "file": "dotnet-LICENSE.txt",
+        "source": "https://github.com/dotnet/dotnet/blob/297acf930fb0f5c07fd4e51d78e521b4ad2e5d1f/src/aspnetcore/LICENSE.txt",
+        "license": true
+      }
+    ]
+  },
+  {
+    "packages": [
+      "Microsoft.Bcl.Cryptography/10.0.2"
+    ],
+    "documents": [
+      {
+        "file": "dotnet-LICENSE.txt",
+        "source": "https://github.com/dotnet/dotnet/blob/44525024595742ebe09023abe709df51de65009b/src/runtime/LICENSE.TXT",
+        "license": true
+      }
+    ]
+  },
+  {
+    "packages": [
+      "Microsoft.EntityFrameworkCore/11.0.0",
+      "Microsoft.EntityFrameworkCore.Abstractions/11.0.0",
+      "Microsoft.EntityFrameworkCore.Relational/11.0.0"
+    ],
+    "documents": [
+      {
+        "file": "efcore-LICENSE.txt",
+        "source": "https://github.com/dotnet/dotnet/blob/297acf930fb0f5c07fd4e51d78e521b4ad2e5d1f/src/efcore/LICENSE.txt",
+        "license": true
+      }
+    ]
+  },
+  {
+    "packages": [
+      "Microsoft.Extensions.AmbientMetadata.Application/11.0.0",
+      "Microsoft.Extensions.Caching.Hybrid/11.0.0",
+      "Microsoft.Extensions.Compliance.Abstractions/11.0.0",
+      "Microsoft.Extensions.Compliance.Redaction/11.0.0",
+      "Microsoft.Extensions.DependencyInjection.AutoActivation/11.0.0",
+      "Microsoft.Extensions.Diagnostics.ExceptionSummarization/11.0.0",
+      "Microsoft.Extensions.Http.Diagnostics/11.0.0",
+      "Microsoft.Extensions.Http.Resilience/11.0.0",
+      "Microsoft.Extensions.Resilience/11.0.0",
+      "Microsoft.Extensions.ServiceDiscovery/11.0.0",
+      "Microsoft.Extensions.ServiceDiscovery.Abstractions/11.0.0",
+      "Microsoft.Extensions.Telemetry/11.0.0",
+      "Microsoft.Extensions.Telemetry.Abstractions/11.0.0"
+    ],
+    "documents": [
+      {
+        "file": "extensions-LICENSE.txt",
+        "source": "https://github.com/dotnet/extensions/blob/c60d72e7973a90cd4e4300d9153e97b93315e4b7/LICENSE",
+        "license": true
+      },
+      {
+        "file": "extensions-THIRD-PARTY-NOTICES.txt",
+        "source": "https://github.com/dotnet/extensions/blob/c60d72e7973a90cd4e4300d9153e97b93315e4b7/THIRD-PARTY-NOTICES.TXT",
+        "license": false
+      }
+    ]
+  },
+  {
+    "packages": [
+      "Microsoft.IdentityModel.Abstractions/8.23.0",
+      "Microsoft.IdentityModel.JsonWebTokens/8.23.0",
+      "Microsoft.IdentityModel.Logging/8.23.0",
+      "Microsoft.IdentityModel.Protocols/8.23.0",
+      "Microsoft.IdentityModel.Protocols.OpenIdConnect/8.23.0",
+      "Microsoft.IdentityModel.Tokens/8.23.0",
+      "System.IdentityModel.Tokens.Jwt/8.23.0"
+    ],
+    "documents": [
+      {
+        "file": "identitymodel-LICENSE.txt",
+        "source": "https://github.com/AzureAD/azure-activedirectory-identitymodel-extensions-for-dotnet/blob/8b16f418b3d587416d293e9ba34c5d310781cdb3/LICENSE.txt",
+        "license": true
+      },
+      {
+        "file": "identitymodel-THIRD-PARTY-NOTICES.txt",
+        "source": "https://github.com/AzureAD/azure-activedirectory-identitymodel-extensions-for-dotnet/blob/8b16f418b3d587416d293e9ba34c5d310781cdb3/ThirdPartyNotice.txt",
+        "license": false
+      }
+    ]
+  },
+  {
+    "packages": [
+      "Microsoft.OpenApi/3.11.0"
+    ],
+    "documents": [
+      {
+        "file": "openapi-LICENSE.txt",
+        "source": "https://github.com/Microsoft/OpenAPI.NET/blob/2fea8ae4ee7ce6b9c313fa0822f5c617da18c351/LICENSE",
+        "license": true
+      }
+    ]
+  },
+  {
+    "packages": [
+      "Npgsql/11.0.0"
+    ],
+    "documents": [
+      {
+        "file": "npgsql-LICENSE.txt",
+        "source": "https://github.com/npgsql/npgsql/blob/4d174200ed48e3e3ab16419dbf84dd655da59de6/LICENSE",
+        "license": true
+      }
+    ]
+  },
+  {
+    "packages": [
+      "Npgsql.EntityFrameworkCore.PostgreSQL/11.0.0"
+    ],
+    "documents": [
+      {
+        "file": "npgsql-efcore-LICENSE.txt",
+        "source": "https://github.com/npgsql/efcore.pg/blob/fd3674f72e848a597fe2c0273cfffb925572190c/LICENSE",
+        "license": true
+      }
+    ]
+  },
+  {
+    "packages": [
+      "Polly.Core/8.4.2",
+      "Polly.Extensions/8.4.2",
+      "Polly.RateLimiting/8.4.2"
+    ],
+    "documents": [
+      {
+        "file": "polly-LICENSE.txt",
+        "source": "https://github.com/App-vNext/Polly/blob/077cf388fc5a85a7f6cd0fdcb2b68d17a898019e/LICENSE",
+        "license": true
+      }
+    ]
+  },
+  {
+    "packages": [
+      "RESPite/3.4.35",
+      "StackExchange.Redis/3.4.35"
+    ],
+    "documents": [
+      {
+        "file": "stackexchange-redis-LICENSE.txt",
+        "source": "https://github.com/seredis/StackExchange.Redis/blob/510f791e70158665d7e8207c84d32d0a2b2a2792/LICENSE",
+        "license": true
+      },
+      {
+        "file": "stackexchange-redis-THIRD-PARTY-NOTICES.md",
+        "source": "https://github.com/seredis/StackExchange.Redis/blob/510f791e70158665d7e8207c84d32d0a2b2a2792/THIRD-PARTY-NOTICES.md",
+        "license": false
+      }
+    ]
+  },
+  {
+    "packages": [
+      "System.IO.Hashing/10.0.13"
+    ],
+    "documents": [
+      {
+        "file": "dotnet-LICENSE.txt",
+        "source": "https://github.com/dotnet/dotnet/blob/4099f83977f4d29604a9aeb971fb0a7bc1d5f699/src/runtime/LICENSE.TXT",
+        "license": true
+      }
+    ]
+  },
+  {
+    "packages": [
+      "XmpCore/6.1.10.1"
+    ],
+    "documents": [
+      {
+        "file": "xmpcore-LICENSE.txt",
+        "source": "https://github.com/raw-tiff/raw/blob/c9693a926e1ee6a5188b4f82d03b41c1e95f23f1/README.md#additional-licenses (preserved Adobe Java XMP SDK license declared at https://github.com/drewnoakes/xmp-core-dotnet/blob/310a7b5719b0a12b7c74dbb1839979d077be2c48/README.md#license; original link https://www.adobe.com/devnet/xmp/library/eula-xmp-library-java.html)",
+        "license": true
+      }
+    ]
+  }
+]
