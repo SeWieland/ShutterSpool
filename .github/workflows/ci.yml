@@ -86,6 +86,8 @@ jobs:
         working-directory: src/ShutterSpool.Web
       - name: Test camera FTP client security
         run: python tests/verify-camera-ftp-client.py
+      - name: Test NuGet notice collection
+        run: python tests/verify-dotnet-notices.py
       - name: Test Compose packaging
         env:
           COVERAGE_FILE: ${{ runner.temp }}/package-tests.coverage
@@ -112,6 +114,10 @@ jobs:
         run: dotnet restore src/ShutterSpool.AppHost/ShutterSpool.AppHost.csproj --locked-mode
       - name: Build solution
         run: dotnet build --no-restore
+      - name: Check the Server's NuGet notices
+        run: |
+          deps=$(dotnet msbuild src/ShutterSpool.Server/ShutterSpool.Server.csproj -nologo -getProperty:ProjectDepsFilePath)
+          dotnet run --file tools/collect-dotnet-notices.cs -- "$deps" "$NUGET_PACKAGES" tools/dotnet-notices "$RUNNER_TEMP/dotnet-notices"
       - name: Install .NET coverage collector
         run: |
           version=$(jq -er '.tools["dotnet-coverage"].version' .github/.config/dotnet-tools.json)

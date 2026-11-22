@@ -7,7 +7,7 @@ COPY src/ShutterSpool.Web/ ./
 COPY tools/generate-attribution.mjs /source/tools/generate-attribution.mjs
 COPY deploy/images/compose.yaml /source/deploy/images/compose.yaml
 COPY THIRD-PARTY-NOTICES.md /source/THIRD-PARTY-NOTICES.md
-RUN npm run build
+RUN npm run build && test -s /source/src/ShutterSpool.Server/wwwroot/WEB-DEPENDENCY-NOTICES.md
 
 FROM mcr.microsoft.com/dotnet/sdk:11.0.100-resolute@sha256:65f3c7c6a25a239ab3e6719f2896147e7b68242ff2d8818dd70498bde6ef8bea AS build
 WORKDIR /source
@@ -17,13 +17,17 @@ COPY src/ShutterSpool.Application/ src/ShutterSpool.Application/
 COPY src/ShutterSpool.Infrastructure/ src/ShutterSpool.Infrastructure/
 COPY src/ShutterSpool.ServiceDefaults/ src/ShutterSpool.ServiceDefaults/
 COPY src/ShutterSpool.Server/ src/ShutterSpool.Server/
+COPY tools/collect-dotnet-notices.cs tools/collect-dotnet-notices.cs
+COPY tools/dotnet-notices/ tools/dotnet-notices/
 COPY --from=web /source/src/ShutterSpool.Server/wwwroot/ src/ShutterSpool.Server/wwwroot/
 ARG VERSION
 ARG COMMIT
 RUN test -n "$VERSION" && test -n "$COMMIT" && \
     dotnet restore src/ShutterSpool.Server --locked-mode && \
     dotnet publish src/ShutterSpool.Server --no-restore -c Release -o /out \
-      -p:OpenApiGenerateDocuments=false -p:Version="$VERSION" -p:SourceRevisionId="$COMMIT"
+      -p:OpenApiGenerateDocuments=false -p:Version="$VERSION" -p:SourceRevisionId="$COMMIT" && \
+    dotnet run --file tools/collect-dotnet-notices.cs -- /out/ShutterSpool.Server.deps.json \
+      /root/.nuget/packages tools/dotnet-notices /out/licenses/dotnet
 
 FROM mcr.microsoft.com/dotnet/aspnet:11.0.0-resolute-chiseled-extra@sha256:cea9d5494f358fe43082300c24d1cd9f651066b6b7de1e5735bca8d3ade68649
 WORKDIR /app

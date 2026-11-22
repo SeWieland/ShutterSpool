@@ -1,4 +1,5 @@
 import sftpgo from '../../artifacts/attribution/sftpgo.json' with { type: 'json' }
+import { dependencyNotices, licenseInventory } from './scripts/dependency-notices.mjs'
 
 export default defineNuxtConfig({
   ssr: false,
@@ -8,10 +9,14 @@ export default defineNuxtConfig({
   colorMode: { preference: 'dark', fallback: 'dark' },
   ui: { fonts: false, experimental: { componentDetection: true } },
   vite: {
+    plugins: [dependencyNotices()],
     environments: {
       client: {
-        // Keep Rolldown's shared chunks instead of merging the initial graph into one large entry.
-        build: { rolldownOptions: { output: { codeSplitting: {} } } },
+        build: {
+          license: { fileName: licenseInventory },
+          // Keep Rolldown's shared chunks instead of merging the initial graph into one large entry.
+          rolldownOptions: { output: { codeSplitting: {} } },
+        },
       },
     },
   },
