@@ -11,7 +11,7 @@ RUN npm run build
 
 FROM mcr.microsoft.com/dotnet/sdk:11.0.100-resolute@sha256:65f3c7c6a25a239ab3e6719f2896147e7b68242ff2d8818dd70498bde6ef8bea AS build
 WORKDIR /source
-COPY Directory.Build.props global.json ./
+COPY Directory.Build.props Directory.Packages.props global.json ./
 COPY src/ShutterSpool.Domain/ src/ShutterSpool.Domain/
 COPY src/ShutterSpool.Application/ src/ShutterSpool.Application/
 COPY src/ShutterSpool.Infrastructure/ src/ShutterSpool.Infrastructure/

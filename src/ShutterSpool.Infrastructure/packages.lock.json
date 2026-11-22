@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "dependencies": {
     "net11.0": {
       "MetadataExtractor": {
@@ -238,11 +238,6 @@
           "System.CodeDom": "6.0.0"
         }
       },
-      "Npgsql": {
-        "type": "Transitive",
-        "resolved": "11.0.0",
-        "contentHash": "ozQ8GJcEAiW6XSKz2RUpdJDvM4l380BdHx/MRB7QJHL2cTH/0js7f/cisCaYMrZvVUj4/HIW80UjXxI+ikQQzQ=="
-      },
       "RESPite": {
         "type": "Transitive",
         "resolved": "3.4.35",
@@ -319,6 +314,12 @@
       },
       "shutterspool.domain": {
         "type": "Project"
+      },
+      "Npgsql": {
+        "type": "CentralTransitive",
+        "requested": "[11.0.0, )",
+        "resolved": "11.0.0",
+        "contentHash": "ozQ8GJcEAiW6XSKz2RUpdJDvM4l380BdHx/MRB7QJHL2cTH/0js7f/cisCaYMrZvVUj4/HIW80UjXxI+ikQQzQ=="
       }
     }
   }
